@@ -803,10 +803,10 @@ func TestCloseAndTBCInstructions(t *testing.T) {
 	global := state.NewGlobalState()
 	vm := NewVM(global)
 	vm.Prototype = &object.Prototype{}
-	vm.OpenUpvalues = make(map[int]*Upvalue)
+	vm.OpenUpvalues = make(map[int]*object.Upvalue)
 
-	// Create an open upvalue
-	upvalue := &Upvalue{Index: vm.Base + 5}
+	// Create an open upvalue pointing to a stack slot
+	upvalue := &object.Upvalue{Index: vm.Base + 5, Value: &vm.Stack[vm.Base+5]}
 	vm.OpenUpvalues[vm.Base+5] = upvalue
 
 	// CLOSE R(5)

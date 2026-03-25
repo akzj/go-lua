@@ -318,10 +318,15 @@ func (p *Parser) parseBreakStmt() Stmt {
 	}
 }
 
-// parseLocalStmt parses a local variable declaration.
+// parseLocalStmt parses a local variable declaration or local function.
 func (p *Parser) parseLocalStmt() Stmt {
 	line := p.Current.Line
 	p.advance() // Skip 'local'
+
+	// Check for 'local function name() ... end'
+	if p.Current.Type == lexer.TK_FUNCTION {
+		return p.parseLocalFunction(line)
+	}
 
 	names := []*VarExpr{}
 	attrs := []string{}
@@ -369,6 +374,49 @@ func (p *Parser) parseLocalStmt() Stmt {
 		Names:    names,
 		Attrs:    attrs,
 		Values:   values,
+	}
+}
+
+// parseLocalFunction parses 'local function name() ... end'.
+// This is syntactic sugar for: local name; name = function() ... end
+func (p *Parser) parseLocalFunction(line int) Stmt {
+	p.advance() // Skip 'function'
+
+	// Parse function name
+	if p.Current.Type != lexer.TK_NAME {
+		p.Error("expected function name after 'local function'")
+		p.sync()
+		return nil
+	}
+
+	name := p.Current.Value.(string)
+	nameLine := p.Current.Line
+	p.advance()
+
+	// Parse parameter list
+	params, isVarArg := p.parseParamList()
+
+	// Parse body
+	body := p.parseBlock()
+
+	// Expect 'end'
+	if !p.expect(lexer.TK_END, "'end'") {
+		p.sync()
+		return nil
+	}
+
+	return &FuncDefStmt{
+		baseStmt: baseStmt{line: line},
+		Name: []*VarExpr{
+			{
+				baseExpr: baseExpr{line: nameLine},
+				Name:     name,
+			},
+		},
+		Params:   params,
+		Body:     body,
+		IsVarArg: isVarArg,
+		IsLocal:  true,
 	}
 }
 
