@@ -48,9 +48,9 @@ func (s *State) LoadString(code, name string) error {
 		return SyntaxError(err.Error(), name, l.Line())
 	}
 
-	// If parser returned a nil prototype, create a minimal one
-	// (since parser is a skeleton, we create bytecode directly for testing)
-	if proto == nil || proto.Code == nil {
+	// Parser may return an empty Code slice until full AST codegen is wired; fall back
+	// to the simple compiler for patterns it understands (e.g. "return 42").
+	if proto == nil || proto.Code == nil || len(proto.Code) == 0 {
 		proto = s.compileSimpleCode(code, name)
 	}
 

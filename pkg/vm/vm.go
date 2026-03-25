@@ -580,31 +580,25 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				nResults = b - 1
 			}
 
-			// Move results to caller's stack
+			// Move results to caller's stack: replace the closure slot (Base-1) and following slots.
+			destBase := vm.Base - 1
 			if nResults > 0 {
-				// Copy results to just above the function
 				for i := 0; i < nResults; i++ {
-					vm.Stack[vm.Base+i] = vm.Stack[vm.Base+a+i]
+					vm.Stack[destBase+i] = vm.Stack[vm.Base+a+i]
 				}
 			}
 
-			// Restore previous call info
 			vm.CI--
-			
-			// Check if we're back to the initial call (CI == 0)
+
 			if vm.CI == 0 {
-				// Top-level return, stop execution
-				vm.StackTop = vm.Base + nResults
+				vm.Base = vm.CallInfo[0].Base
+				vm.StackTop = destBase + nResults
 				vm.PC = len(vm.Prototype.Code)
 			} else {
-				// Return to caller
-				prevBase := vm.CallInfo[vm.CI].Base
-				vm.Base = prevBase
+				vm.Base = vm.CallInfo[vm.CI].Base
 				vm.PC = vm.CallInfo[vm.CI].PC
 				vm.Prototype = vm.CallInfo[vm.CI].Func.ToFunctionProto()
-
-				// Set stack top to after results
-				vm.StackTop = vm.Base + nResults
+				vm.StackTop = destBase + nResults
 			}
 		} else {
 			// Top-level return, stop execution

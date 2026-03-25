@@ -300,7 +300,8 @@ func TestStackOperations(t *testing.T) {
 		t.Errorf("Expected GetStack(0) to be 100.0, got %v", stackVal.Value.Num)
 	}
 
-	vm.SetStack(1, *object.NewNumber(200.0))
+	// Positive indices are Lua 1-based from Base: slot Stack[1] is index 2 when Base=0.
+	vm.SetStack(2, *object.NewNumber(200.0))
 	if !vm.Stack[1].IsNumber() || vm.Stack[1].Value.Num != 200.0 {
 		t.Errorf("Expected Stack[1] to be 200.0, got %v", vm.Stack[1].Value.Num)
 	}
@@ -1193,7 +1194,7 @@ func TestSetStack(t *testing.T) {
 	vm := NewVM(global)
 	vm.Base = 0
 
-	vm.SetStack(5, *object.NewNumber(42.0))
+	vm.SetStack(6, *object.NewNumber(42.0))
 	if !vm.Stack[5].IsNumber() || vm.Stack[5].Value.Num != 42.0 {
 		t.Errorf("Expected Stack[5] to be 42.0, got %v", vm.Stack[5].Value.Num)
 	}
@@ -1205,8 +1206,8 @@ func TestGetStack(t *testing.T) {
 	vm.Base = 0
 	vm.Stack[10].SetNumber(99.0)
 
-	val := vm.GetStack(10)
+	val := vm.GetStack(11)
 	if !val.IsNumber() || val.Value.Num != 99.0 {
-		t.Errorf("Expected GetStack(10) to be 99.0, got %v", val.Value.Num)
+		t.Errorf("Expected GetStack(11) to be 99.0, got %v", val.Value.Num)
 	}
 }
