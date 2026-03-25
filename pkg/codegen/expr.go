@@ -487,8 +487,16 @@ func (cg *CodeGenerator) genTable(expr *parser.TableExpr) int {
 
 		case parser.TableEntryField:
 			// Field entry: key = value
-			key := entry.Key.(*parser.VarExpr)
-			keyIdx := cg.addOrGetConstant(*object.NewString(key.Name))
+			var keyIdx int
+			switch k := entry.Key.(type) {
+			case *parser.StringExpr:
+				keyIdx = cg.addOrGetConstant(*object.NewString(k.Value))
+			case *parser.VarExpr:
+				keyIdx = cg.addOrGetConstant(*object.NewString(k.Name))
+			default:
+				// Fallback for other expression types - treat as generic string
+				keyIdx = cg.addOrGetConstant(object.TValue{Type: object.TypeString, Value: object.Value{Str: "field"}})
+			}
 			valueReg := cg.genExpr(entry.Value)
 
 			if keyIdx <= 255 {
@@ -549,10 +557,3 @@ func (cg *CodeGenerator) genDots() int {
 	return reg
 }
 
-// boolToInt converts bool to int (0 or 1).
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}

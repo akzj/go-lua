@@ -129,6 +129,10 @@ func (cg *CodeGenerator) allocRegister() int {
 	if cg.StackTop > cg.MaxStackSize {
 		cg.MaxStackSize = cg.StackTop
 	}
+	// Keep prototype in sync
+	if cg.Prototype != nil && cg.MaxStackSize > cg.Prototype.MaxStackSize {
+		cg.Prototype.MaxStackSize = cg.MaxStackSize
+	}
 	return reg
 }
 
@@ -260,4 +264,45 @@ func (cg *CodeGenerator) genBlock(block *parser.BlockStmt) {
 	for _, stmt := range block.Stmts {
 		cg.genStmt(stmt)
 	}
+}
+
+// emitLoadConstant loads a constant into a register with optimization.
+// Small integers (-128 to 127) use LOADI, others use LOADK.
+func (cg *CodeGenerator) emitLoadConstant(reg int, val object.TValue) {
+	switch val.Type {
+	case object.TypeNumber:
+		// Check if it's an integer value within small range [-128, 127]
+		num := val.Value.Num
+		isInteger := num == float64(int(num))
+		if isInteger {
+			intNum := int(num)
+			if intNum >= -128 && intNum <= 127 {
+				// Use LOADI for small integers
+				cg.EmitABx(vm.OP_LOADI, reg, intNum)
+				return
+			}
+		}
+		// Use LOADK for other numbers
+		idx := cg.addOrGetConstant(val)
+		cg.EmitABx(vm.OP_LOADK, reg, idx)
+	case object.TypeString:
+		idx := cg.addOrGetConstant(val)
+		cg.EmitABx(vm.OP_LOADK, reg, idx)
+	case object.TypeBoolean:
+		cg.EmitABC(vm.OP_LOADBOOL, reg, boolToInt(val.Value.Bool), 0)
+	case object.TypeNil:
+		cg.EmitABC(vm.OP_LOADNIL, reg, 0, 0)
+	default:
+		// Fallback: treat as number
+		idx := cg.addOrGetConstant(val)
+		cg.EmitABx(vm.OP_LOADK, reg, idx)
+	}
+}
+
+// boolToInt converts bool to int (0 or 1).
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
