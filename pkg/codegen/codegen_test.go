@@ -1180,7 +1180,7 @@ func TestCodeGenerator_GenTableComprehensive(t *testing.T) {
 		Entries: []parser.TableEntry{
 			{Kind: parser.TableEntryValue, Value: &parser.NumberExpr{Value: 1.0}},
 			{Kind: parser.TableEntryKey, Key: &parser.StringExpr{Value: "key"}, Value: &parser.NumberExpr{Value: 2.0}},
-			{Kind: parser.TableEntryField, Key: "field", Value: &parser.NumberExpr{Value: 3.0}},
+			{Kind: parser.TableEntryField, Key: &parser.StringExpr{Value: "field"}, Value: &parser.NumberExpr{Value: 3.0}},
 		},
 	}
 
@@ -1299,11 +1299,11 @@ func TestCodeGenerator_ConstantKey(t *testing.T) {
 	cg := NewCodeGenerator()
 
 	// Test with different value types
-	values := []object.Value{
+	values := []object.TValue{
 		*object.NewNumber(42.0),
 		*object.NewString("hello"),
 		*object.NewBoolean(true),
-		*object.Nil(),
+		*object.NewNil(),
 	}
 
 	for _, val := range values {
@@ -1325,11 +1325,11 @@ func TestCodeGenerator_PatchInstructionBounds(t *testing.T) {
 	cg.PatchInstruction(100, 0)
 
 	// Patch valid PC
-	cg.PatchInstruction(0, vm.Instruction(vm.MakeABC(vm.OP_SUB, 1, 2, 3)))
+	cg.PatchInstruction(0, object.Instruction(vm.MakeABC(vm.OP_SUB, 1, 2, 3)))
 
 	// Verify the patch
-	instr := vm.Instruction(cg.Prototype.Code[0])
-	if instr.Opcode() != vm.OP_SUB {
+	instr := object.Instruction(cg.Prototype.Code[0])
+	if instr.Opcode() != uint8(vm.OP_SUB) {
 		t.Errorf("Expected OP_SUB after patch, got %v", instr.Opcode())
 	}
 }

@@ -333,7 +333,7 @@ func TestParseForNumericWithStep(t *testing.T) {
 
 func TestParseForGeneric(t *testing.T) {
 	stmt := parseStmt(t, "for k, v in pairs(t) do print(k, v) end")
-	if stmt, ok := stmt.(*ForGenericStmt); !ok || len(stmt.Names) != 2 {
+	if stmt, ok := stmt.(*ForGenericStmt); !ok || len(stmt.Vars) != 2 {
 		t.Errorf("Expected generic for statement, got %v", stmt)
 	}
 }
