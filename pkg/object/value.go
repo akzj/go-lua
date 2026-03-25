@@ -42,6 +42,7 @@ package object
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 )
 
@@ -944,29 +945,37 @@ func (t *Table) Len() int {
 func (t *Table) Next(key *TValue) (*TValue, *TValue) {
 	// Simple implementation: iterate over Map only
 	// For a full implementation, would also iterate over Array
-	
+
 	if t.Map == nil || len(t.Map) == 0 {
 		return nil, nil
 	}
-	
+
+	// Collect and sort map keys for deterministic iteration order
+	keys := make([]string, 0, len(t.Map))
+	for k := range t.Map {
+		keys = append(keys, k.Str)
+	}
+	sort.Strings(keys)
+
 	if key == nil || key.Type == TypeNil {
-		// Return first entry
-		for k, v := range t.Map {
-			return &TValue{Type: TypeString, Value: Value{Str: k.Str}}, v
+		// Return first entry (sorted order)
+		k := keys[0]
+		v := t.Map[Value{Str: k}]
+		return &TValue{Type: TypeString, Value: Value{Str: k}}, v
+	}
+
+	// Find the entry after the given key in sorted order
+	for i, k := range keys {
+		if k == key.Value.Str {
+			if i+1 < len(keys) {
+				nextK := keys[i+1]
+				v := t.Map[Value{Str: nextK}]
+				return &TValue{Type: TypeString, Value: Value{Str: nextK}}, v
+			}
+			return nil, nil // was the last key
 		}
 	}
-	
-	// Find the entry after the given key
-	found := false
-	for k, v := range t.Map {
-		if found {
-			return &TValue{Type: TypeString, Value: Value{Str: k.Str}}, v
-		}
-		if k.Str == key.Value.Str {
-			found = true
-		}
-	}
-	
+
 	return nil, nil
 }
 

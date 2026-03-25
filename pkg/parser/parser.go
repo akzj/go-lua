@@ -76,6 +76,16 @@ func (p *Parser) Parse() (*object.Prototype, error) {
 	return proto, nil
 }
 
+// ParseChunk parses the source as a chunk and returns the AST block.
+// This is used by the API layer to get the AST for codegen compilation.
+func (p *Parser) ParseChunk() (*BlockStmt, error) {
+	block := p.parseChunk()
+	if len(p.Errors) > 0 {
+		return nil, p.Errors[0]
+	}
+	return block, nil
+}
+
 // parseChunk parses a chunk (sequence of statements).
 //
 // A chunk is the main body of a Lua program or function.

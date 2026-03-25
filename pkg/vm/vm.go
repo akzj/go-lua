@@ -57,12 +57,13 @@ type UpvalueDesc struct {
 
 //   - NResults: Expected number of results
 type CallInfo struct {
-	Func      *object.TValue // Function being called
-	Base      int            // Stack base for this call
-	Top       int            // Stack top for this call
-	PC        int            // Program counter
-	NResults  int            // Expected number of results
-	Status    CallStatus     // Call status
+	Func      *object.TValue   // Function being called
+	Closure   *object.Closure  // Reference to closure for upvalue access
+	Base      int              // Stack base for this call
+	Top       int              // Stack top for this call
+	PC        int              // Program counter
+	NResults  int              // Expected number of results
+	Status    CallStatus       // Call status
 }
 
 // CallStatus represents the status of a call.
@@ -105,8 +106,8 @@ type VM struct {
 	// Global state reference
 	Global *state.GlobalState
 
-	// Open upvalues
-	OpenUpvalues map[int]*Upvalue
+	// Open upvalues — tracks open object.Upvalue instances by stack index
+	OpenUpvalues map[int]*object.Upvalue
 
 	// To-be-closed variables
 	TBCList []int
@@ -141,8 +142,16 @@ func NewVM(global *state.GlobalState) *VM {
 		StackSize:    2048,
 		CallInfo:     make([]*CallInfo, 256),
 		Global:       global,
-		OpenUpvalues: make(map[int]*Upvalue),
+		OpenUpvalues: make(map[int]*object.Upvalue),
 	}
+}
+
+// getCurrentClosure returns the closure of the currently executing function.
+func (vm *VM) getCurrentClosure() *object.Closure {
+	if vm.CI >= 0 && vm.CallInfo[vm.CI] != nil {
+		return vm.CallInfo[vm.CI].Closure
+	}
+	return nil
 }
 
 // Run starts executing bytecode from the current PC.
@@ -405,6 +414,11 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		a := instr.A()
 		vm.closeUpvalues(vm.Base + a)
 
+	case OP_VARARGPREP:
+		// Vararg preparation — no-op for now; the main chunk is always vararg
+		// and the arguments are already set up by the caller.
+		// In a full implementation, this would adjust the stack for vararg functions.
+
 	case OP_TBC:
 		a := instr.A()
 		// Mark variable as to-be-closed
@@ -597,12 +611,334 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			} else {
 				vm.Base = vm.CallInfo[vm.CI].Base
 				vm.PC = vm.CallInfo[vm.CI].PC
-				vm.Prototype = vm.CallInfo[vm.CI].Func.ToFunctionProto()
+				vm.Prototype = vm.CallInfo[vm.CI].Closure.Proto
 				vm.StackTop = destBase + nResults
 			}
 		} else {
 			// Top-level return, stop execution
 			vm.PC = len(vm.Prototype.Code)
+		}
+
+	// Upvalue instructions
+	case OP_GETUPVAL:
+		a, b := instr.A(), instr.B()
+		closure := vm.getCurrentClosure()
+		if closure != nil && b < len(closure.Upvalues) {
+			upval := closure.Upvalues[b]
+			val := upval.Get()
+			vm.Stack[vm.Base+a].CopyFrom(val)
+		} else {
+			vm.Stack[vm.Base+a].SetNil()
+		}
+
+	case OP_SETUPVAL:
+		a, b := instr.A(), instr.B()
+		closure := vm.getCurrentClosure()
+		if closure != nil && b < len(closure.Upvalues) {
+			upval := closure.Upvalues[b]
+			upval.Set(&vm.Stack[vm.Base+a])
+		}
+
+	case OP_GETTABUP:
+		a, b, c := instr.A(), instr.B(), instr.C()
+		closure := vm.getCurrentClosure()
+		if closure == nil || b >= len(closure.Upvalues) {
+			return fmt.Errorf("invalid upvalue index %d", b)
+		}
+		upval := closure.Upvalues[b]
+		upvalVal := upval.Get()
+		if !upvalVal.IsTable() {
+			return fmt.Errorf("attempt to index a non-table upvalue")
+		}
+		t, _ := upvalVal.ToTable()
+		key := vm.getRKValue(c)
+		val := t.Get(*key)
+		if val != nil {
+			vm.Stack[vm.Base+a].CopyFrom(val)
+		} else {
+			vm.Stack[vm.Base+a].SetNil()
+		}
+
+	case OP_SETTABUP:
+		a, b, c := instr.A(), instr.B(), instr.C()
+		closure := vm.getCurrentClosure()
+		if closure == nil || a >= len(closure.Upvalues) {
+			return fmt.Errorf("invalid upvalue index %d", a)
+		}
+		upval := closure.Upvalues[a]
+		upvalVal := upval.Get()
+		if !upvalVal.IsTable() {
+			return fmt.Errorf("attempt to index a non-table upvalue")
+		}
+		t, _ := upvalVal.ToTable()
+		key := vm.getRKValue(b)
+		val := vm.getRKValue(c)
+		t.Set(*key, *val)
+
+	// Function call instruction
+	case OP_CALL:
+		a, b, c := instr.A(), instr.B(), instr.C()
+		funcSlot := vm.Base + a
+		funcVal := &vm.Stack[funcSlot]
+
+		if !funcVal.IsFunction() {
+			return fmt.Errorf("attempt to call a non-function value")
+		}
+		fn, ok := funcVal.ToFunction()
+		if !ok {
+			return fmt.Errorf("attempt to call a non-function value")
+		}
+
+		// Determine number of arguments
+		var nargs int
+		if b == 0 {
+			nargs = vm.StackTop - funcSlot - 1
+		} else {
+			nargs = b - 1
+		}
+
+		// Determine number of results
+		nresults := c - 1 // c=0 means all results, c=1 means 0 results, c=2 means 1 result
+
+		if fn.IsGo {
+			// Go function call
+			oldBase := vm.Base
+			vm.Base = funcSlot + 1
+			vm.StackTop = funcSlot + 1 + nargs
+
+			err := fn.GoFn(vm)
+
+			resultsTop := vm.StackTop
+			vm.Base = oldBase
+
+			if err != nil {
+				return err
+			}
+
+			// Calculate actual results produced
+			numResults := resultsTop - (funcSlot + 1 + nargs)
+			if numResults < 0 {
+				numResults = 0
+			}
+
+			// Move results to funcSlot position
+			resultSrc := funcSlot + 1 + nargs
+			if nresults >= 0 {
+				// Fixed number of results
+				for i := 0; i < nresults && i < numResults; i++ {
+					vm.Stack[funcSlot+i].CopyFrom(&vm.Stack[resultSrc+i])
+				}
+				// Fill missing results with nil
+				for i := numResults; i < nresults; i++ {
+					vm.Stack[funcSlot+i].SetNil()
+				}
+				vm.StackTop = funcSlot + nresults
+			} else {
+				// All results (nresults == -1)
+				for i := 0; i < numResults; i++ {
+					vm.Stack[funcSlot+i].CopyFrom(&vm.Stack[resultSrc+i])
+				}
+				vm.StackTop = funcSlot + numResults
+			}
+		} else {
+			// Lua function call
+			proto := fn.Proto
+			if proto == nil {
+				return fmt.Errorf("function has no prototype")
+			}
+
+			// Save current PC in current CallInfo
+			vm.CallInfo[vm.CI].PC = vm.PC
+
+			// Push new CallInfo
+			vm.CI++
+			if vm.CI >= len(vm.CallInfo) {
+				newCallInfo := make([]*CallInfo, len(vm.CallInfo)*2)
+				copy(newCallInfo, vm.CallInfo)
+				vm.CallInfo = newCallInfo
+			}
+
+			newBase := funcSlot + 1
+			vm.CallInfo[vm.CI] = &CallInfo{
+				Func:     funcVal,
+				Closure:  fn,
+				Base:     newBase,
+				Top:      newBase + proto.MaxStackSize,
+				PC:       0,
+				NResults: nresults,
+				Status:   CallOK,
+			}
+
+			// Pad missing args with nil
+			for i := nargs; i < proto.NumParams; i++ {
+				vm.Stack[newBase+i].SetNil()
+			}
+
+			// Set up new execution context
+			vm.Base = newBase
+			vm.Prototype = proto
+			vm.PC = 0
+			vm.StackTop = newBase + proto.MaxStackSize
+
+			// Return nil — the Run() loop will continue executing the new function's bytecode
+		}
+
+	// Numeric for loop instructions
+	case OP_FORPREP:
+		a, sbx := instr.A(), instr.SBx()
+		// R(A) = initial, R(A+1) = limit, R(A+2) = step
+		init := vm.Stack[vm.Base+a].Value.Num
+		step := vm.Stack[vm.Base+a+2].Value.Num
+		// Subtract step so first FORLOOP iteration adds it back
+		vm.Stack[vm.Base+a].SetNumber(init - step)
+		// Jump forward to FORLOOP
+		vm.PC += sbx
+
+	case OP_FORLOOP:
+		a, sbx := instr.A(), instr.SBx()
+		step := vm.Stack[vm.Base+a+2].Value.Num
+		// Add step
+		idx := vm.Stack[vm.Base+a].Value.Num + step
+		vm.Stack[vm.Base+a].SetNumber(idx)
+		limit := vm.Stack[vm.Base+a+1].Value.Num
+
+		// Check loop condition
+		continueLoop := false
+		if step > 0 {
+			continueLoop = idx <= limit
+		} else {
+			continueLoop = idx >= limit
+		}
+
+		if continueLoop {
+			vm.Stack[vm.Base+a+3].SetNumber(idx) // Update external loop variable
+			vm.PC += sbx                          // Jump back to loop body
+		}
+
+	// Generic for loop instructions
+	case OP_FORGPREP:
+		_, sbx := instr.A(), instr.SBx()
+		vm.PC += sbx // Jump forward to FORGLOOP
+
+	case OP_FORGLOOP:
+		a, sbx := instr.A(), instr.SBx()
+		// Call iterator: R(A)(R(A+1), R(A+2))
+		iterFunc := &vm.Stack[vm.Base+a]
+		if !iterFunc.IsFunction() {
+			return fmt.Errorf("for iterator is not a function")
+		}
+		fn, _ := iterFunc.ToFunction()
+
+		if fn.IsGo {
+			oldBase := vm.Base
+			oldTop := vm.StackTop
+			vm.Base = vm.Base + a + 1
+			vm.StackTop = vm.Base + 2 // 2 args (state, control)
+
+			err := fn.GoFn(vm)
+
+			resultsTop := vm.StackTop
+			vm.Base = oldBase
+
+			if err != nil {
+				return err
+			}
+
+			// Results go to R(A+3), R(A+4), ...
+			firstResult := oldBase + a + 3
+			numResults := resultsTop - (oldBase + a + 3)
+			if numResults < 0 {
+				numResults = 0
+			}
+
+			// Check if first result is nil
+			if numResults > 0 && !vm.Stack[firstResult].IsNil() {
+				// Update control variable R(A+2) = first result
+				vm.Stack[oldBase+a+2].CopyFrom(&vm.Stack[firstResult])
+				vm.StackTop = oldTop
+				vm.PC += sbx // Jump back to loop body
+			} else {
+				vm.StackTop = oldTop
+				// Loop ends, continue to next instruction
+			}
+		} else {
+			return fmt.Errorf("Lua iterator functions in generic for not yet supported")
+		}
+
+	// Table initialization
+	case OP_SETLIST:
+		a, b, c := instr.A(), instr.B(), instr.C()
+		t, ok := vm.Stack[vm.Base+a].ToTable()
+		if !ok {
+			return fmt.Errorf("SETLIST target is not a table")
+		}
+
+		count := b
+		if count == 0 {
+			count = vm.StackTop - (vm.Base + a) - 1
+		}
+
+		offset := c // base offset for array indices
+		for i := 1; i <= count; i++ {
+			t.SetI(offset+i, vm.Stack[vm.Base+a+i])
+		}
+
+	// Closure creation
+	case OP_CLOSURE:
+		a, bx := instr.A(), instr.Bx()
+		// Get child prototype
+		childProto := vm.Prototype.Prototypes[bx]
+
+		// Create new closure
+		newClosure := &object.Closure{
+			IsGo:     false,
+			Proto:    childProto,
+			Upvalues: make([]*object.Upvalue, len(childProto.Upvalues)),
+		}
+
+		// Set up upvalues from UpvalueDesc
+		currentClosure := vm.getCurrentClosure()
+		for i, uvDesc := range childProto.Upvalues {
+			if uvDesc.IsLocal {
+				// Capture from current stack
+				stackIdx := vm.Base + uvDesc.Index
+				// Check if there's already an open upvalue for this stack slot
+				if existing, ok := vm.OpenUpvalues[stackIdx]; ok {
+					// Share the same object.Upvalue so close propagates
+					newClosure.Upvalues[i] = existing
+				} else {
+					uv := &object.Upvalue{
+						Index: stackIdx,
+						Value: &vm.Stack[stackIdx],
+					}
+					vm.OpenUpvalues[stackIdx] = uv
+					newClosure.Upvalues[i] = uv
+				}
+			} else {
+				// Copy from parent closure's upvalues
+				if currentClosure != nil && uvDesc.Index < len(currentClosure.Upvalues) {
+					parentUV := currentClosure.Upvalues[uvDesc.Index]
+					newClosure.Upvalues[i] = parentUV // Share the same upvalue
+				} else {
+					newClosure.Upvalues[i] = &object.Upvalue{}
+				}
+			}
+		}
+
+		// Store closure in register
+		vm.Stack[vm.Base+a].SetFunction(newClosure)
+
+	// Vararg instruction
+	case OP_VARARG:
+		a, c := instr.A(), instr.C()
+		numWanted := c - 1 // c=0 means all
+
+		// For now, just set nil (varargs are complex and rarely needed in basic tests)
+		if numWanted < 0 {
+			numWanted = 0
+		}
+		for i := 0; i < numWanted; i++ {
+			vm.Stack[vm.Base+a+i].SetNil()
 		}
 
 	default:
@@ -730,7 +1066,12 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 		}
 		
 		// Adjust stack: remove function and args, keep nresults
-		// Results are on top of stack now
+		// Results are on top of stack now, starting at funcBase+1+nargs
+		numResults := vm.StackTop - (funcBase + 1)
+		if numResults < 0 {
+			numResults = 0
+		}
+		
 		if nresults >= 0 {
 			// Move results to function position
 			resultStart := vm.StackTop - nresults
@@ -740,9 +1081,8 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 			vm.StackTop = funcBase + nresults
 		} else {
 			// All results: move them to function position
-			numResults := vm.StackTop - (funcBase + 1 + nargs)
 			for i := 0; i < numResults; i++ {
-				vm.Stack[funcBase+i] = vm.Stack[funcBase+1+nargs+i]
+				vm.Stack[funcBase+i] = vm.Stack[funcBase+1+i]
 			}
 			vm.StackTop = funcBase + numResults
 		}
@@ -760,6 +1100,7 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 	if vm.CI == 0 {
 		vm.CallInfo[0] = &CallInfo{
 			Func:     funcVal,
+			Closure:  fn,
 			Base:     vm.Base,
 			Top:      vm.StackTop,
 			PC:       0,
@@ -780,6 +1121,7 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 	newBase := vm.Base + funcIdx + 1
 	vm.CallInfo[vm.CI] = &CallInfo{
 		Func:     funcVal,
+		Closure:  fn,
 		Base:     newBase,
 		Top:      newBase + nargs + proto.MaxStackSize,
 		PC:       0,
@@ -794,7 +1136,54 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 
 	return nil
 }
+// ProtectedCall calls a Lua function with protected execution.
+// If an error occurs during execution, it is returned.
+// The function and its arguments must already be on the stack.
+func (vm *VM) ProtectedCall(funcIdx, nargs, nresults int) error {
+	// Save VM state
+	savedCI := vm.CI
+	savedBase := vm.Base
+	savedPC := vm.PC
+	savedPrototype := vm.Prototype
 
+	// Check if it's a Go function BEFORE calling (since Call changes Base for Lua functions)
+	fn, _ := vm.Stack[vm.Base+funcIdx].ToFunction()
+	isGo := fn != nil && fn.IsGo
+
+	// Call the function
+	vm.Call(funcIdx, nargs, nresults)
+
+	// If it's a Go function, Call() already executed it
+	if isGo {
+		return nil
+	}
+
+	// Run nested execution loop until CI drops back
+	for vm.CI > savedCI {
+		if vm.PC >= len(vm.Prototype.Code) {
+			break
+		}
+
+		instr := Instruction(vm.Prototype.Code[vm.PC])
+		vm.PC++
+
+		if err := vm.ExecuteInstruction(instr); err != nil {
+			// Restore state before returning error
+			vm.CI = savedCI
+			vm.Base = savedBase
+			vm.PC = savedPC
+			vm.Prototype = savedPrototype
+			return err
+		}
+	}
+
+	// Restore caller's Base, PC and Prototype after nested run
+	vm.Base = savedBase
+	vm.PC = savedPC
+	vm.Prototype = savedPrototype
+
+	return nil
+}
 // GetStack returns the value at stack index.
 //
 // Stack indices can be positive (from base, 1-based) or negative (from top).

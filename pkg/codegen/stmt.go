@@ -116,13 +116,15 @@ func (cg *CodeGenerator) assignToVar(expr parser.Expr, valueReg int) {
 		if idx, ok := cg.getLocal(e.Name); ok {
 			// Local variable: MOVE
 			cg.EmitABC(vm.OP_MOVE, idx, valueReg, 0)
+		} else if upIdx, ok := cg.getUpvalue(e.Name); ok {
+			// Upvalue: SETUPVAL
+			cg.EmitABC(vm.OP_SETUPVAL, valueReg, upIdx, 0)
+		} else if upIdx, ok := cg.resolveUpvalue(e.Name); ok {
+			cg.EmitABC(vm.OP_SETUPVAL, valueReg, upIdx, 0)
 		} else {
-			// Global variable: SETTABLE on _ENV
-			// Simplified: store in global table
-			keyReg := cg.allocRegister()
-			cg.emitLoadConstant(keyReg, *object.NewString(e.Name))
-			cg.EmitABC(vm.OP_SETTABLE, 0, keyReg, valueReg) // 0 = _ENV (simplified)
-			cg.freeRegister()
+			// Global: SETTABUP 0, K(name), RK(value)
+			nameIdx := cg.addOrGetConstant(*object.NewString(e.Name))
+			cg.EmitABC(vm.OP_SETTABUP, 0, nameIdx+256, valueReg)
 		}
 
 	case *parser.IndexExpr:
@@ -155,35 +157,22 @@ func (cg *CodeGenerator) assignToVar(expr parser.Expr, valueReg int) {
 // genLocal generates code for a local variable declaration.
 // local name1, name2, ... = value1, value2, ...
 func (cg *CodeGenerator) genLocal(stmt *parser.LocalStmt) {
-	// Generate values
-	values := make([]int, len(stmt.Values))
-	for i, expr := range stmt.Values {
-		values[i] = cg.genExpr(expr)
-	}
-
-	// Add local variables and generate MOVE instructions
+	// For each local variable, generate the value expression directly.
+	// The value register becomes the local's register (no extra MOVE needed
+	// when there's exactly one value per variable generated in order).
 	for i, name := range stmt.Names {
-		// Allocate register for this local
-		reg := cg.allocRegister()
-
-		// Add to local scope
-		cg.addLocal(name.Name, reg, false)
-
-		// Assign value if available
-		if i < len(values) {
-			if values[i] != reg {
-				cg.EmitABC(vm.OP_MOVE, reg, values[i], 0)
-			}
-			cg.freeRegister() // Free value register
+		if i < len(stmt.Values) {
+			// Generate value — this allocates a register at StackTop
+			valueReg := cg.genExpr(stmt.Values[i])
+			// The value is already in valueReg which is at the right position
+			// Register valueReg as the local variable
+			cg.addLocal(name.Name, valueReg, false)
 		} else {
 			// No value, initialize to nil
+			reg := cg.allocRegister()
 			cg.EmitABC(vm.OP_LOADNIL, reg, 0, 0)
+			cg.addLocal(name.Name, reg, false)
 		}
-	}
-
-	// Free any remaining value registers
-	for i := len(stmt.Values); i < len(values); i++ {
-		cg.freeRegister()
 	}
 }
 
@@ -280,10 +269,10 @@ func (cg *CodeGenerator) genRepeat(stmt *parser.RepeatStmt) {
 // for i = start, end, step do ... end
 func (cg *CodeGenerator) genForNumeric(stmt *parser.ForNumericStmt) {
 	// Allocate registers for for-loop control
-	// R(A) = index, R(A+1) = limit, R(A+2) = step
+	// R(A) = index, R(A+1) = limit, R(A+2) = step, R(A+3) = external loop var
 	baseReg := cg.StackTop
 
-	// Generate start, end, step values
+	// Generate start, end, step values directly into consecutive registers
 	startReg := cg.genExpr(stmt.From)
 	endReg := cg.genExpr(stmt.To)
 
@@ -293,38 +282,54 @@ func (cg *CodeGenerator) genForNumeric(stmt *parser.ForNumericStmt) {
 	} else {
 		// Default step = 1
 		stepReg = cg.allocRegister()
-		cg.EmitABC(vm.OP_LOADI, stepReg, 1, 0)
+		cg.EmitAsBx(vm.OP_LOADI, stepReg, 1)
 	}
 
-	// Move values to consecutive registers
-	cg.EmitABC(vm.OP_MOVE, baseReg, startReg, 0)
-	cg.EmitABC(vm.OP_MOVE, baseReg+1, endReg, 0)
-	cg.EmitABC(vm.OP_MOVE, baseReg+2, stepReg, 0)
+	// Ensure values are in consecutive registers starting at baseReg
+	// If genExpr already allocated them consecutively (which it should),
+	// no MOVEs are needed. But if not, we need to move them.
+	if startReg != baseReg {
+		cg.EmitABC(vm.OP_MOVE, baseReg, startReg, 0)
+	}
+	if endReg != baseReg+1 {
+		cg.EmitABC(vm.OP_MOVE, baseReg+1, endReg, 0)
+	}
+	if stepReg != baseReg+2 {
+		cg.EmitABC(vm.OP_MOVE, baseReg+2, stepReg, 0)
+	}
 
-	cg.freeRegisters(3)
+	// Set stack top to baseReg+3 (after the 3 control registers)
+	cg.setStackTop(baseReg + 3)
+	if cg.StackTop > cg.MaxStackSize {
+		cg.MaxStackSize = cg.StackTop
+	}
 
-	// Add loop variable as local
-	loopVarReg := cg.allocRegister()
+	// Allocate register for external loop variable R(A+3)
+	loopVarReg := cg.allocRegister() // baseReg+3
 	cg.addLocal(stmt.Var.Name, loopVarReg, false)
 
-	// FORPREP R(A) sBx
-	// Prepares the numeric for loop
+	// FORPREP R(A) sBx — jump forward to FORLOOP
 	forPrepPC := cg.EmitAsBx(vm.OP_FORPREP, baseReg, 0) // Placeholder offset
+
+	// Loop body start
+	bodyStart := cg.GetCurrentPC()
 
 	// Generate body
 	cg.genBlock(stmt.Body)
 
-	// FORLOOP R(A) sBx
-	// Executes the numeric for loop
+	// FORLOOP R(A) sBx — jump back to loop body start
 	forLoopPC := cg.EmitAsBx(vm.OP_FORLOOP, baseReg, 0) // Placeholder offset
 
-	// Patch FORPREP offset (jump to after FORLOOP)
-	forPrepOffset := cg.GetCurrentPC() - (forPrepPC + 1)
+	// Patch FORPREP: jump from forPrepPC to forLoopPC (the FORLOOP instruction)
+	forPrepOffset := forLoopPC - forPrepPC - 1
 	cg.PatchInstruction(forPrepPC, object.Instruction(vm.MakeAsBx(vm.OP_FORPREP, baseReg, forPrepOffset)))
 
-	// Patch FORLOOP offset (jump back to loop body)
-	forLoopOffset := (forPrepPC + 1) - (forLoopPC + 1)
+	// Patch FORLOOP: jump back to bodyStart
+	forLoopOffset := bodyStart - forLoopPC - 1
 	cg.PatchInstruction(forLoopPC, object.Instruction(vm.MakeAsBx(vm.OP_FORLOOP, baseReg, forLoopOffset)))
+
+	// Restore stack top (free loop registers)
+	cg.setStackTop(baseReg)
 }
 
 // genForGeneric generates code for a generic for loop.
@@ -343,24 +348,65 @@ func (cg *CodeGenerator) genForGeneric(stmt *parser.ForGenericStmt) {
 	funcExpr := stmt.Exprs[0]
 	args := stmt.Exprs[1:]
 
-	// Generate iterator function
-	funcReg := cg.genExpr(funcExpr)
+	// Generate iterator function call with ALL results (c=0)
+	// This is critical: ipairs/pairs return 3 values (func, state, control)
+	var funcReg int
+	if callExpr, ok := funcExpr.(*parser.CallExpr); ok {
+		// Generate function expression
+		funcReg = cg.genExpr(callExpr.Func)
 
-	// Generate arguments (state and initial value)
+		// Generate arguments
+		argCount := len(callExpr.Args)
+		for i, arg := range callExpr.Args {
+			argReg := cg.genExpr(arg)
+			// Move argument to correct position if needed
+			if argReg != funcReg+1+i {
+				cg.EmitABC(vm.OP_MOVE, funcReg+1+i, argReg, 0)
+				cg.freeRegister()
+			}
+		}
+
+		// Emit CALL with c=0 (all results)
+		// R(A) := R(A)(R(A+1), ..., R(A+C-1)) where C=0 means all available
+		cg.EmitABC(vm.OP_CALL, funcReg, argCount+1, 0)
+
+		// After CALL with c=0, results are in funcReg, funcReg+1, funcReg+2, ...
+		// Set stack top to preserve all results
+		cg.setStackTop(funcReg + 3)
+		if cg.StackTop > cg.MaxStackSize {
+			cg.MaxStackSize = cg.StackTop
+		}
+	} else {
+		// Not a call expression, use regular genExpr
+		funcReg = cg.genExpr(funcExpr)
+	}
+
+	// Generate arguments (state and initial value) from Exprs[1:]
 	argRegs := make([]int, len(args))
 	for i, arg := range args {
 		argRegs[i] = cg.genExpr(arg)
 	}
 
-	// Move to consecutive registers
-	cg.EmitABC(vm.OP_MOVE, baseReg, funcReg, 0)
-	cg.freeRegister()
+	// Move to consecutive registers at baseReg
+	// If funcReg is already at baseReg, no move needed for the first value
+	if funcReg != baseReg {
+		cg.EmitABC(vm.OP_MOVE, baseReg, funcReg, 0)
+		// Don't free funcReg - it may have multiple results
+	}
+	// For call expressions, results are already in funcReg, funcReg+1, funcReg+2
+	// which should be baseReg, baseReg+1, baseReg+2 after the move above
 
 	for i, argReg := range argRegs {
 		if i < 2 { // FORGPREP expects up to 2 additional values
 			cg.EmitABC(vm.OP_MOVE, baseReg+1+i, argReg, 0)
 			cg.freeRegister()
 		}
+	}
+
+	// Ensure stack top is at baseReg+3 for loop variable allocation
+	cg.setStackTop(baseReg + 3)
+	if cg.StackTop > cg.MaxStackSize {
+		cg.MaxStackSize = cg.StackTop
 	}
 
 	// Add loop variables as locals
@@ -381,9 +427,11 @@ func (cg *CodeGenerator) genForGeneric(stmt *parser.ForGenericStmt) {
 	forGLoopPC := cg.EmitAsBx(vm.OP_FORGLOOP, baseReg, 0)
 
 	// Patch offsets
-	forGPrepOffset := cg.GetCurrentPC() - (forGPrepPC + 1)
+	// FORGPREP should jump to FORGLOOP
+	forGPrepOffset := forGLoopPC - (forGPrepPC + 1)
 	cg.PatchInstruction(forGPrepPC, object.Instruction(vm.MakeAsBx(vm.OP_FORGPREP, baseReg, forGPrepOffset)))
 
+	// FORGLOOP should jump back to loop body (after FORGPREP)
 	forGLoopOffset := (forGPrepPC + 1) - (forGLoopPC + 1)
 	cg.PatchInstruction(forGLoopPC, object.Instruction(vm.MakeAsBx(vm.OP_FORGLOOP, baseReg, forGLoopOffset)))
 }
@@ -428,43 +476,60 @@ func (cg *CodeGenerator) genExprStmt(stmt *parser.ExprStmt) {
 
 // genFuncDef generates code for a function definition statement.
 func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
-	// Create nested function prototype
-	nestedGen := NewCodeGenerator()
-	
-	var nestedProto *object.Prototype
-	
-	if stmt.Func != nil {
-		// Test case: Func field contains nested Params + Body
-		nestedGen.GenerateFunc(stmt.Func)
-	} else {
-		// Parser case: flat Params + Body
-		nestedGen.GenerateFunc(&parser.FuncExpr{
-			Params:   stmt.Params,
-			Body:     stmt.Body,
-			IsVarArg: stmt.IsVarArg,
-		})
-	}
-	
-	nestedProto = nestedGen.Prototype
-
-	// Add to parent's prototype table
-	protoIdx := len(cg.Prototype.Prototypes)
-	cg.Prototype.Prototypes = append(cg.Prototype.Prototypes, nestedProto)
-
-	// Generate code to assign the function to the target
 	if stmt.IsLocal && len(stmt.Name) > 0 {
 		// local function name() ... end
+		// Register local BEFORE generating nested body so self-reference works
 		reg := cg.allocRegister()
-		cg.EmitABx(vm.OP_CLOSURE, reg, protoIdx)
 		cg.addLocal(stmt.Name[0].Name, reg, false)
-	} else if len(stmt.Name) > 0 {
-		// function name() ... end (global or field)
-		reg := cg.allocRegister()
-		cg.EmitABx(vm.OP_CLOSURE, reg, protoIdx)
 
-		// Assign to variable - use first name for simple cases
-		nameExpr := stmt.Name[0]
-		cg.assignToVar(nameExpr, reg)
-		cg.freeRegister()
+		// Create nested function prototype with parent link
+		nestedGen := NewCodeGenerator()
+		nestedGen.Parent = cg
+
+		if stmt.Func != nil {
+			nestedGen.GenerateFunc(stmt.Func)
+		} else {
+			nestedGen.GenerateFunc(&parser.FuncExpr{
+				Params:   stmt.Params,
+				Body:     stmt.Body,
+				IsVarArg: stmt.IsVarArg,
+			})
+		}
+
+		nestedProto := nestedGen.Prototype
+
+		// Add to parent's prototype table
+		protoIdx := len(cg.Prototype.Prototypes)
+		cg.Prototype.Prototypes = append(cg.Prototype.Prototypes, nestedProto)
+
+		// Emit CLOSURE into the pre-allocated register
+		cg.EmitABx(vm.OP_CLOSURE, reg, protoIdx)
+	} else {
+		// Non-local function: function name() ... end
+		nestedGen := NewCodeGenerator()
+		nestedGen.Parent = cg
+
+		if stmt.Func != nil {
+			nestedGen.GenerateFunc(stmt.Func)
+		} else {
+			nestedGen.GenerateFunc(&parser.FuncExpr{
+				Params:   stmt.Params,
+				Body:     stmt.Body,
+				IsVarArg: stmt.IsVarArg,
+			})
+		}
+
+		nestedProto := nestedGen.Prototype
+
+		protoIdx := len(cg.Prototype.Prototypes)
+		cg.Prototype.Prototypes = append(cg.Prototype.Prototypes, nestedProto)
+
+		if len(stmt.Name) > 0 {
+			reg := cg.allocRegister()
+			cg.EmitABx(vm.OP_CLOSURE, reg, protoIdx)
+			nameExpr := stmt.Name[0]
+			cg.assignToVar(nameExpr, reg)
+			cg.freeRegister()
+		}
 	}
 }

@@ -92,8 +92,8 @@ func (cg *CodeGenerator) genNumber(expr *parser.NumberExpr) int {
 	reg := cg.allocRegister()
 
 	if expr.IsInt && expr.Int >= -128 && expr.Int <= 127 {
-		// Use LOADI for small integers
-		cg.EmitABC(vm.OP_LOADI, reg, int(expr.Int), 0)
+		// Use LOADI for small integers (sBx format)
+		cg.EmitAsBx(vm.OP_LOADI, reg, int(expr.Int))
 	} else {
 		// Use LOADK for other numbers
 		value := object.NewNumber(expr.Value)
@@ -131,12 +131,15 @@ func (cg *CodeGenerator) genVar(expr *parser.VarExpr) int {
 	if idx, ok := cg.getLocal(expr.Name); ok {
 		// Use MOVE to copy from local
 		cg.EmitABC(vm.OP_MOVE, reg, idx, 0)
+	} else if upIdx, ok := cg.getUpvalue(expr.Name); ok {
+		// Upvalue access
+		cg.EmitABC(vm.OP_GETUPVAL, reg, upIdx, 0)
+	} else if upIdx, ok := cg.resolveUpvalue(expr.Name); ok {
+		cg.EmitABC(vm.OP_GETUPVAL, reg, upIdx, 0)
 	} else {
-		// It's a global variable (get from _ENV)
-		// For now, treat as GETTABLE from _ENV
-		// This is simplified; proper implementation needs _ENV handling
-		cg.emitLoadConstant(reg, *object.NewString(expr.Name))
-		cg.EmitABC(vm.OP_GETTABLE, reg, 0, reg) // Simplified
+		// Global: GETTABUP R(A), 0, K(name) — get from UpValue[0][K(name)]
+		nameIdx := cg.addOrGetConstant(*object.NewString(expr.Name))
+		cg.EmitABC(vm.OP_GETTABUP, reg, 0, nameIdx+256)
 	}
 
 	return reg
@@ -480,8 +483,8 @@ func (cg *CodeGenerator) genTable(expr *parser.TableExpr) int {
 		case parser.TableEntryValue:
 			// Array-style entry: value
 			valueReg := cg.genExpr(entry.Value)
-			// SETI R(A)[B] := RK(C)
-			cg.EmitABC(vm.OP_SETI, resultReg, arrayIndex, valueReg)
+			// SETI R(A)[C] := RK(B) — B=value, C=integer index
+			cg.EmitABC(vm.OP_SETI, resultReg, valueReg, arrayIndex)
 			cg.freeRegister()
 			arrayIndex++
 
@@ -525,6 +528,7 @@ func (cg *CodeGenerator) genTable(expr *parser.TableExpr) int {
 func (cg *CodeGenerator) genFunc(expr *parser.FuncExpr) int {
 	// Create a new code generator for the nested function
 	nestedGen := NewCodeGenerator()
+	nestedGen.Parent = cg
 
 	// Generate nested function
 	nestedProto := nestedGen.Generate(&parser.FuncDefStmt{

@@ -3,14 +3,11 @@ package api
 
 import (
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/akzj/go-lua/pkg/codegen"
 	"github.com/akzj/go-lua/pkg/lexer"
 	"github.com/akzj/go-lua/pkg/object"
 	"github.com/akzj/go-lua/pkg/parser"
-	"github.com/akzj/go-lua/pkg/vm"
 )
 
 // LoadString loads and compiles a Lua string as a chunk.
@@ -42,22 +39,27 @@ func (s *State) LoadString(code, name string) error {
 	// Create parser
 	p := parser.NewParser(l)
 
-	// Parse the code
-	proto, err := p.Parse()
+	// Parse the code into AST
+	block, err := p.ParseChunk()
 	if err != nil {
 		return SyntaxError(err.Error(), name, l.Line())
 	}
 
-	// Parser may return an empty Code slice until full AST codegen is wired; fall back
-	// to the simple compiler for patterns it understands (e.g. "return 42").
-	if proto == nil || proto.Code == nil || len(proto.Code) == 0 {
-		proto = s.compileSimpleCode(code, name)
-	}
+	// Compile AST to bytecode
+	proto := codegen.CompileChunk(block, name)
 
 	// Create closure
 	closure := &object.Closure{
 		IsGo:  false,
 		Proto: proto,
+	}
+
+	// Set up _ENV as upvalue[0] pointing to the global table
+	globalTable := s.getGlobalTable()
+	globalTValue := &object.TValue{Type: object.TypeTable}
+	globalTValue.Value.GC = globalTable
+	closure.Upvalues = []*object.Upvalue{
+		{Value: globalTValue, Closed: false},
 	}
 
 	// Push closure onto stack
@@ -66,101 +68,6 @@ func (s *State) LoadString(code, name string) error {
 	s.vm.Push(v)
 
 	return nil
-}
-
-// compileSimpleCode compiles simple Lua code directly to bytecode.
-//
-// This is a simplified compiler for basic expressions and statements.
-// It's used when the full parser is not available.
-//
-// Parameters:
-//   - code: The Lua code to compile
-//   - name: The chunk name
-//
-// Returns:
-//   - *object.Prototype: The compiled prototype
-func (s *State) compileSimpleCode(code, name string) *object.Prototype {
-	// Create a simple prototype
-	proto := &object.Prototype{
-		Source:       name,
-		Constants:    make([]object.TValue, 0),
-		Code:         make([]object.Instruction, 0),
-		Upvalues:     make([]object.UpvalueDesc, 0),
-		Prototypes:   make([]*object.Prototype, 0),
-		NumParams:    0,
-		IsVarArg:     false,
-		MaxStackSize: 10,
-	}
-
-	// Create code generator
-	cg := codegen.NewCodeGenerator()
-
-	// Simple pattern matching for basic code
-	// This is a placeholder until the parser is fully implemented
-
-	// Trim whitespace
-	code = strings.TrimSpace(code)
-
-	// Check for simple return statements
-	// Pattern: "return <number>"
-	if strings.HasPrefix(code, "return ") {
-		expr := strings.TrimSpace(strings.TrimPrefix(code, "return"))
-
-		// Try to parse as number
-		if num, err := strconv.ParseFloat(expr, 64); err == nil {
-			// Load constant number
-			cg.EmitABx(vm.OP_LOADK, 0, cg.AddConstant(object.TValue{Type: object.TypeNumber, Value: object.Value{Num: num}}))
-			cg.EmitABC(vm.OP_RETURN, 0, 2, 0) // Return 1 result (R(0))
-			proto.Code = cg.Prototype.Code
-			proto.Constants = cg.Prototype.Constants
-			return proto
-		}
-
-		// Try to parse as string
-		if len(expr) >= 2 && ((expr[0] == '"' && expr[len(expr)-1] == '"') ||
-			(expr[0] == '\'' && expr[len(expr)-1] == '\'')) {
-			str := expr[1 : len(expr)-1]
-			cg.EmitABx(vm.OP_LOADK, 0, cg.AddConstant(object.TValue{Type: object.TypeString, Value: object.Value{Str: str}}))
-			cg.EmitABC(vm.OP_RETURN, 0, 2, 0) // Return 1 result
-			proto.Code = cg.Prototype.Code
-			proto.Constants = cg.Prototype.Constants
-			return proto
-		}
-
-		// Check for boolean
-		if expr == "true" {
-			cg.EmitABC(vm.OP_LOADBOOL, 0, 1, 0)
-			cg.EmitABC(vm.OP_RETURN, 0, 2, 0)
-			proto.Code = cg.Prototype.Code
-			proto.Constants = cg.Prototype.Constants
-			return proto
-		}
-		if expr == "false" {
-			cg.EmitABC(vm.OP_LOADBOOL, 0, 0, 0)
-			cg.EmitABC(vm.OP_RETURN, 0, 2, 0)
-			proto.Code = cg.Prototype.Code
-			proto.Constants = cg.Prototype.Constants
-			return proto
-		}
-
-		// Check for nil
-		if expr == "nil" {
-			cg.EmitABC(vm.OP_LOADNIL, 0, 0, 0)
-			cg.EmitABC(vm.OP_RETURN, 0, 2, 0)
-			proto.Code = cg.Prototype.Code
-			proto.Constants = cg.Prototype.Constants
-			return proto
-		}
-	}
-
-	// Default: return nil
-	cg.EmitABC(vm.OP_LOADNIL, 0, 0, 0)
-	cg.EmitABC(vm.OP_RETURN, 0, 2, 0)
-
-	proto.Code = cg.Prototype.Code
-	proto.Constants = cg.Prototype.Constants
-
-	return proto
 }
 
 // LoadFile loads and compiles a Lua file as a chunk.

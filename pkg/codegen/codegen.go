@@ -19,6 +19,7 @@ type CodeGenerator struct {
 	Constants      map[string]int
 	JumpList       []JumpEntry
 	breakList      []int
+	Parent         *CodeGenerator
 }
 
 // LocalVar represents a local variable.
@@ -119,6 +120,40 @@ func (cg *CodeGenerator) getLocal(name string) (int, bool) {
 			}
 		}
 	}
+	return -1, false
+}
+
+// resolveUpvalue resolves a variable as an upvalue by walking the parent chain.
+// Returns the upvalue index in this generator's prototype and true if found.
+func (cg *CodeGenerator) resolveUpvalue(name string) (int, bool) {
+	if cg.Parent == nil {
+		return -1, false
+	}
+
+	// Case 1: name is a local in the parent
+	if idx, ok := cg.Parent.getLocal(name); ok {
+		return cg.addUpvalue(name, object.UpvalueDesc{
+			Index:   idx,
+			IsLocal: true,
+		}), true
+	}
+
+	// Case 2: name is already an upvalue in the parent
+	if idx, ok := cg.Parent.getUpvalue(name); ok {
+		return cg.addUpvalue(name, object.UpvalueDesc{
+			Index:   idx,
+			IsLocal: false,
+		}), true
+	}
+
+	// Case 3: recurse — resolve in parent first, then reference parent's new upvalue
+	if idx, ok := cg.Parent.resolveUpvalue(name); ok {
+		return cg.addUpvalue(name, object.UpvalueDesc{
+			Index:   idx,
+			IsLocal: false,
+		}), true
+	}
+
 	return -1, false
 }
 
@@ -277,8 +312,8 @@ func (cg *CodeGenerator) emitLoadConstant(reg int, val object.TValue) {
 		if isInteger {
 			intNum := int(num)
 			if intNum >= -128 && intNum <= 127 {
-				// Use LOADI for small integers
-				cg.EmitABx(vm.OP_LOADI, reg, intNum)
+				// Use LOADI for small integers (sBx format)
+				cg.EmitAsBx(vm.OP_LOADI, reg, intNum)
 				return
 			}
 		}
