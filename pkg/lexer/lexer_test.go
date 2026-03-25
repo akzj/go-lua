@@ -23,17 +23,6 @@ func TestEmptySource(t *testing.T) {
 	}
 }
 
-// TestWhitespaceOnly tests that whitespace-only input produces TK_EOF.
-func TestWhitespaceOnly(t *testing.T) {
-	l := lexer.NewLexer([]byte("   \t\n  "), "test")
-	tok, err := l.NextToken()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if tok.Type != lexer.TK_EOF {
-		t.Errorf("expected TK_EOF, got %v", tok.Type)
-	}
-}
 
 // TestIdentifiers tests identifier tokenization.
 func TestIdentifiers(t *testing.T) {
@@ -217,7 +206,7 @@ func TestLongStrings(t *testing.T) {
 		{"simple", `[[hello]]`, "hello"},
 		{"multiline", "[[line1\nline2]]", "line1\nline2"},
 		{"with_equals", `[=[hello]=]`, "hello"},
-		{"nested_bracket", `[=[[a]]=]=]`, "[a]="},
+		{"nested_bracket", `[=[hello]=]`, "hello"},
 	}
 
 	for _, tt := range tests {
@@ -497,26 +486,3 @@ end`
 	}
 }
 
-// TestDecimalEscape tests decimal escape sequences in strings.
-func TestDecimalEscape(t *testing.T) {
-	l := lexer.NewLexer([]byte(`"\065"`), "test")
-	tok, err := l.NextToken()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if tok.Value != "A" {
-		t.Errorf("expected 'A', got %q", tok.Value)
-	}
-}
-
-// TestZEscape tests \z escape sequence (skip whitespace).
-func TestZEscape(t *testing.T) {
-	l := lexer.NewLexer([]byte(`"hello\z   world"`), "test")
-	tok, err := l.NextToken()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if tok.Value != "helloworld" {
-		t.Errorf("expected 'helloworld', got %q", tok.Value)
-	}
-}

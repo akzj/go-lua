@@ -86,4 +86,5 @@ const (
 	TK_COLON                            // ':' Colon
 	TK_COMMA                            // ',' Comma
 	TK_DOT                              // '.' Dot/period
+	TK_ASSIGN                           // '=' Assignment
 )

@@ -190,11 +190,11 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		vm.Stack[vm.Base+a].CopyFrom(&vm.Stack[vm.Base+b])
 
 	case OP_LOADI:
-		a, sbx := instr.A(), instr.sBx()
+		a, sbx := instr.A(), instr.SBx()
 		vm.Stack[vm.Base+a].SetNumber(float64(sbx))
 
 	case OP_LOADF:
-		a, sbx := instr.A(), instr.sBx()
+		a, sbx := instr.A(), instr.SBx()
 		vm.Stack[vm.Base+a].SetNumber(float64(sbx))
 
 	case OP_LOADK:
@@ -389,7 +389,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 
 	// Control flow instructions
 	case OP_JMP:
-		sbx := instr.sBx()
+		sbx := instr.SBx()
 		vm.PC += sbx
 
 	case OP_TEST:

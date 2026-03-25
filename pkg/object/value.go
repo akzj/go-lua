@@ -979,3 +979,40 @@ func NewTableWithSize(arraySize, mapSize int) *Table {
 		Length:  0,
 	}
 }
+
+// Instruction methods
+
+// Opcode returns the opcode of the instruction.
+func (i Instruction) Opcode() uint8 {
+	return uint8(i & 0x7F)
+}
+
+// A returns the A field of the instruction.
+func (i Instruction) A() int {
+	return int((i >> 7) & 0xFF)
+}
+
+// B returns the B field of the instruction (8 bits).
+func (i Instruction) B() int {
+	return int((i >> 24) & 0xFF)
+}
+
+// C returns the C field of the instruction (9 bits).
+func (i Instruction) C() int {
+	return int((i >> 15) & 0x1FF)
+}
+
+// Bx returns the Bx field of the instruction (17 bits).
+func (i Instruction) Bx() int {
+	return int((i >> 15) & 0x1FFFF)
+}
+
+// sBx returns the signed Bx field of the instruction (17 bits, bias 0xFFFF).
+func (i Instruction) SBx() int {
+	return int((i >> 15) & 0x1FFFF) - 0xFFFF
+}
+
+// Ax returns the Ax field of the instruction.
+func (i Instruction) Ax() int {
+	return int((i >> 7) & 0x1FFFFFF)
+}

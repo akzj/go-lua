@@ -45,7 +45,7 @@ func (s *State) LoadString(code, name string) error {
 	// Parse the code
 	proto, err := p.Parse()
 	if err != nil {
-		return SyntaxError(err.Error(), name, l.Line)
+		return SyntaxError(err.Error(), name, l.Line())
 	}
 
 	// If parser returned a nil prototype, create a minimal one

@@ -63,6 +63,7 @@ const (
 	OP_VARARGPREP Opcode = 55
 	OP_EXTRAARG  Opcode = 56
 	OP_RETURN    Opcode = 57
+	OP_CALL      Opcode = 58
 )
 
 // Instruction is a 32-bit bytecode instruction
@@ -93,8 +94,8 @@ func (i Instruction) Bx() int {
 	return int((i >> 15) & 0x1FFFF)
 }
 
-// sBx returns the signed Bx field of the instruction (17 bits, bias 0xFFFF)
-func (i Instruction) sBx() int {
+// SBx returns the signed Bx field of the instruction (17 bits, bias 0xFFFF)
+func (i Instruction) SBx() int {
 	return int((i >> 15) & 0x1FFFF) - 0xFFFF
 }
 
