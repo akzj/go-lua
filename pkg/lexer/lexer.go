@@ -43,9 +43,13 @@ func (l *Lexer) NextToken() (Token, error) {
 	l.buffer.Reset()
 
 	for {
+		// Save start position for this token
+		tokenLine := l.line
+		tokenColumn := l.column
+
 		switch l.current {
 		case 0: // EOF
-			return Token{Type: TK_EOF, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_EOF, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '\n', '\r': // Newlines
 			l.skipNewline()
@@ -58,7 +62,7 @@ func (l *Lexer) NextToken() (Token, error) {
 		case '-': // '-' or '--' (comment)
 			l.Advance()
 			if l.current != '-' {
-				return Token{Type: TK_MINUS, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_MINUS, Line: tokenLine, Column: tokenColumn}, nil
 			}
 			// Comment
 			l.Advance()
@@ -80,59 +84,59 @@ func (l *Lexer) NextToken() (Token, error) {
 			sep := l.skipSep()
 			if sep >= 2 {
 				str := l.readLongString(sep)
-				return Token{Type: TK_STRING, Value: str, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_STRING, Value: str, Line: tokenLine, Column: tokenColumn}, nil
 			} else if sep == 0 {
 				return Token{}, l.Error("invalid long string delimiter")
 			}
-			return Token{Type: TK_LBRACK, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_LBRACK, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '=': // '=' or '=='
 			l.Advance()
 			if l.Match('=') {
-				return Token{Type: TK_EQ, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_EQ, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_DOT, Value: "=", Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_ASSIGN, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '<': // '<', '<=', or '<<'
 			l.Advance()
 			if l.Match('=') {
-				return Token{Type: TK_LE, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_LE, Line: tokenLine, Column: tokenColumn}, nil
 			}
 			if l.Match('<') {
-				return Token{Type: TK_SHL, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_SHL, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_LT, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_LT, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '>': // '>', '>=', or '>>'
 			l.Advance()
 			if l.Match('=') {
-				return Token{Type: TK_GE, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_GE, Line: tokenLine, Column: tokenColumn}, nil
 			}
 			if l.Match('>') {
-				return Token{Type: TK_SHR, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_SHR, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_GT, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_GT, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '/': // '/' or '//'
 			l.Advance()
 			if l.Match('/') {
-				return Token{Type: TK_IDIV, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_IDIV, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_SLASH, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_SLASH, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '~': // '~' or '~='
 			l.Advance()
 			if l.Match('=') {
-				return Token{Type: TK_NE, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_NE, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_CARET, Value: "~", Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_CARET, Value: "~", Line: tokenLine, Column: tokenColumn}, nil
 
 		case ':': // ':' or '::'
 			l.Advance()
 			if l.Match(':') {
-				return Token{Type: TK_DBCOLON, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_DBCOLON, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_COLON, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_COLON, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '"', '\'': // String literals
 			delim := l.current
@@ -140,23 +144,21 @@ func (l *Lexer) NextToken() (Token, error) {
 			if err != nil {
 				return Token{}, err
 			}
-			return Token{Type: TK_STRING, Value: str, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_STRING, Value: str, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '.': // '.', '..', '...', or number
-			startPos := l.pos
 			l.Advance()
 			if l.Match('.') {
 				if l.Match('.') {
-					return Token{Type: TK_DOTS, Line: l.line, Column: l.column}, nil
+					return Token{Type: TK_DOTS, Line: tokenLine, Column: tokenColumn}, nil
 				}
-				return Token{Type: TK_CONCAT, Line: l.line, Column: l.column}, nil
+				return Token{Type: TK_CONCAT, Line: tokenLine, Column: tokenColumn}, nil
 			}
 			if isDigit(l.current) {
 				// Number starting with .
-				l.buffer.Write(l.Substring(startPos, l.pos))
-				return l.readNumber()
+				return l.readNumberStartingWithDot()
 			}
-			return Token{Type: TK_DOT, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_DOT, Line: tokenLine, Column: tokenColumn}, nil
 
 		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': // Numbers
 			return l.readNumber()
@@ -170,20 +172,20 @@ func (l *Lexer) NextToken() (Token, error) {
 			l.SkipWhile(isAlphaNum)
 			name := string(l.Substring(startPos, l.pos))
 			if tok, ok := Keywords[name]; ok {
-				return Token{Type: tok, Line: l.line, Column: l.column}, nil
+				return Token{Type: tok, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_NAME, Value: name, Line: l.line, Column: l.column}, nil
+			return Token{Type: TK_NAME, Value: name, Line: tokenLine, Column: tokenColumn}, nil
 
 		default: // Single-character tokens
 			c := l.current
 			l.Advance()
-			return l.singleCharToken(c)
+			return l.singleCharToken(c, tokenLine, tokenColumn)
 		}
 	}
 }
 
 // singleCharToken returns the token type for a single character.
-func (l *Lexer) singleCharToken(c byte) (Token, error) {
+func (l *Lexer) singleCharToken(c byte, line, column int) (Token, error) {
 	var tok TokenType
 	switch c {
 	case '+':
@@ -221,12 +223,11 @@ func (l *Lexer) singleCharToken(c byte) (Token, error) {
 	case '.':
 		tok = TK_DOT
 	case '=':
-		tok = TK_DOT
-		l.buffer.WriteString("=")
+		tok = TK_ASSIGN
 	default:
 		return Token{}, l.Error("unexpected character '%c'", c)
 	}
-	return Token{Type: tok, Line: l.line, Column: l.column}, nil
+	return Token{Type: tok, Line: line, Column: column}, nil
 }
 
 // skipNewline skips a newline sequence (\n, \r, \n\r, or \r\n).
@@ -268,7 +269,10 @@ func (l *Lexer) skipLongString(sep int) {
 		}
 		if l.current == ']' {
 			if l.checkSep(sep) {
-				l.Advance() // Skip closing ]
+				// Skip closing separator ]=...=]
+				for i := 0; i < sep; i++ {
+					l.Advance()
+				}
 				return
 			}
 		} else if isNewline(l.current) {
@@ -488,9 +492,44 @@ func hexValue(c byte) byte {
 	return 0
 }
 
+
+// readNumberStartingWithDot reads a numeric literal that starts with a decimal point.
+func (l *Lexer) readNumberStartingWithDot() (Token, error) {
+	tokenLine := l.line
+	tokenColumn := l.column
+	startPos := l.pos - 1 // Include the '.'
+
+	// Read fractional part
+	l.SkipWhile(isDigit)
+
+	// Check for exponent
+	if l.current == 'e' || l.current == 'E' {
+		l.Advance()
+		if l.current == '+' || l.current == '-' {
+			l.Advance()
+		}
+		l.SkipWhile(isDigit)
+	}
+
+	numStr := string(l.Substring(startPos, l.pos))
+
+	// Check for invalid suffix (letter after number)
+	if isAlpha(l.current) {
+		return Token{}, l.Error("malformed number")
+	}
+
+	val, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return Token{}, l.Error("malformed number: %v", err)
+	}
+	return Token{Type: TK_FLOAT, Value: val, Line: tokenLine, Column: tokenColumn}, nil
+}
+
 // readNumber reads a numeric literal (integer, float, or hex).
 func (l *Lexer) readNumber() (Token, error) {
-	startPos := l.pos - 1
+	tokenLine := l.line
+	tokenColumn := l.column
+	startPos := l.pos
 	isHex := false
 
 	// Check for hex prefix
@@ -554,7 +593,7 @@ func (l *Lexer) readNumber() (Token, error) {
 		if err != nil {
 			return Token{}, l.Error("malformed number: %v", err)
 		}
-		return Token{Type: TK_FLOAT, Value: val, Line: l.line, Column: l.column}, nil
+		return Token{Type: TK_FLOAT, Value: val, Line: tokenLine, Column: tokenColumn}, nil
 	}
 
 	val, err := strconv.ParseInt(numStr, 0, 64)
@@ -564,9 +603,9 @@ func (l *Lexer) readNumber() (Token, error) {
 		if ferr != nil {
 			return Token{}, l.Error("malformed number: %v", err)
 		}
-		return Token{Type: TK_FLOAT, Value: fval, Line: l.line, Column: l.column}, nil
+		return Token{Type: TK_FLOAT, Value: fval, Line: tokenLine, Column: tokenColumn}, nil
 	}
-	return Token{Type: TK_INT, Value: val, Line: l.line, Column: l.column}, nil
+	return Token{Type: TK_INT, Value: val, Line: tokenLine, Column: tokenColumn}, nil
 }
 
 // Peek returns the next token without consuming it.
@@ -596,4 +635,9 @@ func (l *Lexer) Peek() Token {
 // Error creates a lexer error with the current position.
 func (l *Lexer) Error(format string, args ...interface{}) error {
 	return fmt.Errorf("%s:%d: %s", l.name, l.line, fmt.Sprintf(format, args...))
+}
+
+// Name returns the source name (filename) for error messages.
+func (l *Lexer) Name() string {
+	return l.name
 }

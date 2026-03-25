@@ -19,6 +19,8 @@ profile.cov
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+.backups
+lua-master
 
 # Go workspace file
 go.work

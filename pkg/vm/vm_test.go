@@ -464,8 +464,8 @@ func TestInstructionDecoding(t *testing.T) {
 	if instr.Opcode() != OP_JMP {
 		t.Errorf("Expected opcode to be OP_JMP, got %d", instr.Opcode())
 	}
-	if instr.sBx() != 0 {
-		t.Errorf("Expected sBx to be 0, got %d", instr.sBx())
+	if instr.SBx() != 0 {
+		t.Errorf("Expected sBx to be 0, got %d", instr.SBx())
 	}
 
 	// Test iAx format
