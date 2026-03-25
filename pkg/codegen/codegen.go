@@ -60,7 +60,7 @@ func (cg *CodeGenerator) Generate(funcDef *parser.FuncDefStmt) *object.Prototype
 	cg.Prototype.NumParams = len(funcDef.Params)
 	cg.Prototype.IsVarArg = funcDef.IsVarArg
 	cg.genBlock(funcDef.Body)
-	cg.emitReturn(0, 0)
+	cg.emitReturn(0, 1)
 	cg.endScope()
 	cg.Prototype.MaxStackSize = cg.MaxStackSize
 	return cg.Prototype
@@ -75,7 +75,7 @@ func (cg *CodeGenerator) GenerateFunc(funcExpr *parser.FuncExpr) *object.Prototy
 	cg.Prototype.NumParams = len(funcExpr.Params)
 	cg.Prototype.IsVarArg = funcExpr.IsVarArg
 	cg.genBlock(funcExpr.Body)
-	cg.emitReturn(0, 0)
+	cg.emitReturn(0, 1)
 	cg.endScope()
 	cg.Prototype.MaxStackSize = cg.MaxStackSize
 	return cg.Prototype
@@ -254,9 +254,9 @@ func (cg *CodeGenerator) constantKey(val object.TValue) string {
 	}
 }
 
-// emitReturn emits RETURN instruction.
-func (cg *CodeGenerator) emitReturn(nret int, base int) {
-	cg.EmitABC(vm.OP_RETURN, base, nret+1, 0)
+// emitReturn emits RETURN: return B-1 values starting at register A (Lua B=0 means multret).
+func (cg *CodeGenerator) emitReturn(a int, b int) {
+	cg.EmitABC(vm.OP_RETURN, a, b, 0)
 }
 
 // genBlock generates code for a block of statements.
