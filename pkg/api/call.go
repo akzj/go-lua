@@ -1,6 +1,10 @@
 // Package api provides the public Lua API
 package api
 
+import (
+	"github.com/akzj/go-lua/pkg/vm"
+)
+
 // Call calls a function.
 //
 // This corresponds to lua_call in the C API.
@@ -88,6 +92,12 @@ func (s *State) PCall(nargs, nresults int, msgh int) (err error) {
 		}
 	}()
 
+	// Save VM state for proper restoration after nested execution
+	savedCI := s.vm.CI
+	savedBase := s.vm.Base
+	savedPC := s.vm.PC
+	savedPrototype := s.vm.Prototype
+
 	// Get function value to check if it's a Go function
 	// Function is at negative index -(nargs+1) from top
 	// Stack layout: [func, arg1, arg2, ..., argN] where -1=argN, -(nargs+1)=func
@@ -105,15 +115,35 @@ func (s *State) PCall(nargs, nresults int, msgh int) (err error) {
 		return wrapError(err)
 	}
 
-	// For Lua functions, run the bytecode
+	// For Lua functions, run the bytecode with a bounded loop
+	// This prevents the Run loop from executing outer script instructions
 	// For Go functions, the call already executed the function
 	if isGoFunc {
 		// Go function already executed, just adjust results
 	} else {
-		// Run the Lua function
-		if err := s.vm.Run(); err != nil {
-			return wrapError(err)
+		// Run nested execution loop until CI drops back
+		for s.vm.CI > savedCI {
+			if s.vm.PC >= len(s.vm.Prototype.Code) {
+				break
+			}
+
+			instr := vm.Instruction(s.vm.Prototype.Code[s.vm.PC])
+			s.vm.PC++
+
+			if execErr := s.vm.ExecuteInstruction(instr); execErr != nil {
+				// Restore state before returning error
+				s.vm.CI = savedCI
+				s.vm.Base = savedBase
+				s.vm.PC = savedPC
+				s.vm.Prototype = savedPrototype
+				return wrapError(execErr)
+			}
 		}
+
+		// Restore caller's Base, PC and Prototype after nested run
+		s.vm.Base = savedBase
+		s.vm.PC = savedPC
+		s.vm.Prototype = savedPrototype
 	}
 
 	// Adjust results

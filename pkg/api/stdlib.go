@@ -4,6 +4,7 @@ package api
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/akzj/go-lua/pkg/object"
@@ -68,6 +69,17 @@ func (s *State) OpenLibs() {
 	// _VERSION is the Lua version string
 	s.PushString("Lua 5.4")
 	s.SetGlobal("_VERSION")
+
+	// Create package table for module system
+	s.NewTable() // package table
+	// Create package.loaded for caching
+	s.NewTable()
+	s.SetField(-2, "loaded")
+	// Set package.path with default search pattern
+	s.PushString("./?.lua")
+	s.SetField(-2, "path")
+	// Set package table as global
+	s.SetGlobal("package")
 }
 
 // stdPrint implements the Lua print() function.
@@ -586,37 +598,167 @@ func stdRawget(L *State) int {
 	return 1
 }
 
-// stdRequire implements a minimal require() function.
-// For now, returns the global module table if it exists, or an empty table for unknown modules.
+// stdRequire implements the require() function.
+// require(name) loads and returns a module.
+// Search order:
+// 1. package.loaded[name] - cached modules
+// 2. global variable name - built-in modules (math, string, etc.)
+// 3. file search: ./name.lua
+// After loading, the module is cached in package.loaded.
 func stdRequire(L *State) int {
 	// Get module name (argument 1)
 	if L.GetTop() < 1 {
-		L.NewTable()
-		return 1
+		L.PushString("bad argument #1 to 'require' (string expected, got no value)")
+		L.Error()
+		return 0
 	}
-	
+
 	nameVal := L.vm.GetStack(1)
 	if !nameVal.IsString() {
-		L.NewTable()
-		return 1
+		L.PushString("bad argument #1 to 'require' (string expected)")
+		L.Error()
+		return 0
 	}
-	
+
 	name, _ := nameVal.ToString()
-	
-	// Check if the module exists as a global
-	L.GetGlobal(name)
-	modType := L.vm.GetStack(-1).Type
-	
-	if modType == object.TypeTable {
-		// Module exists, return it
+	// Create key matching GetGlobal's key format
+	nameKey := object.TValue{Type: object.TypeString, Value: object.Value{Str: name}}
+	packageKey := object.TValue{Type: object.TypeString, Value: object.Value{Str: "package"}}
+	loadedKey := object.TValue{Type: object.TypeString, Value: object.Value{Str: "loaded"}}
+
+	// Get global table directly (no VM stack operations)
+	globalTable := L.getGlobalTable()
+
+	// 1. Check package.loaded[name] first (direct table access, no stack)
+	packageTableVal := globalTable.Get(packageKey)
+	if packageTableVal != nil && packageTableVal.IsTable() {
+		packageTable, _ := packageTableVal.ToTable()
+		loadedTableVal := packageTable.Get(loadedKey)
+		if loadedTableVal != nil && loadedTableVal.IsTable() {
+			loadedTable, _ := loadedTableVal.ToTable()
+			cached := loadedTable.Get(nameKey)
+			if cached != nil && !cached.IsNil() {
+				// Found in cache, return it
+				L.vm.Push(*cached)
+				return 1
+			}
+		}
+	}
+
+	// 2. Check global variable (built-in modules) - direct table access
+	globalVal := globalTable.Get(nameKey)
+	if globalVal != nil && !globalVal.IsNil() {
+		// Found as global, cache it in package.loaded and return
+		moduleVal := *globalVal
+
+		// Get or create package table
+		packageTableVal := globalTable.Get(packageKey)
+		var pkgTbl *object.Table
+		if packageTableVal == nil || !packageTableVal.IsTable() {
+			pkgTbl = object.NewTable()
+			globalTable.Set(packageKey, *object.NewTableValue(pkgTbl))
+		} else {
+			pkgTbl, _ = packageTableVal.ToTable()
+		}
+
+		// Get or create package.loaded table
+		loadedTableVal := pkgTbl.Get(loadedKey)
+		var loadedTbl *object.Table
+		if loadedTableVal == nil || !loadedTableVal.IsTable() {
+			loadedTbl = object.NewTable()
+			pkgTbl.Set(loadedKey, *object.NewTableValue(loadedTbl))
+		} else {
+			loadedTbl, _ = loadedTableVal.ToTable()
+		}
+
+		// Cache the module
+		loadedTbl.Set(nameKey, moduleVal)
+
+		// Return the module
+		L.vm.Push(moduleVal)
 		return 1
 	}
-	
-	// Pop the nil/non-table value
-	L.vm.Pop()
-	
-	// Return an empty table for unknown modules
-	L.NewTable()
+
+	// 3. Search for .lua file
+	searchDir := "."
+	if L.vm.Prototype != nil && L.vm.Prototype.Source != "" {
+		source := L.vm.Prototype.Source
+		if len(source) > 0 && source[0] == '@' {
+			filePath := source[1:]
+			searchDir = filepath.Dir(filePath)
+		}
+	}
+
+	moduleFile := ""
+	candidatePath := filepath.Join(searchDir, name+".lua")
+	if _, err := os.Stat(candidatePath); err == nil {
+		moduleFile = candidatePath
+	}
+
+	if moduleFile == "" {
+		candidatePath = "./" + name + ".lua"
+		if _, err := os.Stat(candidatePath); err == nil {
+			moduleFile = candidatePath
+		}
+	}
+
+	if moduleFile == "" {
+		L.PushString("module '" + name + "' not found")
+		L.Error()
+		return 0
+	}
+
+	// Get or create package.loaded table BEFORE loading (to mark as loading)
+	packageTableVal = globalTable.Get(packageKey)
+	var pkgTbl *object.Table
+	if packageTableVal == nil || !packageTableVal.IsTable() {
+		pkgTbl = object.NewTable()
+		globalTable.Set(packageKey, *object.NewTableValue(pkgTbl))
+	} else {
+		pkgTbl, _ = packageTableVal.ToTable()
+	}
+
+	loadedTableVal := pkgTbl.Get(loadedKey)
+	var loadedTbl *object.Table
+	if loadedTableVal == nil || !loadedTableVal.IsTable() {
+		loadedTbl = object.NewTable()
+		pkgTbl.Set(loadedKey, *object.NewTableValue(loadedTbl))
+	} else {
+		loadedTbl, _ = loadedTableVal.ToTable()
+	}
+
+	// CRITICAL: Mark module as "loading" BEFORE calling DoFile to prevent recursive require
+	// This is the standard Lua behavior - package.loaded[name] is set to true before loading
+	loadedTbl.Set(nameKey, object.TValue{Type: object.TypeBoolean, Value: object.Value{Bool: true}})
+
+	// Load and execute the file
+	topBefore := L.GetTop()
+	err := L.DoFile(moduleFile)
+	if err != nil {
+		// Remove the "loading" marker on error
+		loadedTbl.Set(nameKey, object.TValue{Type: object.TypeNil})
+		L.PushString("error loading module '" + name + "' from file '" + moduleFile + "': " + err.Error())
+		L.Error()
+		return 0
+	}
+
+	// Get return value from DoFile
+	topAfter := L.GetTop()
+	numResults := topAfter - topBefore
+
+	var moduleValue object.TValue
+	if numResults > 0 {
+		moduleValue = *L.vm.GetStack(-1)
+	} else {
+		L.PushBoolean(true)
+		moduleValue = *L.vm.GetStack(-1)
+	}
+
+	// Cache the module (replace the loading marker)
+	loadedTbl.Set(nameKey, moduleValue)
+
+	// Return the module
+	L.vm.Push(moduleValue)
 	return 1
 }
 

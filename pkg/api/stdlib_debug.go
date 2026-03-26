@@ -55,6 +55,9 @@ func (s *State) openDebugLib() {
 	s.PushFunction(debugSethook)
 	s.SetField(debugIdx, "sethook")
 
+	s.PushFunction(debugSetmetatable)
+	s.SetField(debugIdx, "setmetatable")
+
 	// Register as "debug" global
 	s.SetGlobal("debug")
 }
@@ -718,4 +721,42 @@ func formatFrame(ci *vm.CallInfo, vmInst *vm.VM) string {
 		return fmt.Sprintf("%s:%d: in ?", source, line)
 	}
 	return fmt.Sprintf("%s: in ?", source)
+}
+
+// debugSetmetatable implements debug.setmetatable(value, metatable)
+// Sets the metatable for the given value and returns the value.
+// This is the debug version that doesn't trigger __metatable metamethod.
+func debugSetmetatable(L *State) int {
+	if L.GetTop() < 2 {
+		L.PushString("bad argument #1 to 'setmetatable' (value expected)")
+		L.Error()
+		return 0
+	}
+
+	// Get the value (first argument)
+	value := L.vm.GetStack(1)
+
+	// Get the metatable (second argument) - can be nil or table
+	mtValue := L.vm.GetStack(2)
+
+	var mt *object.Table
+	if mtValue.IsNil() {
+		mt = nil
+	} else if mtValue.IsTable() {
+		mt, _ = mtValue.ToTable()
+	} else {
+		L.PushString("bad argument #2 to 'setmetatable' (nil or table expected)")
+		L.Error()
+		return 0
+	}
+
+	// Only tables can have their metatable set directly
+	if value.IsTable() {
+		tbl, _ := value.ToTable()
+		tbl.SetMetatable(mt)
+	}
+
+	// Return the value
+	L.vm.Push(*value)
+	return 1
 }
