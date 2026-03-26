@@ -58,6 +58,9 @@ const (
 	TK_SHL                             // '<<' Left shift
 	TK_SHR                             // '>>' Right shift
 	TK_DBCOLON                         // '::' Label delimiter
+	TK_BAND                            // '&' Bitwise AND
+	TK_BOR                             // '|' Bitwise OR
+	TK_BXOR                            // '~' Bitwise XOR
 )
 
 // End of stream marker.
