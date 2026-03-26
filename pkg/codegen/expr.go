@@ -142,9 +142,10 @@ func (cg *CodeGenerator) genVar(expr *parser.VarExpr) int {
 	} else if upIdx, ok := cg.resolveUpvalue(expr.Name); ok {
 		cg.EmitABC(vm.OP_GETUPVAL, reg, upIdx, 0)
 	} else {
-		// Global: GETTABUP R(A), 0, K(name) — get from UpValue[0][K(name)]
+		// Global: GETTABUP R(A), 0, K(C) — R(A) := UpValue[0][K(C)]
+		// C is constant index directly (K[C] format), not RK mode
 		nameIdx := cg.addOrGetConstant(*object.NewString(expr.Name))
-		cg.EmitABC(vm.OP_GETTABUP, reg, 0, nameIdx+256)
+		cg.EmitABC(vm.OP_GETTABUP, reg, 0, nameIdx)
 	}
 
 	return reg
@@ -570,15 +571,99 @@ func (cg *CodeGenerator) genTable(expr *parser.TableExpr) int {
 	arrayIndex := 1
 
 	// Process entries
-	for _, entry := range expr.Entries {
+	for i, entry := range expr.Entries {
 		switch entry.Kind {
 		case parser.TableEntryValue:
 			// Array-style entry: value
-			valueReg := cg.genExpr(entry.Value)
-			// SETI R(A)[C] := RK(B) — B=value, C=integer index
-			cg.EmitABC(vm.OP_SETI, resultReg, valueReg, arrayIndex)
-			cg.freeRegister()
-			arrayIndex++
+			// Check if this is a call expression that's the last entry
+			isLast := (i == len(expr.Entries)-1)
+			callExpr, isCall := entry.Value.(*parser.CallExpr)
+			methodExpr, isMethodCall := entry.Value.(*parser.MethodCallExpr)
+
+			if isLast && (isCall || isMethodCall) {
+				// Last entry is a call - capture all return values using SETLIST
+				// We need to ensure the function is called at resultReg+1 so that
+				// results are at resultReg+1, resultReg+2, etc. for SETLIST
+
+				// Ensure stack has space for function at resultReg+1
+				cg.setStackTop(resultReg + 2)
+
+				if isCall {
+					// Generate function expression
+					funcReg := cg.genExpr(callExpr.Func)
+
+					// Move function to resultReg+1 if needed
+					if funcReg != resultReg+1 {
+						cg.EmitABC(vm.OP_MOVE, resultReg+1, funcReg, 0)
+						cg.freeRegister()
+					}
+
+					// Generate arguments at resultReg+2...
+					for j, arg := range callExpr.Args {
+						argReg := cg.genExpr(arg)
+						targetReg := resultReg + 2 + j
+						if argReg != targetReg {
+							cg.EmitABC(vm.OP_MOVE, targetReg, argReg, 0)
+							cg.freeRegister()
+						}
+					}
+
+					// Emit CALL with C=0 (all results)
+					cg.EmitABC(vm.OP_CALL, resultReg+1, len(callExpr.Args)+1, 0)
+
+				} else { // isMethodCall
+					// Generate object expression
+					objReg := cg.genExpr(methodExpr.Object)
+
+					// Move object to resultReg+1 (for SELF)
+					if objReg != resultReg+1 {
+						cg.EmitABC(vm.OP_MOVE, resultReg+1, objReg, 0)
+						cg.freeRegister()
+					}
+
+					// Get method constant
+					methodIdx := cg.addOrGetConstant(*object.NewString(methodExpr.Method))
+
+					// Use SELF: R(A+1) := R(B); R(A) := R(B)[RK(C)]
+					// This loads the method and puts object in R(A+1)
+					if methodIdx <= 255 {
+						cg.EmitABC(vm.OP_SELF, resultReg+1, resultReg+1, methodIdx+256) // +256 for RK constant encoding
+					} else {
+						// For large indices, load key first
+						keyReg := cg.allocRegister()
+						cg.EmitABx(vm.OP_LOADK, keyReg, methodIdx)
+						cg.EmitABC(vm.OP_MOVE, resultReg+2, resultReg+1, 0)
+						cg.EmitABC(vm.OP_GETTABLE, resultReg+1, resultReg+1, keyReg)
+						cg.freeRegister()
+					}
+
+					// Now resultReg+1 contains the method, resultReg+2 contains self
+					// Generate arguments at resultReg+3...
+					for j, arg := range methodExpr.Args {
+						argReg := cg.genExpr(arg)
+						targetReg := resultReg + 3 + j
+						if argReg != targetReg {
+							cg.EmitABC(vm.OP_MOVE, targetReg, argReg, 0)
+							cg.freeRegister()
+						}
+					}
+
+					// Emit CALL with C=0 (all results), arg count includes self
+					cg.EmitABC(vm.OP_CALL, resultReg+1, len(methodExpr.Args)+2, 0)
+				}
+
+				// SETLIST: R(resultReg)[arrayIndex...] = R(resultReg+1...StackTop)
+				// C field is the starting index - 1 (offset)
+				cg.EmitABC(vm.OP_SETLIST, resultReg, 0, arrayIndex-1)
+				// arrayIndex update not needed since this is the last entry
+			} else {
+				// Not the last entry, or not a call - just add single value
+				valueReg := cg.genExpr(entry.Value)
+				// SETI R(A)[C] := RK(B) — B=value, C=integer index
+				cg.EmitABC(vm.OP_SETI, resultReg, valueReg, arrayIndex)
+				cg.freeRegister()
+				arrayIndex++
+			}
 
 		case parser.TableEntryField:
 			// Field entry: key = value

@@ -983,7 +983,8 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			return vm.runtimeError("attempt to index a non-table upvalue")
 		}
 		t, _ := upvalVal.ToTable()
-		key := vm.getRKValue(c)
+		// C is constant index directly (K[C] format), not RK mode
+		key := &vm.Prototype.Constants[c]
 		val := t.Get(*key)
 		if val != nil && !val.IsNil() {
 			vm.Stack[vm.Base+a].CopyFrom(val)
@@ -1026,7 +1027,9 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			return vm.runtimeError("attempt to index a non-table upvalue")
 		}
 		t, _ := upvalVal.ToTable()
-		key := vm.getRKValue(b)
+		// B is constant index directly (K[B] format), not RK mode
+		key := &vm.Prototype.Constants[b]
+		// C is RK mode
 		val := vm.getRKValue(c)
 		// Check if key already exists
 		existing := t.Get(*key)
