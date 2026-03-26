@@ -1012,6 +1012,9 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				nResults = b - 1
 			}
 
+			// Get the number of results the caller expects
+			expectedResults := vm.CallInfo[vm.CI].NResults
+
 			// Move results to caller's stack: replace the closure slot (Base-1) and following slots.
 			destBase := vm.Base - 1
 			if nResults > 0 {
@@ -1020,17 +1023,30 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				}
 			}
 
+			// Fill missing result slots with nil when caller expects more than returned
+			if expectedResults >= 0 {
+				for i := nResults; i < expectedResults; i++ {
+					vm.Stack[destBase+i].SetNil()
+				}
+			}
+
+			// Determine actual count for StackTop
+			actualResults := nResults
+			if expectedResults >= 0 && expectedResults > nResults {
+				actualResults = expectedResults
+			}
+
 			vm.CI--
 
 			if vm.CI == 0 {
 				vm.Base = vm.CallInfo[0].Base
-				vm.StackTop = destBase + nResults
+				vm.StackTop = destBase + actualResults
 				vm.PC = len(vm.Prototype.Code)
 			} else {
 				vm.Base = vm.CallInfo[vm.CI].Base
 				vm.PC = vm.CallInfo[vm.CI].PC
 				vm.Prototype = vm.CallInfo[vm.CI].Closure.Proto
-				vm.StackTop = destBase + nResults
+				vm.StackTop = destBase + actualResults
 			}
 		} else {
 			// Top-level return, stop execution
