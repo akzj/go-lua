@@ -41,7 +41,9 @@ func (s *State) openMathLib() {
 		"rad":    stdMathRad,
 		"modf":   stdMathModf,
 		"fmod":   stdMathFmod,
-		"ult":    stdMathUlt,
+		"ult":       stdMathUlt,
+		"tointeger": stdMathToInteger,
+		"type":      stdMathType,
 	}
 
 	for name, fn := range funcs {
@@ -414,5 +416,48 @@ func stdMathUlt(L *State) int {
 	}
 	// Convert to uint64 for unsigned comparison
 	L.PushBoolean(uint64(m) < uint64(n))
+	return 1
+}// stdMathToInteger implements math.tointeger(x)
+// Returns x if it is an integer value, otherwise nil.
+// Since the VM uses float64 for all numbers, this checks if the number
+// has no fractional part.
+// Returns nil for NaN and infinity values as they cannot be represented as integers.
+func stdMathToInteger(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		// Not a number
+		L.PushNil()
+		return 1
+	}
+	
+	// NaN and infinity cannot be represented as integers
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		L.PushNil()
+		return 1
+	}
+	
+	// Check if x is an integer value (no fractional part)
+	if x == math.Trunc(x) {
+		L.PushNumber(x)
+		return 1
+	}
+	
+	// Has fractional part, return nil
+	L.PushNil()
+	return 1
+}
+
+// stdMathType implements math.type(x)
+// Returns "integer" if x is an integer, "float" if x is a float, nil otherwise.
+// Since the VM uses float64 for all numbers, this always returns "float" for numbers.
+func stdMathType(L *State) int {
+	if L.IsNumber(1) {
+		// VM uses float64 for all numbers, so always "float"
+		L.PushString("float")
+		return 1
+	}
+	
+	// Not a number
+	L.PushNil()
 	return 1
 }

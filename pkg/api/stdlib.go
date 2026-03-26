@@ -524,26 +524,37 @@ func stdSetmetatable(L *State) int {
 // stdGetmetatable implements the Lua getmetatable(table) function.
 // Returns the metatable of a table, or nil if no metatable.
 func stdGetmetatable(L *State) int {
-	// Get the table argument
+	// Get the value argument
 	v := L.vm.GetStack(1)
-	t, ok := v.ToTable()
-	if !ok {
-		// For non-tables, could check for __metatable in type's metatable
-		// For now, just return nil
+	
+	// For tables, return their individual metatable
+	if t, ok := v.ToTable(); ok {
+		mt := t.GetMetatable()
+		if mt == nil {
+			L.PushNil()
+			return 1
+		}
+		// Push the metatable
+		mtVal := object.TValue{Type: object.TypeTable}
+		mtVal.Value.GC = mt
+		L.vm.Push(mtVal)
+		return 1
+	}
+	
+	// For strings, return the string metatable
+	if v.Type == object.TypeString {
+		if L.global.StringMetatable != nil {
+			mtVal := object.TValue{Type: object.TypeTable}
+			mtVal.Value.GC = L.global.StringMetatable
+			L.vm.Push(mtVal)
+			return 1
+		}
 		L.PushNil()
 		return 1
 	}
-
-	mt := t.GetMetatable()
-	if mt == nil {
-		L.PushNil()
-		return 1
-	}
-
-	// Push the metatable
-	mtVal := object.TValue{Type: object.TypeTable}
-	mtVal.Value.GC = mt
-	L.vm.Push(mtVal)
+	
+	// For other types, return nil
+	L.PushNil()
 	return 1
 }
 
