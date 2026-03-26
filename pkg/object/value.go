@@ -654,9 +654,10 @@ type UpvalueDesc struct {
 
 // LocVar represents a local variable debug info.
 type LocVar struct {
-	Name  string // Variable name
-	Start int    // Start PC
-	End   int    // End PC
+	Name     string // Variable name
+	Start    int    // Start PC
+	End      int    // End PC
+	RegIndex int    // Register index for stack access
 }
 
 // Upvalue represents an open upvalue.

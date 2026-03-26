@@ -111,6 +111,12 @@ type VM struct {
 
 	// To-be-closed variables
 	TBCList []int
+
+	// Debug hooks
+	Hook      *object.Closure // Hook function
+	HookMask  uint8           // Hook mask: 'c'=call, 'r'=return, 'l'=line
+	HookCount int             // Count for count hooks
+	HookActive bool           // Whether hook is currently executing (prevent recursion)
 }
 
 // Upvalue represents an open upvalue.
@@ -199,6 +205,28 @@ func (vm *VM) Run() error {
 	for {
 		if vm.PC >= len(vm.Prototype.Code) {
 			break
+		}
+
+		// Call line hook if set
+		if vm.Hook != nil && !vm.HookActive && vm.HookMask&4 != 0 {
+			// Get current line from LineInfo
+			line := 0
+			if vm.PC >= 0 && vm.PC < len(vm.Prototype.LineInfo) {
+				line = vm.Prototype.LineInfo[vm.PC]
+			}
+			// Call hook synchronously for Go functions
+			if vm.Hook.IsGo && vm.Hook.GoFn != nil {
+				vm.HookActive = true
+				// Push event and line
+				vm.ensureStack(vm.StackTop + 2)
+				vm.Stack[vm.StackTop].SetString("line")
+				vm.StackTop++
+				vm.Stack[vm.StackTop].SetNumber(float64(line))
+				vm.StackTop++
+				_ = vm.Hook.GoFn(vm)
+				vm.StackTop -= 2
+				vm.HookActive = false
+			}
 		}
 
 		instr := Instruction(vm.Prototype.Code[vm.PC])
@@ -1610,12 +1638,35 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 // ProtectedCall calls a Lua function with protected execution.
 // If an error occurs during execution, it is returned.
 // The function and its arguments must already be on the stack.
-func (vm *VM) ProtectedCall(funcIdx, nargs, nresults int) error {
+func (vm *VM) ProtectedCall(funcIdx, nargs, nresults int) (err error) {
 	// Save VM state
 	savedCI := vm.CI
 	savedBase := vm.Base
 	savedPC := vm.PC
 	savedPrototype := vm.Prototype
+	savedStackTop := vm.StackTop
+
+	// Set up panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			// Restore state before returning error
+			vm.CI = savedCI
+			vm.Base = savedBase
+			vm.PC = savedPC
+			vm.Prototype = savedPrototype
+			vm.StackTop = savedStackTop
+			
+			// Convert panic to error
+			switch v := r.(type) {
+			case error:
+				err = v
+			case string:
+				err = fmt.Errorf("%s", v)
+			default:
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
 
 	// Check if it's a Go function BEFORE calling (since Call changes Base for Lua functions)
 	fn, _ := vm.Stack[vm.Base+funcIdx].ToFunction()
@@ -1638,13 +1689,13 @@ func (vm *VM) ProtectedCall(funcIdx, nargs, nresults int) error {
 		instr := Instruction(vm.Prototype.Code[vm.PC])
 		vm.PC++
 
-		if err := vm.ExecuteInstruction(instr); err != nil {
+		if execErr := vm.ExecuteInstruction(instr); execErr != nil {
 			// Restore state before returning error
 			vm.CI = savedCI
 			vm.Base = savedBase
 			vm.PC = savedPC
 			vm.Prototype = savedPrototype
-			return err
+			return execErr
 		}
 	}
 
@@ -1674,6 +1725,124 @@ func (vm *VM) GetStack(index int) *object.TValue {
 	}
 	// index == 0 is invalid in Lua, return first element
 	return &vm.Stack[vm.Base]
+}
+
+// GetCallInfoAtLevel returns the CallInfo at the given stack level.
+// Level 1 is the current function, level 2 is its caller, etc.
+//
+// Parameters:
+//   - level: Stack level (1-based, 1 = current function)
+//
+// Returns:
+//   - *CallInfo: Call info at level, or nil if invalid
+func (vm *VM) GetCallInfoAtLevel(level int) *CallInfo {
+	if level < 1 || vm.CI < 0 {
+		return nil
+	}
+	// Level 1 = current (CI), Level 2 = caller (CI-1), etc.
+	idx := vm.CI - level + 1
+	if idx < 0 || idx > vm.CI {
+		return nil
+	}
+	return vm.CallInfo[idx]
+}
+
+// SetHook sets the debug hook function.
+//
+// Parameters:
+//   - hook: Hook function closure (nil to remove hook)
+//   - mask: Hook mask ('c' for call, 'r' for return, 'l' for line)
+//   - count: Count for count hooks (0 to disable)
+func (vm *VM) SetHook(hook *object.Closure, mask uint8, count int) {
+	vm.Hook = hook
+	vm.HookMask = mask
+	vm.HookCount = count
+}
+
+// GetHook returns the current hook settings.
+//
+// Returns:
+//   - hook: Hook function closure
+//   - mask: Hook mask
+//   - count: Hook count
+func (vm *VM) GetHook() (*object.Closure, uint8, int) {
+	return vm.Hook, vm.HookMask, vm.HookCount
+}
+
+// callHook calls the debug hook if one is set.
+// This is called at specific points during execution based on the hook mask.
+//
+// Parameters:
+//   - event: Event type ('c'=call, 'r'=return, 'l'=line)
+//   - line: Line number (for line events)
+func (vm *VM) callHook(event uint8, line int) error {
+	// Don't call hook if no hook set or already in hook
+	if vm.Hook == nil || vm.HookActive {
+		return nil
+	}
+
+	// Check if this event type is in the mask
+	mask := vm.HookMask
+	if event == 'c' && mask&1 == 0 {
+		return nil
+	}
+	if event == 'r' && mask&2 == 0 {
+		return nil
+	}
+	if event == 'l' && mask&4 == 0 {
+		return nil
+	}
+
+	// Set hook active to prevent recursion
+	vm.HookActive = true
+	defer func() { vm.HookActive = false }()
+
+	// Save current state
+	oldBase := vm.Base
+	oldPC := vm.PC
+	oldStackTop := vm.StackTop
+
+	// Push hook arguments
+	// For line events: event name and line number
+	// For call/return events: event name
+	vm.ensureStack(vm.StackTop + 2)
+
+	// Push event name
+	eventName := ""
+	switch event {
+	case 'c':
+		eventName = "call"
+	case 'r':
+		eventName = "return"
+	case 'l':
+		eventName = "line"
+	}
+	vm.Stack[vm.StackTop].SetString(eventName)
+	vm.StackTop++
+
+	// Push line number for line events
+	if event == 'l' {
+		vm.Stack[vm.StackTop].SetNumber(float64(line))
+		vm.StackTop++
+	}
+
+	// Call the hook function
+	// We need to call the Go function directly if it's a Go closure
+	if vm.Hook.IsGo && vm.Hook.GoFn != nil {
+		// Call Go function
+		_ = vm.Hook.GoFn(vm)
+	} else {
+		// For Lua functions, we would need to set up a call
+		// This is more complex and requires stack manipulation
+		// For now, just skip Lua hook functions
+	}
+
+	// Restore state
+	vm.Base = oldBase
+	vm.PC = oldPC
+	vm.StackTop = oldStackTop
+
+	return nil
 }
 
 // SetStack sets the value at stack index.

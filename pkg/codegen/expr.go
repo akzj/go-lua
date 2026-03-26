@@ -367,6 +367,8 @@ func (cg *CodeGenerator) genOr(expr *parser.BinOpExpr) int {
 	// Test if left is true
 	// If true, jump to end (result is left)
 	// If false, continue to evaluate right
+	// OP_TEST with c=1: skip next instruction if value is falsy
+	cg.EmitABC(vm.OP_TEST, leftReg, 0, 1)
 	jumpInstr := cg.EmitAsBx(vm.OP_JMP, 0, 0) // forward jump placeholder
 
 	// Generate right operand

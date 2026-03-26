@@ -414,7 +414,16 @@ type DoStmt struct {
 
 func (s *DoStmt) stmtNode() {}
 
-// ============================================================================
+// GlobalStmt represents a Lua 5.4 global statement.
+// Syntax: global [attr] ('*' | namelist) [= exprlist]
+// When names and values are provided, assigns to _ENV.
+type GlobalStmt struct {
+	baseStmt
+	Names  []string // Variable names (nil for wildcard *)
+	Values []Expr   // Initial values (nil if no assignment)
+}
+
+func (s *GlobalStmt) stmtNode() {}// ============================================================================
 // Helper Functions
 // ============================================================================
 
