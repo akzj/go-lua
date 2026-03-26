@@ -587,11 +587,34 @@ func stdRawget(L *State) int {
 }
 
 // stdRequire implements a minimal require() function.
-// For now, returns an empty table for unknown modules.
+// For now, returns the global module table if it exists, or an empty table for unknown modules.
 func stdRequire(L *State) int {
 	// Get module name (argument 1)
-	_ = L.vm.GetStack(1) // module name - not used in this minimal implementation
-
+	if L.GetTop() < 1 {
+		L.NewTable()
+		return 1
+	}
+	
+	nameVal := L.vm.GetStack(1)
+	if !nameVal.IsString() {
+		L.NewTable()
+		return 1
+	}
+	
+	name, _ := nameVal.ToString()
+	
+	// Check if the module exists as a global
+	L.GetGlobal(name)
+	modType := L.vm.GetStack(-1).Type
+	
+	if modType == object.TypeTable {
+		// Module exists, return it
+		return 1
+	}
+	
+	// Pop the nil/non-table value
+	L.vm.Pop()
+	
 	// Return an empty table for unknown modules
 	L.NewTable()
 	return 1
