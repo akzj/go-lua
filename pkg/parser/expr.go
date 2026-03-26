@@ -371,6 +371,11 @@ func (p *Parser) parseParamList() ([]*VarExpr, bool) {
 		if p.Current.Type == lexer.TK_DOTS {
 			isVarArg = true
 			p.advance()
+			// Lua 5.4: support named vararg (...t) where t is the vararg table name
+			if p.Current.Type == lexer.TK_NAME {
+				// Consume the vararg parameter name (e.g., 't' in ...t)
+				p.advance()
+			}
 			break
 		}
 
