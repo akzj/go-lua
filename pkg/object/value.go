@@ -930,6 +930,16 @@ func (t *Table) Len() int {
 	return length
 }
 
+// GetMetatable returns the metatable of the table.
+func (t *Table) GetMetatable() *Table {
+	return t.Metatable
+}
+
+// SetMetatable sets the metatable of the table.
+func (t *Table) SetMetatable(mt *Table) {
+	t.Metatable = mt
+}
+
 // Next returns the next key-value pair in the table.
 //
 // This is used for iteration (pairs/ipairs).

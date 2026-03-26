@@ -20,6 +20,10 @@ type GlobalState struct {
 
 	// Version
 	Version string
+
+	// StringMetatable is the metatable for all strings
+	// Its __index field points to the string module table
+	StringMetatable *object.Table
 }
 
 // GCState represents garbage collector state

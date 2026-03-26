@@ -21,6 +21,11 @@ func (cg *CodeGenerator) genExpr(expr parser.Expr) int {
 		return 0
 	}
 
+	// Track source line for error messages
+	if line := expr.Line(); line > 0 {
+		cg.currentLine = line
+	}
+
 	switch e := expr.(type) {
 	case *parser.NilExpr:
 		return cg.genNil()
@@ -76,7 +81,7 @@ func (cg *CodeGenerator) genExpr(expr parser.Expr) int {
 // genNil generates code for a nil literal.
 func (cg *CodeGenerator) genNil() int {
 	reg := cg.allocRegister()
-	cg.EmitABC(vm.OP_LOADNIL, reg, 0, 0)
+	cg.EmitABC(vm.OP_LOADNIL, reg, reg, 0)
 	return reg
 }
 
@@ -159,9 +164,9 @@ func (cg *CodeGenerator) genIndex(expr *parser.IndexExpr) int {
 	// Emit GETTABLE: R(A) := R(B)[R(C)]
 	cg.EmitABC(vm.OP_GETTABLE, resultReg, tableReg, indexReg)
 
-	// Free temporaries
-	cg.freeRegister() // indexReg
-	cg.freeRegister() // tableReg
+	// NOTE: We do NOT free temporaries here because it would decrement StackTop
+	// below resultReg, allowing the next allocRegister() to return the same
+	// slot and overwrite our result. The stack will be adjusted by the caller.
 
 	return resultReg
 }
@@ -189,8 +194,9 @@ func (cg *CodeGenerator) genField(expr *parser.FieldExpr) int {
 		cg.freeRegister() // keyReg
 	}
 
-	// Free table register
-	cg.freeRegister() // tableReg
+	// NOTE: We do NOT free tableReg here because it would decrement StackTop
+	// below resultReg, allowing the next allocRegister() to return the same
+	// slot and overwrite our result. The stack will be adjusted by the caller.
 
 	return resultReg
 }
@@ -216,13 +222,26 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 
 	// Emit CALL: R(A) := R(A)(R(A+1), ..., R(A+C-1))
 	// B = argCount + 1 (including function), 0 = vararg
-	// C = 2 (1 result), 0 = multiple results
+	// C = nresults + 1, or 0 = multiple results
 	resultReg := funcReg
-	cg.EmitABC(vm.OP_CALL, resultReg, argCount+1, 2)
+	cField := 2 // default: 1 result (c = nresults + 1)
+	if cg.ExpectedResults > 0 {
+		cField = cg.ExpectedResults + 1
+	} else if cg.ExpectedResults == 0 {
+		// ExpectedResults == 0 means "all results" (for return f() or similar)
+		cField = 0
+	}
+	// ExpectedResults == -1 means "default" (1 result, cField = 2)
+	cg.EmitABC(vm.OP_CALL, resultReg, argCount+1, cField)
 
 	// After CALL, result is in funcReg
-	// Free the argument registers (they were consumed by CALL)
-	cg.setStackTop(funcReg + 1)
+	// Set stack top based on expected results
+	// For cField == 0 (all results), the VM handles stack top
+	if cField > 0 {
+		// Fixed number of results
+		cg.setStackTop(funcReg + cField - 1)
+	}
+	// For cField == 0, don't adjust stack top - the VM will handle it
 
 	return resultReg
 }
@@ -240,8 +259,9 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 
 	// Use SELF: R(A+1) := R(B); R(A) := R(B)[RK(C)]
 	// This loads the method and puts object in R(A+1)
+	// RK encoding: if C >= 256, it's a constant index (C - 256)
 	if methodIdx <= 255 {
-		cg.EmitABC(vm.OP_SELF, funcReg, objReg, methodIdx)
+		cg.EmitABC(vm.OP_SELF, funcReg, objReg, methodIdx+256) // +256 for RK constant encoding
 	} else {
 		// For large indices, load key first
 		keyReg := cg.allocRegister()
@@ -252,6 +272,12 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 	}
 
 	// Now funcReg contains the method, funcReg+1 contains the object (self)
+	// IMPORTANT: Update StackTop to reserve space for self at funcReg+1
+	// Otherwise genExpr for arguments might allocate funcReg+1 and overwrite self
+	cg.setStackTop(funcReg + 2)
+	if cg.StackTop > cg.MaxStackSize {
+		cg.MaxStackSize = cg.StackTop
+	}
 
 	// Generate arguments (starting at funcReg+2)
 	argCount := len(expr.Args)
@@ -265,13 +291,27 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 	}
 
 	// Emit CALL
-	cg.EmitABC(vm.OP_CALL, funcReg, argCount+2, 2) // +2 for self
+	cField := 2 // default: 1 result (c = nresults + 1)
+	if cg.ExpectedResults > 0 {
+		cField = cg.ExpectedResults + 1
+	} else if cg.ExpectedResults == 0 {
+		// ExpectedResults == 0 means "all results" (for return f() or similar)
+		cField = 0
+	}
+	// ExpectedResults == -1 means "default" (1 result, cField = 2)
+	cg.EmitABC(vm.OP_CALL, funcReg, argCount+2, cField) // +2 for self
 
-	// Set stack top
-	cg.setStackTop(funcReg + 1)
+	// Set stack top based on expected results
+	// For cField == 0 (all results), the VM handles stack top
+	if cField > 0 {
+		// Fixed number of results
+		cg.setStackTop(funcReg + cField - 1)
+	}
+	// For cField == 0, don't adjust stack top - the VM will handle it
 
-	// Free object register
-	cg.freeRegister()
+	// NOTE: Do NOT free object register here - the result is at funcReg,
+	// and we need StackTop to be funcReg + 1 so next allocation doesn't overwrite result.
+	// The object was copied to funcReg+1 by SELF, and CALL overwrites that area.
 
 	return funcReg
 }
@@ -283,6 +323,8 @@ func (cg *CodeGenerator) genBinOp(expr *parser.BinOpExpr) int {
 		return cg.genAnd(expr)
 	case "or":
 		return cg.genOr(expr)
+	case "..":
+		return cg.genConcat(expr)
 	default:
 		return cg.genArithmetic(expr)
 	}
@@ -341,6 +383,59 @@ func (cg *CodeGenerator) genOr(expr *parser.BinOpExpr) int {
 	return leftReg
 }
 
+// collectConcatOperands recursively collects all operands in a .. chain.
+// This flattens left-associative concatenation expressions.
+func (cg *CodeGenerator) collectConcatOperands(expr parser.Expr) []parser.Expr {
+	if binOp, ok := expr.(*parser.BinOpExpr); ok && binOp.Op == ".." {
+		left := cg.collectConcatOperands(binOp.Left)
+		right := cg.collectConcatOperands(binOp.Right)
+		return append(left, right...)
+	}
+	return []parser.Expr{expr}
+}
+
+// genConcat generates code for concatenation operator.
+// It flattens the .. chain and emits a single CONCAT instruction.
+// Lua 5.4 CONCAT semantics: R(A) := R(B) .. R(B+1) .. ... .. R(C)
+func (cg *CodeGenerator) genConcat(expr *parser.BinOpExpr) int {
+	// Collect all operands in the .. chain
+	operands := cg.collectConcatOperands(expr)
+
+	// Remember where we start so we can free registers later
+	startStackTop := cg.StackTop
+
+	// Evaluate each operand into consecutive registers
+	for i, operand := range operands {
+		reg := cg.genExpr(operand)
+		expectedReg := startStackTop + i
+		// If the result is not in the expected position, move it
+		if reg != expectedReg {
+			cg.EmitABC(vm.OP_MOVE, expectedReg, reg, 0)
+		}
+		// Ensure stack top is at the next position for the next operand
+		if cg.StackTop < expectedReg+1 {
+			cg.StackTop = expectedReg + 1
+			if cg.StackTop > cg.MaxStackSize {
+				cg.MaxStackSize = cg.StackTop
+			}
+		}
+	}
+
+	// Allocate result register
+	resultReg := cg.allocRegister()
+
+	// Emit single CONCAT instruction
+	// CONCAT A B C: R(A) := R(B) .. R(B+1) .. ... .. R(C)
+	startReg := startStackTop
+	endReg := startStackTop + len(operands) - 1
+	cg.EmitABC(vm.OP_CONCAT, resultReg, startReg, endReg)
+
+	// Free all operand registers by restoring stack top
+	cg.setStackTop(startStackTop)
+
+	return resultReg
+}
+
 // genArithmetic generates code for arithmetic operations.
 func (cg *CodeGenerator) genArithmetic(expr *parser.BinOpExpr) int {
 	// Generate left operand
@@ -381,40 +476,37 @@ func (cg *CodeGenerator) genArithmetic(expr *parser.BinOpExpr) int {
 		op = vm.OP_SHR
 	case "==":
 		op = vm.OP_EQ
+		// Lua 5.4: comparison stores boolean result in R(A)
+		cg.EmitABC(op, resultReg, leftReg, rightReg)
+		cg.freeRegisters(2)
+		return resultReg
 	case "~=":
-		// Not equal is equal with inverted result
-		cg.EmitABC(vm.OP_EQ, 1, leftReg, rightReg) // if (R(B) ~= R(C)) then pc++
-		cg.EmitAsBx(vm.OP_JMP, 0, 1)     // skip to load false
-		cg.EmitABC(vm.OP_LOADBOOL, resultReg, 1, 0) // load true
-		cg.EmitAsBx(vm.OP_JMP, 0, 1)     // skip over false
-		cg.EmitABC(vm.OP_LOADBOOL, resultReg, 0, 0) // load false
+		// Not equal: compare and then NOT the result
+		cg.EmitABC(vm.OP_EQ, resultReg, leftReg, rightReg)
+		// Now negate the result
+		cg.EmitABC(vm.OP_NOT, resultReg, resultReg, 0)
 		cg.freeRegisters(2)
 		return resultReg
 	case "<":
 		op = vm.OP_LT
+		// Lua 5.4: R(A) := R(B) < R(C)
+		cg.EmitABC(op, resultReg, leftReg, rightReg)
+		cg.freeRegisters(2)
+		return resultReg
 	case ">":
-		// Swap operands for >
-		cg.EmitABC(vm.OP_LT, 0, rightReg, leftReg)
-		cg.EmitAsBx(vm.OP_JMP, 0, 1)
-		cg.EmitABC(vm.OP_LOADBOOL, resultReg, 1, 0)
-		cg.EmitAsBx(vm.OP_JMP, 0, 1)
-		cg.EmitABC(vm.OP_LOADBOOL, resultReg, 0, 0)
+		// Greater than: swap operands for <
+		cg.EmitABC(vm.OP_LT, resultReg, rightReg, leftReg)
 		cg.freeRegisters(2)
 		return resultReg
 	case "<=":
 		op = vm.OP_LE
-	case ">=":
-		// Swap operands for >=
-		cg.EmitABC(vm.OP_LE, 0, rightReg, leftReg)
-		cg.EmitAsBx(vm.OP_JMP, 0, 1)
-		cg.EmitABC(vm.OP_LOADBOOL, resultReg, 1, 0)
-		cg.EmitAsBx(vm.OP_JMP, 0, 1)
-		cg.EmitABC(vm.OP_LOADBOOL, resultReg, 0, 0)
+		// Lua 5.4: R(A) := R(B) <= R(C)
+		cg.EmitABC(op, resultReg, leftReg, rightReg)
 		cg.freeRegisters(2)
 		return resultReg
-	case "..":
-		// Concatenation - simplified
-		cg.EmitABC(vm.OP_CONCAT, resultReg, leftReg, rightReg)
+	case ">=":
+		// Greater or equal: swap operands for <=
+		cg.EmitABC(vm.OP_LE, resultReg, rightReg, leftReg)
 		cg.freeRegisters(2)
 		return resultReg
 	default:
@@ -425,9 +517,9 @@ func (cg *CodeGenerator) genArithmetic(expr *parser.BinOpExpr) int {
 	// Emit arithmetic instruction: R(A) := R(B) op R(C)
 	cg.EmitABC(op, resultReg, leftReg, rightReg)
 
-	// Free operand registers
-	cg.freeRegister() // rightReg
-	cg.freeRegister() // leftReg
+	// Don't free operand registers here - let caller handle cleanup
+	// cg.freeRegister() // rightReg
+	// cg.freeRegister() // leftReg
 
 	return resultReg
 }
@@ -458,8 +550,8 @@ func (cg *CodeGenerator) genUnOp(expr *parser.UnOpExpr) int {
 	// Emit unary instruction: R(A) := op R(B)
 	cg.EmitABC(op, resultReg, operandReg, 0)
 
-	// Free operand register
-	cg.freeRegister()
+	// Don't free operand register here - let caller handle cleanup
+	// cg.freeRegister()
 
 	return resultReg
 }
@@ -530,8 +622,16 @@ func (cg *CodeGenerator) genFunc(expr *parser.FuncExpr) int {
 	nestedGen := NewCodeGenerator()
 	nestedGen.Parent = cg
 
+	// Set up _ENV as upvalue[0] for the nested function
+	// It inherits _ENV from the parent closure (IsLocal=false means from parent's upvalues)
+	nestedGen.Upvalues["_ENV"] = 0
+	nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
+		Index:   0,         // Parent's upvalue[0] (_ENV)
+		IsLocal: false,     // Inherited from parent's upvalues
+	})
+
 	// Generate nested function
-	nestedProto := nestedGen.Generate(&parser.FuncDefStmt{
+	nestedProto := nestedGen.GenerateFunc(&parser.FuncExpr{
 		Params:   expr.Params,
 		Body:     expr.Body,
 		IsVarArg: expr.IsVarArg,

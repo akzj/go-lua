@@ -10,16 +10,18 @@ import (
 
 // CodeGenerator generates bytecode from AST.
 type CodeGenerator struct {
-	Prototype      *object.Prototype
-	PC             int
-	StackTop       int
-	MaxStackSize   int
-	Upvalues       map[string]int
-	Locals         [][]LocalVar
-	Constants      map[string]int
-	JumpList       []JumpEntry
-	breakList      []int
-	Parent         *CodeGenerator
+	Prototype       *object.Prototype
+	PC              int
+	StackTop        int
+	MaxStackSize    int
+	Upvalues        map[string]int
+	Locals          [][]LocalVar
+	Constants       map[string]int
+	JumpList        []JumpEntry
+	breakList       []int
+	Parent          *CodeGenerator
+	ExpectedResults int // Number of results expected from next expression (-1 = default/1 result, 0 = multireturn, >0 = exact count)
+	currentLine     int // Current source line number for LineInfo
 }
 
 // LocalVar represents a local variable.
@@ -45,10 +47,11 @@ func NewCodeGenerator() *CodeGenerator {
 			Upvalues:   make([]object.UpvalueDesc, 0),
 			Prototypes: make([]*object.Prototype, 0),
 		},
-		Upvalues:  make(map[string]int),
-		Constants: make(map[string]int),
-		Locals:    make([][]LocalVar, 0),
-		JumpList:  make([]JumpEntry, 0),
+		Upvalues:        make(map[string]int),
+		Constants:       make(map[string]int),
+		Locals:          make([][]LocalVar, 0),
+		JumpList:        make([]JumpEntry, 0),
+		ExpectedResults: -1, // Default: 1 result
 	}
 }
 
@@ -73,6 +76,8 @@ func (cg *CodeGenerator) GenerateFunc(funcExpr *parser.FuncExpr) *object.Prototy
 	for i, param := range funcExpr.Params {
 		cg.addLocal(param.Name, i, true)
 	}
+	// Parameters occupy registers 0..n-1, so body code starts at n
+	cg.StackTop = len(funcExpr.Params)
 	cg.Prototype.NumParams = len(funcExpr.Params)
 	cg.Prototype.IsVarArg = funcExpr.IsVarArg
 	cg.genBlock(funcExpr.Body)
@@ -198,6 +203,7 @@ func (cg *CodeGenerator) EmitABC(op vm.Opcode, a, b, c int) int {
 	pc := cg.PC
 	instr := object.Instruction(vm.MakeABC(op, a, b, c))
 	cg.Prototype.Code = append(cg.Prototype.Code, instr)
+	cg.Prototype.LineInfo = append(cg.Prototype.LineInfo, cg.currentLine)
 	cg.PC++
 	return pc
 }
@@ -207,6 +213,7 @@ func (cg *CodeGenerator) EmitABx(op vm.Opcode, a, bx int) int {
 	pc := cg.PC
 	instr := object.Instruction(vm.MakeABx(op, a, bx))
 	cg.Prototype.Code = append(cg.Prototype.Code, instr)
+	cg.Prototype.LineInfo = append(cg.Prototype.LineInfo, cg.currentLine)
 	cg.PC++
 	return pc
 }
@@ -216,6 +223,7 @@ func (cg *CodeGenerator) EmitAsBx(op vm.Opcode, a, sbx int) int {
 	pc := cg.PC
 	instr := object.Instruction(vm.MakeAsBx(op, a, sbx))
 	cg.Prototype.Code = append(cg.Prototype.Code, instr)
+	cg.Prototype.LineInfo = append(cg.Prototype.LineInfo, cg.currentLine)
 	cg.PC++
 	return pc
 }
@@ -225,6 +233,7 @@ func (cg *CodeGenerator) EmitAx(op vm.Opcode, ax int) int {
 	pc := cg.PC
 	instr := object.Instruction(vm.MakeAx(op, ax))
 	cg.Prototype.Code = append(cg.Prototype.Code, instr)
+	cg.Prototype.LineInfo = append(cg.Prototype.LineInfo, cg.currentLine)
 	cg.PC++
 	return pc
 }
@@ -234,6 +243,7 @@ func (cg *CodeGenerator) emitJump(target int) int {
 	pc := cg.PC
 	instr := object.Instruction(vm.MakeABC(vm.OP_JMP, 0, 0, target))
 	cg.Prototype.Code = append(cg.Prototype.Code, instr)
+	cg.Prototype.LineInfo = append(cg.Prototype.LineInfo, cg.currentLine)
 	cg.PC++
 	return pc
 }
@@ -326,7 +336,7 @@ func (cg *CodeGenerator) emitLoadConstant(reg int, val object.TValue) {
 	case object.TypeBoolean:
 		cg.EmitABC(vm.OP_LOADBOOL, reg, boolToInt(val.Value.Bool), 0)
 	case object.TypeNil:
-		cg.EmitABC(vm.OP_LOADNIL, reg, 0, 0)
+		cg.EmitABC(vm.OP_LOADNIL, reg, reg, 0)
 	default:
 		// Fallback: treat as number
 		idx := cg.addOrGetConstant(val)

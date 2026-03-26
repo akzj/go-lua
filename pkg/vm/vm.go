@@ -147,6 +147,38 @@ func NewVM(global *state.GlobalState) *VM {
 }
 
 // getCurrentClosure returns the closure of the currently executing function.
+// getCurrentLine returns the current line number from LineInfo, or 0 if unavailable.
+func (vm *VM) getCurrentLine() int {
+	if vm.Prototype != nil && vm.PC > 0 && vm.PC-1 < len(vm.Prototype.LineInfo) {
+		return vm.Prototype.LineInfo[vm.PC-1] // PC-1 because PC was already incremented
+	}
+	return 0
+}
+
+// getCurrentSource returns the current source file name.
+func (vm *VM) getCurrentSource() string {
+	if vm.Prototype != nil && vm.Prototype.Source != "" {
+		source := vm.Prototype.Source
+		// Strip the "@" prefix used by LoadFile
+		if len(source) > 0 && source[0] == '@' {
+			source = source[1:]
+		}
+		return source
+	}
+	return "?"
+}
+
+// runtimeError creates a formatted runtime error with source location.
+func (vm *VM) runtimeError(format string, args ...interface{}) error {
+	msg := fmt.Sprintf(format, args...)
+	line := vm.getCurrentLine()
+	source := vm.getCurrentSource()
+	if line > 0 {
+		return fmt.Errorf("%s:%d: %s", source, line, msg)
+	}
+	return fmt.Errorf("%s: %s", source, msg)
+}
+
 func (vm *VM) getCurrentClosure() *object.Closure {
 	if vm.CI >= 0 && vm.CallInfo[vm.CI] != nil {
 		return vm.CallInfo[vm.CI].Closure
@@ -236,43 +268,97 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := rb.Value.Num + rc.Value.Num
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __add metamethod
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaAdd); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := rb.Value.Num + rc.Value.Num
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_SUB:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := rb.Value.Num - rc.Value.Num
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __sub metamethod
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaSub); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := rb.Value.Num - rc.Value.Num
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_MUL:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := rb.Value.Num * rc.Value.Num
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __mul metamethod
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaMul); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := rb.Value.Num * rc.Value.Num
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_DIV:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := rb.Value.Num / rc.Value.Num
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __div metamethod
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaDiv); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := rb.Value.Num / rc.Value.Num
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_MOD:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := math.Mod(rb.Value.Num, rc.Value.Num)
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __mod metamethod
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaMod); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := math.Mod(rb.Value.Num, rc.Value.Num)
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_POW:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := math.Pow(rb.Value.Num, rc.Value.Num)
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __pow metamethod
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaPow); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := math.Pow(rb.Value.Num, rc.Value.Num)
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_IDIV:
 		a, b, c := instr.A(), instr.B(), instr.C()
@@ -284,8 +370,17 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 	case OP_UNM:
 		a, b := instr.A(), instr.B()
 		rb := vm.getStackValue(vm.Base + b)
-		result := -rb.Value.Num
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Try __unm metamethod
+		if result, ok := vm.tryUnaryMetamethod(rb, MetaUnm); ok {
+			if result != nil {
+				vm.Stack[vm.Base+a].CopyFrom(result)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else {
+			result := -rb.Value.Num
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_BAND:
 		a, b, c := instr.A(), instr.B(), instr.C()
@@ -333,27 +428,50 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getStackValue(vm.Base + b)
 		rc := vm.getStackValue(vm.Base + c)
-		result := object.Equal(rb, rc)
-		if result != (a != 0) {
-			vm.PC++ // Skip next instruction
+		// Try __eq metamethod for tables
+		if rb.IsTable() && rc.IsTable() {
+			tb, _ := rb.ToTable()
+			tc, _ := rc.ToTable()
+			mmb := vm.GetMetamethod(tb, MetaEq)
+			mmc := vm.GetMetamethod(tc, MetaEq)
+			if mmb != nil && mmb.IsFunction() {
+				result := vm.CallMetamethod(mmb, []object.TValue{*rb, *rc})
+				vm.Stack[vm.Base+a].SetBoolean(result != nil && !object.IsFalse(result))
+			} else if mmc != nil && mmc.IsFunction() {
+				result := vm.CallMetamethod(mmc, []object.TValue{*rb, *rc})
+				vm.Stack[vm.Base+a].SetBoolean(result != nil && !object.IsFalse(result))
+			} else {
+				// No metamethod - use direct comparison
+				result := object.Equal(rb, rc)
+				vm.Stack[vm.Base+a].SetBoolean(result)
+			}
+		} else {
+			result := object.Equal(rb, rc)
+			vm.Stack[vm.Base+a].SetBoolean(result)
 		}
 
 	case OP_LT:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getStackValue(vm.Base + b)
 		rc := vm.getStackValue(vm.Base + c)
-		result := rb.Value.Num < rc.Value.Num
-		if result != (a != 0) {
-			vm.PC++ // Skip next instruction
+		// Try __lt metamethod for tables
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaLt); ok {
+			vm.Stack[vm.Base+a].SetBoolean(result != nil && !object.IsFalse(result))
+		} else {
+			result := rb.Value.Num < rc.Value.Num
+			vm.Stack[vm.Base+a].SetBoolean(result)
 		}
 
 	case OP_LE:
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getStackValue(vm.Base + b)
 		rc := vm.getStackValue(vm.Base + c)
-		result := rb.Value.Num <= rc.Value.Num
-		if result != (a != 0) {
-			vm.PC++ // Skip next instruction
+		// Try __le metamethod for tables
+		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaLe); ok {
+			vm.Stack[vm.Base+a].SetBoolean(result != nil && !object.IsFalse(result))
+		} else {
+			result := rb.Value.Num <= rc.Value.Num
+			vm.Stack[vm.Base+a].SetBoolean(result)
 		}
 
 	case OP_EQI:
@@ -362,8 +480,12 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		ra := vm.getStackValue(vm.Base + a)
 		kc := vm.getRKValue(c)
 		result := object.Equal(ra, kc)
-		if result != (b != 0) {
-			vm.PC++ // Skip next instruction
+		// Lua 5.4: store boolean result (considering the 'b' modifier)
+		// When b=0, store result directly; when b=1, store negated result
+		if (result != false) != (b != 0) {
+			vm.Stack[vm.Base+a].SetBoolean(true)
+		} else {
+			vm.Stack[vm.Base+a].SetBoolean(false)
 		}
 
 	case OP_LTI:
@@ -372,8 +494,11 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		ra := vm.getStackValue(vm.Base + a)
 		kc := vm.getRKValue(c)
 		result := ra.Value.Num < kc.Value.Num
-		if result != (b != 0) {
-			vm.PC++ // Skip next instruction
+		// Lua 5.4: store boolean result (considering the 'b' modifier)
+		if (result != false) != (b != 0) {
+			vm.Stack[vm.Base+a].SetBoolean(true)
+		} else {
+			vm.Stack[vm.Base+a].SetBoolean(false)
 		}
 
 	case OP_LEI:
@@ -382,8 +507,11 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		ra := vm.getStackValue(vm.Base + a)
 		kc := vm.getRKValue(c)
 		result := ra.Value.Num <= kc.Value.Num
-		if result != (b != 0) {
-			vm.PC++ // Skip next instruction
+		// Lua 5.4: store boolean result (considering the 'b' modifier)
+		if (result != false) != (b != 0) {
+			vm.Stack[vm.Base+a].SetBoolean(true)
+		} else {
+			vm.Stack[vm.Base+a].SetBoolean(false)
 		}
 
 	case OP_GTI:
@@ -392,8 +520,11 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		ra := vm.getStackValue(vm.Base + a)
 		kc := vm.getRKValue(c)
 		result := ra.Value.Num > kc.Value.Num
-		if result != (b != 0) {
-			vm.PC++ // Skip next instruction
+		// Lua 5.4: store boolean result (considering the 'b' modifier)
+		if (result != false) != (b != 0) {
+			vm.Stack[vm.Base+a].SetBoolean(true)
+		} else {
+			vm.Stack[vm.Base+a].SetBoolean(false)
 		}
 
 	// Control flow instructions
@@ -440,13 +571,38 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		if rb.IsTable() {
 			t, _ := rb.ToTable()
 			val := t.Get(*rc)
-			if val != nil {
+			if val != nil && !val.IsNil() {
 				vm.Stack[vm.Base+a].CopyFrom(val)
 			} else {
-				vm.Stack[vm.Base+a].SetNil()
+				// Key not found - check for __index metamethod
+				mm := vm.GetMetamethod(t, MetaIndex)
+				if mm != nil {
+					if mm.IsTable() {
+						// __index is a table - look up in that table
+						mt, _ := mm.ToTable()
+						mval := mt.Get(*rc)
+						if mval != nil {
+							vm.Stack[vm.Base+a].CopyFrom(mval)
+						} else {
+							vm.Stack[vm.Base+a].SetNil()
+						}
+					} else if mm.IsFunction() {
+						// __index is a function - call it: __index(table, key)
+						result := vm.CallMetamethod(mm, []object.TValue{*rb, *rc})
+						if result != nil {
+							vm.Stack[vm.Base+a].CopyFrom(result)
+						} else {
+							vm.Stack[vm.Base+a].SetNil()
+						}
+					} else {
+						vm.Stack[vm.Base+a].SetNil()
+					}
+				} else {
+					vm.Stack[vm.Base+a].SetNil()
+				}
 			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	case OP_SETTABLE:
@@ -456,9 +612,33 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		rc := vm.getRKValue(c)
 		if ra.IsTable() {
 			t, _ := ra.ToTable()
-			t.Set(*rb, *rc)
+			// Check if key already exists
+			existing := t.Get(*rb)
+			if existing != nil && !existing.IsNil() {
+				// Key exists - update directly
+				t.Set(*rb, *rc)
+			} else {
+				// Key doesn't exist - check for __newindex metamethod
+				mm := vm.GetMetamethod(t, MetaNewIndex)
+				if mm != nil {
+					if mm.IsTable() {
+						// __newindex is a table - store there
+						mt, _ := mm.ToTable()
+						mt.Set(*rb, *rc)
+					} else if mm.IsFunction() {
+						// __newindex is a function - call it
+						vm.CallMetamethod(mm, []object.TValue{*ra, *rb, *rc})
+					} else {
+						// No valid __newindex - store in original table
+						t.Set(*rb, *rc)
+					}
+				} else {
+					// No __newindex - store in table
+					t.Set(*rb, *rc)
+				}
+			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	case OP_GETI:
@@ -467,13 +647,37 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		if rb.IsTable() {
 			t, _ := rb.ToTable()
 			val := t.GetI(c)
-			if val != nil {
+			if val != nil && !val.IsNil() {
 				vm.Stack[vm.Base+a].CopyFrom(val)
 			} else {
-				vm.Stack[vm.Base+a].SetNil()
+				// Key not found - check for __index metamethod
+				mm := vm.GetMetamethod(t, MetaIndex)
+				if mm != nil {
+					key := object.NewInteger(int64(c))
+					if mm.IsTable() {
+						mt, _ := mm.ToTable()
+						mval := mt.Get(*key)
+						if mval != nil {
+							vm.Stack[vm.Base+a].CopyFrom(mval)
+						} else {
+							vm.Stack[vm.Base+a].SetNil()
+						}
+					} else if mm.IsFunction() {
+						result := vm.CallMetamethod(mm, []object.TValue{*rb, *key})
+						if result != nil {
+							vm.Stack[vm.Base+a].CopyFrom(result)
+						} else {
+							vm.Stack[vm.Base+a].SetNil()
+						}
+					} else {
+						vm.Stack[vm.Base+a].SetNil()
+					}
+				} else {
+					vm.Stack[vm.Base+a].SetNil()
+				}
 			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	case OP_SETI:
@@ -482,9 +686,29 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		rb := vm.getRKValue(b)
 		if ra.IsTable() {
 			t, _ := ra.ToTable()
-			t.SetI(c, *rb)
+			// Check if key already exists
+			existing := t.GetI(c)
+			if existing != nil && !existing.IsNil() {
+				t.SetI(c, *rb)
+			} else {
+				// Key doesn't exist - check for __newindex
+				mm := vm.GetMetamethod(t, MetaNewIndex)
+				if mm != nil {
+					key := object.NewInteger(int64(c))
+					if mm.IsTable() {
+						mt, _ := mm.ToTable()
+						mt.Set(*key, *rb)
+					} else if mm.IsFunction() {
+						vm.CallMetamethod(mm, []object.TValue{*ra, *key, *rb})
+					} else {
+						t.SetI(c, *rb)
+					}
+				} else {
+					t.SetI(c, *rb)
+				}
+			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	case OP_GETFIELD:
@@ -494,13 +718,38 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			t, _ := rb.ToTable()
 			key := vm.Prototype.Constants[c]
 			val := t.Get(key)
-			if val != nil {
+			if val != nil && !val.IsNil() {
 				vm.Stack[vm.Base+a].CopyFrom(val)
 			} else {
-				vm.Stack[vm.Base+a].SetNil()
+				// Key not found - check for __index metamethod
+				mm := vm.GetMetamethod(t, MetaIndex)
+				if mm != nil {
+					if mm.IsTable() {
+						// __index is a table - look up in that table
+						mt, _ := mm.ToTable()
+						mval := mt.Get(key)
+						if mval != nil {
+							vm.Stack[vm.Base+a].CopyFrom(mval)
+						} else {
+							vm.Stack[vm.Base+a].SetNil()
+						}
+					} else if mm.IsFunction() {
+						// __index is a function - call it: __index(table, key)
+						result := vm.CallMetamethod(mm, []object.TValue{*rb, key})
+						if result != nil {
+							vm.Stack[vm.Base+a].CopyFrom(result)
+						} else {
+							vm.Stack[vm.Base+a].SetNil()
+						}
+					} else {
+						vm.Stack[vm.Base+a].SetNil()
+					}
+				} else {
+					vm.Stack[vm.Base+a].SetNil()
+				}
 			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	case OP_SETFIELD:
@@ -510,36 +759,119 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			t, _ := ra.ToTable()
 			key := vm.Prototype.Constants[b]
 			rc := vm.getRKValue(c)
-			t.Set(key, *rc)
+			// Check if key already exists
+			existing := t.Get(key)
+			if existing != nil && !existing.IsNil() {
+				// Key exists - update directly
+				t.Set(key, *rc)
+			} else {
+				// Key doesn't exist - check for __newindex metamethod
+				mm := vm.GetMetamethod(t, MetaNewIndex)
+				if mm != nil {
+					if mm.IsTable() {
+						mt, _ := mm.ToTable()
+						mt.Set(key, *rc)
+					} else if mm.IsFunction() {
+						vm.CallMetamethod(mm, []object.TValue{*ra, key, *rc})
+					} else {
+						t.Set(key, *rc)
+					}
+				} else {
+					t.Set(key, *rc)
+				}
+			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	// Other instructions
 	case OP_CONCAT:
 		a, b, c := instr.A(), instr.B(), instr.C()
-		var result string
+		// Check for __concat metamethod on any operand
+		hasConcatMetamethod := false
 		for i := b; i <= c; i++ {
 			rv := vm.getStackValue(vm.Base + i)
-			if s, ok := rv.ToString(); ok {
-				result += s
-			} else {
-				result += object.ToStringRaw(rv)
+			if rv.IsTable() {
+				t, _ := rv.ToTable()
+				mm := vm.GetMetamethod(t, MetaConcat)
+				if mm != nil && mm.IsFunction() {
+					hasConcatMetamethod = true
+					break
+				}
 			}
 		}
-		vm.Stack[vm.Base+a].SetString(result)
+		
+		if hasConcatMetamethod {
+			// Use metamethod for concatenation - fold left to right
+			result := vm.getStackValue(vm.Base + b)
+			for i := b + 1; i <= c; i++ {
+				next := vm.getStackValue(vm.Base + i)
+				// Find metamethod
+				var mm *object.TValue
+				if result.IsTable() {
+					t, _ := result.ToTable()
+					mm = vm.GetMetamethod(t, MetaConcat)
+				}
+				if mm == nil && next.IsTable() {
+					t, _ := next.ToTable()
+					mm = vm.GetMetamethod(t, MetaConcat)
+				}
+				if mm != nil && mm.IsFunction() {
+					res := vm.CallMetamethod(mm, []object.TValue{*result, *next})
+					if res != nil {
+						result = res
+					} else {
+						// Fallback to string concat
+						s1, _ := result.ToString()
+						s2, _ := next.ToString()
+						result = &object.TValue{}
+						result.SetString(s1 + s2)
+					}
+				} else {
+					// Fallback to string concat
+					s1, _ := result.ToString()
+					s2, _ := next.ToString()
+					result = &object.TValue{}
+					result.SetString(s1 + s2)
+				}
+			}
+			vm.Stack[vm.Base+a].CopyFrom(result)
+		} else {
+			// Standard string concatenation
+			var result string
+			for i := b; i <= c; i++ {
+				rv := vm.getStackValue(vm.Base + i)
+				if s, ok := rv.ToString(); ok {
+					result += s
+				} else {
+					result += object.ToStringRaw(rv)
+				}
+			}
+			vm.Stack[vm.Base+a].SetString(result)
+		}
 
 	case OP_LEN:
 		a, b := instr.A(), instr.B()
 		rb := vm.getStackValue(vm.Base + b)
 		if rb.IsTable() {
 			t, _ := rb.ToTable()
-			vm.Stack[vm.Base+a].SetNumber(float64(t.Len()))
+			// Check for __len metamethod
+			mm := vm.GetMetamethod(t, MetaLen)
+			if mm != nil && mm.IsFunction() {
+				result := vm.CallMetamethod(mm, []object.TValue{*rb})
+				if result != nil {
+					vm.Stack[vm.Base+a].CopyFrom(result)
+				} else {
+					vm.Stack[vm.Base+a].SetNumber(0)
+				}
+			} else {
+				vm.Stack[vm.Base+a].SetNumber(float64(t.Len()))
+			}
 		} else if rb.IsString() {
 			s, _ := rb.ToString()
 			vm.Stack[vm.Base+a].SetNumber(float64(len(s)))
 		} else {
-			return fmt.Errorf("attempt to get length of a non-table/string value")
+			return vm.runtimeError("attempt to get length of a non-table/string value")
 		}
 
 	case OP_NOT:
@@ -565,7 +897,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			return fmt.Errorf("attempt to index a non-table value")
+			return vm.runtimeError("attempt to index a non-table value")
 		}
 
 	case OP_ADDI:
@@ -648,15 +980,38 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		upval := closure.Upvalues[b]
 		upvalVal := upval.Get()
 		if !upvalVal.IsTable() {
-			return fmt.Errorf("attempt to index a non-table upvalue")
+			return vm.runtimeError("attempt to index a non-table upvalue")
 		}
 		t, _ := upvalVal.ToTable()
 		key := vm.getRKValue(c)
 		val := t.Get(*key)
-		if val != nil {
+		if val != nil && !val.IsNil() {
 			vm.Stack[vm.Base+a].CopyFrom(val)
 		} else {
-			vm.Stack[vm.Base+a].SetNil()
+			// Key not found - check for __index metamethod
+			mm := vm.GetMetamethod(t, MetaIndex)
+			if mm != nil {
+				if mm.IsTable() {
+					mt, _ := mm.ToTable()
+					mval := mt.Get(*key)
+					if mval != nil {
+						vm.Stack[vm.Base+a].CopyFrom(mval)
+					} else {
+						vm.Stack[vm.Base+a].SetNil()
+					}
+				} else if mm.IsFunction() {
+					result := vm.CallMetamethod(mm, []object.TValue{*upvalVal, *key})
+					if result != nil {
+						vm.Stack[vm.Base+a].CopyFrom(result)
+					} else {
+						vm.Stack[vm.Base+a].SetNil()
+					}
+				} else {
+					vm.Stack[vm.Base+a].SetNil()
+				}
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
 		}
 
 	case OP_SETTABUP:
@@ -668,12 +1023,31 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		upval := closure.Upvalues[a]
 		upvalVal := upval.Get()
 		if !upvalVal.IsTable() {
-			return fmt.Errorf("attempt to index a non-table upvalue")
+			return vm.runtimeError("attempt to index a non-table upvalue")
 		}
 		t, _ := upvalVal.ToTable()
 		key := vm.getRKValue(b)
 		val := vm.getRKValue(c)
-		t.Set(*key, *val)
+		// Check if key already exists
+		existing := t.Get(*key)
+		if existing != nil && !existing.IsNil() {
+			t.Set(*key, *val)
+		} else {
+			// Key doesn't exist - check for __newindex
+			mm := vm.GetMetamethod(t, MetaNewIndex)
+			if mm != nil {
+				if mm.IsTable() {
+					mt, _ := mm.ToTable()
+					mt.Set(*key, *val)
+				} else if mm.IsFunction() {
+					vm.CallMetamethod(mm, []object.TValue{*upvalVal, *key, *val})
+				} else {
+					t.Set(*key, *val)
+				}
+			} else {
+				t.Set(*key, *val)
+			}
+		}
 
 	// Function call instruction
 	case OP_CALL:
@@ -681,12 +1055,103 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		funcSlot := vm.Base + a
 		funcVal := &vm.Stack[funcSlot]
 
+		// Check if it's a function
 		if !funcVal.IsFunction() {
-			return fmt.Errorf("attempt to call a non-function value")
+			// Check if it's a table with __call metamethod
+			if funcVal.IsTable() {
+				t, _ := funcVal.ToTable()
+				mm := vm.GetMetamethod(t, MetaCall)
+				if mm != nil && mm.IsFunction() {
+					// Call __call(table, ...args)
+					closure, _ := mm.ToFunction()
+					
+					// Determine number of arguments
+					var nargs int
+					if b == 0 {
+						nargs = vm.StackTop - funcSlot - 1
+					} else {
+						nargs = b - 1
+					}
+
+					// Shift args up by 1 to make room for table
+					for i := nargs - 1; i >= 0; i-- {
+						vm.Stack[funcSlot+2+i] = vm.Stack[funcSlot+1+i]
+					}
+					// Insert table as first arg
+					vm.Stack[funcSlot+1] = *funcVal
+					// Replace function with __call
+					vm.Stack[funcSlot] = *mm
+					nargs++ // Now we have one more arg (the table)
+
+					if closure.IsGo {
+						// Go function call
+						oldBase := vm.Base
+						vm.Base = funcSlot + 1
+						vm.StackTop = funcSlot + 1 + nargs
+
+						err := closure.GoFn(vm)
+						vm.Base = oldBase
+						if err != nil {
+							return err
+						}
+						// Adjust stack top based on results
+						nresults := c - 1
+						if nresults >= 0 {
+							vm.StackTop = funcSlot + nresults
+						}
+						return nil
+					} else {
+						// Lua function call - set up CallInfo and continue
+						proto := closure.Proto
+						if proto == nil {
+							return vm.runtimeError("__call function has no prototype")
+						}
+
+						// Save current PC
+						vm.CallInfo[vm.CI].PC = vm.PC
+
+						// Push new CallInfo
+						vm.CI++
+						if vm.CI >= len(vm.CallInfo) {
+							newCI := make([]*CallInfo, len(vm.CallInfo)*2)
+							copy(newCI, vm.CallInfo)
+							vm.CallInfo = newCI
+						}
+
+						newBase := funcSlot + 1
+						neededTop := newBase + proto.MaxStackSize
+						vm.ensureStack(neededTop)
+
+						vm.CallInfo[vm.CI] = &CallInfo{
+							Func:    mm,
+							Closure: closure,
+							Base:    newBase,
+							Top:     neededTop,
+							NResults: c - 1,
+						}
+
+						// Set up upvalues
+						if closure.Upvalues != nil {
+							for i := range closure.Upvalues {
+								if i < len(proto.Upvalues) {
+									// Upvalue already captured
+								}
+							}
+						}
+
+						vm.Base = newBase
+						vm.StackTop = neededTop
+						vm.Prototype = proto
+						vm.PC = 0
+						return nil // Return to Run() loop which will execute the __call function
+					}
+				}
+			}
+			return vm.runtimeError("attempt to call a non-function value")
 		}
 		fn, ok := funcVal.ToFunction()
 		if !ok {
-			return fmt.Errorf("attempt to call a non-function value")
+			return vm.runtimeError("attempt to call a non-function value")
 		}
 
 		// Determine number of arguments
@@ -703,8 +1168,9 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		if fn.IsGo {
 			// Go function call
 			oldBase := vm.Base
+			startTop := funcSlot + 1 + nargs // Save where results will start
 			vm.Base = funcSlot + 1
-			vm.StackTop = funcSlot + 1 + nargs
+			vm.StackTop = startTop
 
 			err := fn.GoFn(vm)
 
@@ -715,18 +1181,17 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				return err
 			}
 
-			// Calculate actual results produced
-			numResults := resultsTop - (funcSlot + 1 + nargs)
+			// Calculate actual results produced by the Go function
+			numResults := resultsTop - startTop
 			if numResults < 0 {
 				numResults = 0
 			}
 
 			// Move results to funcSlot position
-			resultSrc := funcSlot + 1 + nargs
 			if nresults >= 0 {
 				// Fixed number of results
 				for i := 0; i < nresults && i < numResults; i++ {
-					vm.Stack[funcSlot+i].CopyFrom(&vm.Stack[resultSrc+i])
+					vm.Stack[funcSlot+i].CopyFrom(&vm.Stack[startTop+i])
 				}
 				// Fill missing results with nil
 				for i := numResults; i < nresults; i++ {
@@ -736,7 +1201,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			} else {
 				// All results (nresults == -1)
 				for i := 0; i < numResults; i++ {
-					vm.Stack[funcSlot+i].CopyFrom(&vm.Stack[resultSrc+i])
+					vm.Stack[funcSlot+i].CopyFrom(&vm.Stack[startTop+i])
 				}
 				vm.StackTop = funcSlot + numResults
 			}
@@ -744,7 +1209,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			// Lua function call
 			proto := fn.Proto
 			if proto == nil {
-				return fmt.Errorf("function has no prototype")
+				return vm.runtimeError("function has no prototype")
 			}
 
 			// Save current PC in current CallInfo
@@ -759,11 +1224,14 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			}
 
 			newBase := funcSlot + 1
+			neededTop := newBase + proto.MaxStackSize
+			vm.ensureStack(neededTop)
+
 			vm.CallInfo[vm.CI] = &CallInfo{
 				Func:     funcVal,
 				Closure:  fn,
 				Base:     newBase,
-				Top:      newBase + proto.MaxStackSize,
+				Top:      neededTop,
 				PC:       0,
 				NResults: nresults,
 				Status:   CallOK,
@@ -778,7 +1246,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			vm.Base = newBase
 			vm.Prototype = proto
 			vm.PC = 0
-			vm.StackTop = newBase + proto.MaxStackSize
+			vm.StackTop = neededTop
 
 			// Return nil — the Run() loop will continue executing the new function's bytecode
 		}
@@ -825,7 +1293,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		// Call iterator: R(A)(R(A+1), R(A+2))
 		iterFunc := &vm.Stack[vm.Base+a]
 		if !iterFunc.IsFunction() {
-			return fmt.Errorf("for iterator is not a function")
+			return vm.runtimeError("for iterator is not a function")
 		}
 		fn, _ := iterFunc.ToFunction()
 
@@ -1024,31 +1492,31 @@ func decodeSize(x int) int {
 // Returns:
 //   - error: Any error that occurred during call setup
 func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
-	// Get function value
+	// Get function value and compute funcBase
 	var funcVal *object.TValue
+	var funcBase int
 	if funcIdx >= 0 {
 		funcVal = &vm.Stack[vm.Base+funcIdx]
+		funcBase = vm.Base + funcIdx
 	} else {
-		funcVal = &vm.Stack[vm.StackTop+funcIdx+1]
+		// Negative indices: -1 = top of stack
+		funcVal = &vm.Stack[vm.StackTop+funcIdx]
+		funcBase = vm.StackTop + funcIdx
 	}
 
 	// Check if it's a Lua function
 	if !funcVal.IsFunction() {
-		return fmt.Errorf("attempt to call a non-function value")
+		return vm.runtimeError("attempt to call a non-function value")
 	}
 
 	fn, ok := funcVal.ToFunction()
 	if !ok {
-		return fmt.Errorf("attempt to call a non-function value")
+		return vm.runtimeError("attempt to call a non-function value")
 	}
 
 	if fn.IsGo {
 		// Go function call
-		// Remember the base where function and args are
-		funcBase := vm.Base + funcIdx
-		if funcIdx < 0 {
-			funcBase = vm.StackTop + funcIdx + 1
-		}
+		// funcBase is already computed above
 		
 		// Temporarily adjust base so that args are at indices 1, 2, 3...
 		// (function is at funcBase, args start at funcBase+1)
@@ -1093,7 +1561,7 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 	// Lua function call
 	proto := fn.Proto
 	if proto == nil {
-		return fmt.Errorf("function has no prototype")
+		return vm.runtimeError("function has no prototype")
 	}
 
 	// Initialize CallInfo[0] if this is the first call
@@ -1118,7 +1586,7 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 		vm.CallInfo = newCallInfo
 	}
 
-	newBase := vm.Base + funcIdx + 1
+	newBase := funcBase + 1
 	vm.CallInfo[vm.CI] = &CallInfo{
 		Func:     funcVal,
 		Closure:  fn,
@@ -1225,6 +1693,7 @@ func (vm *VM) SetStack(index int, value object.TValue) {
 // Parameters:
 //   - value: The value to push
 func (vm *VM) Push(value object.TValue) {
+	vm.ensureStack(vm.StackTop + 1)
 	vm.Stack[vm.StackTop] = value
 	vm.StackTop++
 }
@@ -1251,13 +1720,244 @@ func (vm *VM) GetTop() int {
 // Parameters:
 //   - index: The new stack top index
 func (vm *VM) SetTop(index int) {
+	newTop := vm.Base + index
+	vm.ensureStack(newTop)
 	if index > vm.StackTop-vm.Base {
 		// Extending stack, fill new slots with nil
-		for i := vm.StackTop; i < vm.Base+index; i++ {
+		for i := vm.StackTop; i < newTop; i++ {
 			vm.Stack[i].SetNil()
 		}
 	}
-	vm.StackTop = vm.Base + index
+	vm.StackTop = newTop
+}
+
+// ensureStack grows the stack if needed to accommodate the given top index.
+func (vm *VM) ensureStack(neededTop int) {
+	for neededTop >= len(vm.Stack) {
+		newStack := make([]object.TValue, len(vm.Stack)*2)
+		copy(newStack, vm.Stack)
+		vm.Stack = newStack
+	}
+}
+
+// Metamethod name constants
+const (
+	MetaIndex    = "__index"
+	MetaNewIndex = "__newindex"
+	MetaCall     = "__call"
+	MetaAdd      = "__add"
+	MetaSub      = "__sub"
+	MetaMul      = "__mul"
+	MetaDiv      = "__div"
+	MetaMod      = "__mod"
+	MetaPow      = "__pow"
+	MetaUnm      = "__unm"
+	MetaEq       = "__eq"
+	MetaLt       = "__lt"
+	MetaLe       = "__le"
+	MetaToString = "__tostring"
+	MetaConcat   = "__concat"
+	MetaLen      = "__len"
+	MetaPairs    = "__pairs"
+	MetaIPairs   = "__ipairs"
+)
+
+// getMetamethod retrieves a metamethod from a table's metatable.
+// Returns nil if the table has no metatable or the metamethod is not found.
+func (vm *VM) GetMetamethod(t *object.Table, methodName string) *object.TValue {
+	if t == nil {
+		return nil
+	}
+	mt := t.GetMetatable()
+	if mt == nil {
+		return nil
+	}
+	// Look up the metamethod in the metatable
+	key := object.TValue{Type: object.TypeString}
+	key.Value.Str = methodName
+	val := mt.Get(key)
+	if val == nil || val.IsNil() {
+		// Try direct map access (workaround for map key comparison issues)
+		if mt.Map != nil {
+			for k, v := range mt.Map {
+				if k.Str == methodName {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+	return val
+}
+
+// callMetamethod calls a Go function metamethod with the given arguments.
+// Returns the result of the metamethod call, or nil if the call fails.
+// Note: Currently only supports Go functions for simplicity.
+func (vm *VM) CallMetamethod(fn *object.TValue, args []object.TValue) *object.TValue {
+	if fn == nil || !fn.IsFunction() {
+		return nil
+	}
+
+	closure, ok := fn.ToFunction()
+	if !ok {
+		return nil
+	}
+
+	// Save current state
+	oldBase := vm.Base
+	oldTop := vm.StackTop
+
+	// Set up stack for metamethod call ABOVE the caller's full register window.
+	// Using vm.StackTop alone is wrong — it may not account for temporary registers
+	// the caller is still building (e.g., arguments to an outer print() call).
+	// vm.Base + Prototype.MaxStackSize is the safe high-water mark for the caller's frame.
+	callBase := vm.StackTop
+	if vm.Prototype != nil {
+		callerMax := vm.Base + vm.Prototype.MaxStackSize
+		if callerMax > callBase {
+			callBase = callerMax
+		}
+	}
+	vm.ensureStack(callBase + len(args) + 50)
+
+	// Stack layout: [function] [arg1] [arg2] ...
+	vm.Stack[callBase].CopyFrom(fn)
+	for i := range args {
+		vm.Stack[callBase+1+i].CopyFrom(&args[i])
+	}
+
+	vm.StackTop = callBase + 1 + len(args)
+
+	var result *object.TValue
+
+	if closure.IsGo {
+		// Go function call
+		vm.Base = callBase + 1
+		err := closure.GoFn(vm)
+		if err == nil && vm.StackTop > callBase {
+			result = &vm.Stack[callBase]
+		}
+	} else {
+		// Lua function call - execute inline
+		proto := closure.Proto
+		if proto != nil && len(proto.Code) > 0 {
+			// Save more state for Lua function
+			oldPC := vm.PC
+			oldProto := vm.Prototype
+			oldCI := vm.CI
+
+			// Set up CallInfo - need to save current frame first
+			if vm.CI >= 0 && vm.CallInfo[vm.CI] != nil {
+				vm.CallInfo[vm.CI].PC = vm.PC
+			}
+
+			// Push new CallInfo
+			vm.CI++
+			if vm.CI >= len(vm.CallInfo) {
+				newCI := make([]*CallInfo, len(vm.CallInfo)*2)
+				copy(newCI, vm.CallInfo)
+				vm.CallInfo = newCI
+			}
+
+			newBase := callBase + 1
+			neededTop := newBase + proto.MaxStackSize
+			vm.ensureStack(neededTop)
+
+			vm.CallInfo[vm.CI] = &CallInfo{
+				Func:     fn,
+				Closure:  closure,
+				Base:     newBase,
+				Top:      neededTop,
+				PC:       0,
+				NResults: 1,
+			}
+
+			// Copy arguments to their proper locations (they're already at newBase+0, newBase+1, etc.)
+			// No need to move them - they're in the right place.
+			// Just pad missing args with nil.
+			for i := len(args); i < proto.NumParams; i++ {
+				vm.Stack[newBase+i].SetNil()
+			}
+
+			// Set up execution context
+			vm.Base = newBase
+			vm.Prototype = proto
+			vm.PC = 0
+			// IMPORTANT: Don't reset StackTop here - it should already be correct
+			// The arguments are at newBase+0, newBase+1, etc. and StackTop should be
+			// at least newBase + max(len(args), proto.NumParams)
+			if vm.StackTop < newBase+proto.MaxStackSize {
+				vm.StackTop = newBase + proto.MaxStackSize
+			}
+
+			// Execute until we return from this call frame
+			startCI := vm.CI
+			for vm.PC < len(vm.Prototype.Code) {
+				instr := Instruction(vm.Prototype.Code[vm.PC])
+				vm.PC++
+				if err := vm.ExecuteInstruction(instr); err != nil {
+					break
+				}
+				// Check if we've returned from the metamethod
+				if vm.CI < startCI {
+					break
+				}
+			}
+
+			// Get result from where RETURN placed it
+			if vm.StackTop > callBase {
+				result = &vm.Stack[callBase]
+			}
+
+			// Restore state
+			vm.PC = oldPC
+			vm.Prototype = oldProto
+			vm.CI = oldCI
+		}
+	}
+
+	// Restore state
+	vm.Base = oldBase
+	vm.StackTop = oldTop
+
+	return result
+}
+
+// tryBinaryMetamethod tries to apply a binary metamethod for two operands.
+// Returns the result and true if a metamethod was found and called.
+func (vm *VM) tryBinaryMetamethod(rb, rc *object.TValue, methodName string) (*object.TValue, bool) {
+	// Check if either operand is a table with the metamethod
+	if rb.IsTable() {
+		t, _ := rb.ToTable()
+		mm := vm.GetMetamethod(t, methodName)
+		if mm != nil && mm.IsFunction() {
+			result := vm.CallMetamethod(mm, []object.TValue{*rb, *rc})
+			return result, true
+		}
+	}
+	if rc.IsTable() {
+		t, _ := rc.ToTable()
+		mm := vm.GetMetamethod(t, methodName)
+		if mm != nil && mm.IsFunction() {
+			result := vm.CallMetamethod(mm, []object.TValue{*rb, *rc})
+			return result, true
+		}
+	}
+	return nil, false
+}
+
+// tryUnaryMetamethod tries to apply a unary metamethod for one operand.
+// Returns the result and true if a metamethod was found and called.
+func (vm *VM) tryUnaryMetamethod(rb *object.TValue, methodName string) (*object.TValue, bool) {
+	if rb.IsTable() {
+		t, _ := rb.ToTable()
+		mm := vm.GetMetamethod(t, methodName)
+		if mm != nil && mm.IsFunction() {
+			result := vm.CallMetamethod(mm, []object.TValue{*rb})
+			return result, true
+		}
+	}
+	return nil, false
 }
 
 // Opcode String returns a human-readable name for the opcode.
