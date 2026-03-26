@@ -94,8 +94,10 @@ func (p *Parser) parseWhileStmt() Stmt {
 		return nil
 	}
 
-	// Parse body
+	// Parse body inside loop context
+	p.loopDepth++
 	body := p.parseBlock()
+	p.loopDepth--
 
 	// Expect 'end'
 	if !p.expect(lexer.TK_END, "'end'") {
@@ -136,8 +138,10 @@ func (p *Parser) parseRepeatStmt() Stmt {
 	line := p.Current.Line
 	p.advance() // Skip 'repeat'
 
-	// Parse body
+	// Parse body inside loop context
+	p.loopDepth++
 	body := p.parseBlock()
+	p.loopDepth--
 
 	// Expect 'until'
 	if !p.expect(lexer.TK_UNTIL, "'until'") {
@@ -212,8 +216,10 @@ func (p *Parser) parseForStmt() Stmt {
 			return nil
 		}
 
-		// Parse body
+		// Parse body inside loop context
+		p.loopDepth++
 		body := p.parseBlock()
+		p.loopDepth--
 
 		// Expect 'end'
 		if !p.expect(lexer.TK_END, "'end'") {
@@ -284,8 +290,10 @@ func (p *Parser) parseForStmt() Stmt {
 			return nil
 		}
 
-		// Parse body
+		// Parse body inside loop context
+		p.loopDepth++
 		body := p.parseBlock()
+		p.loopDepth--
 
 		// Expect 'end'
 		if !p.expect(lexer.TK_END, "'end'") {
@@ -332,6 +340,14 @@ func (p *Parser) parseReturnStmt() Stmt {
 // parseBreakStmt parses a break statement.
 func (p *Parser) parseBreakStmt() Stmt {
 	line := p.Current.Line
+	
+	// Check if we're inside a loop
+	if p.loopDepth == 0 {
+		p.Error("<break> outside loop")
+		p.advance() // Skip 'break'
+		return nil
+	}
+	
 	p.advance() // Skip 'break'
 
 	return &BreakStmt{

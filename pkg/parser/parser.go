@@ -27,6 +27,7 @@ type Parser struct {
 	HasPeek bool
 	Errors  []error
 	Source  string
+	loopDepth int // Track nested loop depth for break validation
 }
 
 // NewParser creates a new parser for the given lexer.

@@ -339,9 +339,90 @@ func TestParseForGeneric(t *testing.T) {
 }
 
 func TestParseBreak(t *testing.T) {
-	stmt := parseStmt(t, "break")
-	if _, ok := stmt.(*BreakStmt); !ok {
-		t.Errorf("Expected break statement, got %v", stmt)
+	// break outside a loop should produce an error
+	p := parseSource(t, "break")
+	stmt := p.parseStmt()
+	if stmt != nil {
+		t.Errorf("Expected nil statement for break outside loop, got %v", stmt)
+	}
+	if len(p.Errors) == 0 {
+		t.Error("Expected error for break outside loop")
+	}
+}
+
+func TestParseBreakInWhileLoop(t *testing.T) {
+	// break inside a while loop should work
+	p := parseSource(t, "while true do break end")
+	stmt := p.parseStmt()
+	if stmt == nil {
+		t.Fatal("Failed to parse while statement")
+	}
+	whileStmt, ok := stmt.(*WhileStmt)
+	if !ok {
+		t.Fatalf("Expected while statement, got %v", stmt)
+	}
+	if len(whileStmt.Body.Stmts) != 1 {
+		t.Fatalf("Expected 1 statement in while body, got %d", len(whileStmt.Body.Stmts))
+	}
+	if _, ok := whileStmt.Body.Stmts[0].(*BreakStmt); !ok {
+		t.Errorf("Expected break statement in while body, got %v", whileStmt.Body.Stmts[0])
+	}
+}
+
+func TestParseBreakInRepeatLoop(t *testing.T) {
+	// break inside a repeat-until loop should work
+	p := parseSource(t, "repeat break until false")
+	stmt := p.parseStmt()
+	if stmt == nil {
+		t.Fatal("Failed to parse repeat statement")
+	}
+	repeatStmt, ok := stmt.(*RepeatStmt)
+	if !ok {
+		t.Fatalf("Expected repeat statement, got %v", stmt)
+	}
+	if len(repeatStmt.Body.Stmts) != 1 {
+		t.Fatalf("Expected 1 statement in repeat body, got %d", len(repeatStmt.Body.Stmts))
+	}
+	if _, ok := repeatStmt.Body.Stmts[0].(*BreakStmt); !ok {
+		t.Errorf("Expected break statement in repeat body, got %v", repeatStmt.Body.Stmts[0])
+	}
+}
+
+func TestParseBreakInForNumericLoop(t *testing.T) {
+	// break inside a numeric for loop should work
+	p := parseSource(t, "for i = 1, 10 do break end")
+	stmt := p.parseStmt()
+	if stmt == nil {
+		t.Fatal("Failed to parse for statement")
+	}
+	forStmt, ok := stmt.(*ForNumericStmt)
+	if !ok {
+		t.Fatalf("Expected for numeric statement, got %v", stmt)
+	}
+	if len(forStmt.Body.Stmts) != 1 {
+		t.Fatalf("Expected 1 statement in for body, got %d", len(forStmt.Body.Stmts))
+	}
+	if _, ok := forStmt.Body.Stmts[0].(*BreakStmt); !ok {
+		t.Errorf("Expected break statement in for body, got %v", forStmt.Body.Stmts[0])
+	}
+}
+
+func TestParseBreakInForGenericLoop(t *testing.T) {
+	// break inside a generic for loop should work
+	p := parseSource(t, "for k, v in pairs(t) do break end")
+	stmt := p.parseStmt()
+	if stmt == nil {
+		t.Fatal("Failed to parse for statement")
+	}
+	forStmt, ok := stmt.(*ForGenericStmt)
+	if !ok {
+		t.Fatalf("Expected for generic statement, got %v", stmt)
+	}
+	if len(forStmt.Body.Stmts) != 1 {
+		t.Fatalf("Expected 1 statement in for body, got %d", len(forStmt.Body.Stmts))
+	}
+	if _, ok := forStmt.Body.Stmts[0].(*BreakStmt); !ok {
+		t.Errorf("Expected break statement in for body, got %v", forStmt.Body.Stmts[0])
 	}
 }
 
