@@ -275,31 +275,9 @@ func (p *Parser) parseUnaryExpr() Expr {
 	op := p.Current.Type
 	p.advance()
 
-	// Handle special case: '-' can be followed by a number
-	if op == lexer.TK_MINUS && (p.Current.Type == lexer.TK_INT || p.Current.Type == lexer.TK_FLOAT) {
-		// Parse as negative number
-		if p.Current.Type == lexer.TK_INT {
-			val := -p.Current.Value.(int64)
-			p.advance()
-			return &NumberExpr{
-				baseExpr: baseExpr{line: line},
-				Int:      val,
-				Value:    float64(val),
-				IsInt:    true,
-			}
-		} else {
-			val := -p.Current.Value.(float64)
-			p.advance()
-			return &NumberExpr{
-				baseExpr: baseExpr{line: line},
-				Value:    val,
-				IsInt:    false,
-			}
-		}
-	}
-
-	// Parse operand
-	operand := p.parseExprPrecedence(precUnary)
+	// Parse operand at precPower level so that ^ binds tighter than unary operators.
+	// For example, -2^2 should parse as -(2^2) = -4, not (-2)^2 = 4.
+	operand := p.parseExprPrecedence(precPower)
 	if operand == nil {
 		return nil
 	}
