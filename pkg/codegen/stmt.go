@@ -370,6 +370,8 @@ func (cg *CodeGenerator) genForNumeric(stmt *parser.ForNumericStmt) {
 
 	// Allocate register for external loop variable R(A+3)
 	loopVarReg := cg.allocRegister() // baseReg+3
+	// Begin scope for loop variable — it must not leak to outer scope
+	cg.beginScope()
 	cg.addLocal(stmt.Var.Name, loopVarReg, false)
 
 	// FORPREP R(A) sBx — jump forward to FORLOOP
@@ -407,6 +409,9 @@ func (cg *CodeGenerator) genForNumeric(stmt *parser.ForNumericStmt) {
 	// Patch FORLOOP: jump back to bodyStart
 	forLoopOffset := bodyStart - forLoopPC - 1
 	cg.PatchInstruction(forLoopPC, object.Instruction(vm.MakeAsBx(vm.OP_FORLOOP, baseReg, forLoopOffset)))
+
+	// End scope for loop variable
+	cg.endScope()
 
 	// Restore stack top (free loop registers)
 	cg.setStackTop(baseReg)
@@ -489,8 +494,9 @@ func (cg *CodeGenerator) genForGeneric(stmt *parser.ForGenericStmt) {
 		cg.MaxStackSize = cg.StackTop
 	}
 
-	// Add loop variables as locals
+	// Add loop variables as locals — in their own scope so they don't leak
 	numVars := len(stmt.Vars)
+	cg.beginScope()
 	for _, name := range stmt.Vars {
 		reg := cg.allocRegister()
 		cg.addLocal(name.Name, reg, false)
@@ -531,6 +537,9 @@ func (cg *CodeGenerator) genForGeneric(stmt *parser.ForGenericStmt) {
 	// FORGLOOP should jump back to loop body (after FORGPREP)
 	forGLoopOffset := (forGPrepPC + 1) - (forGLoopPC + 1)
 	cg.PatchInstruction(forGLoopPC, object.Instruction(vm.MakeAsBx(vm.OP_FORGLOOP, baseReg, forGLoopOffset)))
+
+	// End scope for loop variables
+	cg.endScope()
 }
 
 // genReturn generates code for a return statement.
