@@ -63,8 +63,13 @@ func (cg *CodeGenerator) genStmt(stmt parser.Stmt) {
 		cg.genFuncDef(s)
 
 	case *parser.GotoStmt, *parser.LabelStmt:
-		// TODO: Implement goto and labels
-		// For now, ignore
+		// Handle goto and labels
+		switch s := stmt.(type) {
+		case *parser.GotoStmt:
+			cg.genGoto(s)
+		case *parser.LabelStmt:
+			cg.genLabel(s)
+		}
 
 	default:
 		// Unknown statement type, ignore
@@ -701,4 +706,49 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 			cg.freeRegister()
 		}
 	}
+}
+
+// genGoto generates code for a goto statement.
+// goto label
+func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
+	labelName := stmt.Label
+	
+	// Check if label is already defined (backward jump)
+	if targetPC, exists := cg.labels[labelName]; exists {
+		// Backward jump: emit JMP directly to target
+		// JMP uses sBx offset: PC = PC + 1 + sBx
+		// We want to jump to targetPC, so: sBx = targetPC - (currentPC + 1)
+		currentPC := cg.GetCurrentPC()
+		offset := targetPC - (currentPC + 1)
+		cg.EmitAsBx(vm.OP_JMP, 0, offset)
+	} else {
+		// Forward jump: emit JMP with placeholder, will be patched when label is found
+		jumpPC := cg.EmitAsBx(vm.OP_JMP, 0, 0) // Placeholder offset
+		
+		// Record this jump for later patching
+		cg.forwardGotos[labelName] = append(cg.forwardGotos[labelName], jumpPC)
+	}
+}
+
+// genLabel generates code for a label statement.
+// ::label::
+func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
+	labelName := stmt.Name
+	currentPC := cg.GetCurrentPC()
+	
+	// Record the label position
+	cg.labels[labelName] = currentPC
+	
+	// Patch any forward jumps to this label
+	if jumps, exists := cg.forwardGotos[labelName]; exists {
+		for _, jumpPC := range jumps {
+			// Patch the jump: sBx = targetPC - (jumpPC + 1)
+			offset := currentPC - (jumpPC + 1)
+			cg.PatchInstruction(jumpPC, object.Instruction(vm.MakeAsBx(vm.OP_JMP, 0, offset)))
+		}
+		// Remove the patched jumps
+		delete(cg.forwardGotos, labelName)
+	}
+	
+	// Labels don't generate any code themselves - they're just markers
 }

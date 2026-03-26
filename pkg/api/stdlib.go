@@ -43,8 +43,13 @@ func (s *State) OpenLibs() {
 	s.Register("getmetatable", stdGetmetatable)
 	s.Register("rawset", stdRawset)
 	s.Register("rawget", stdRawget)
+	s.Register("rawequal", stdRawequal)
+	s.Register("rawlen", stdRawlen)
+	s.Register("dofile", stdDofile)
+	s.Register("loadfile", stdLoadfile)
 	s.Register("require", stdRequire)
 	s.Register("load", stdLoad)
+	s.Register("collectgarbage", stdCollectgarbage)
 
 	// Standard library modules
 	s.openStringLib()
@@ -52,6 +57,17 @@ func (s *State) OpenLibs() {
 	s.openMathLib()
 	s.openIOLib()
 	s.openDebugLib()
+
+	// Set standard global variables
+	// _G is a reference to the global table (same as _ENV)
+	globalTable := s.getGlobalTable()
+	tv := object.TValue{Type: object.TypeTable}
+	tv.Value.GC = globalTable
+	s.vm.Push(tv)
+	s.SetGlobal("_G")
+	// _VERSION is the Lua version string
+	s.PushString("Lua 5.4")
+	s.SetGlobal("_VERSION")
 }
 
 // stdPrint implements the Lua print() function.
@@ -687,4 +703,74 @@ func stdLoad(L *State) int {
 
 	// Return the function
 	return 1
+}
+
+// stdCollectgarbage implements the collectgarbage() function.
+// This is a minimal implementation.
+// Lua's collectgarbage with no args runs "collect" and returns nothing.
+func stdCollectgarbage(L *State) int {
+	// Check if there's an argument
+	if L.GetTop() > 0 {
+		opt := L.vm.GetStack(1)
+		if opt.IsString() {
+			optStr, _ := opt.ToString()
+			switch optStr {
+			case "count":
+				// Return memory usage in KB (approximate)
+				L.PushNumber(1024.0) // placeholder
+				return 1
+			case "step":
+				// Perform a GC step
+				return 0
+			}
+		}
+	}
+	// Default: collect, return nothing
+	return 0
+}
+
+// stdRawequal implements rawequal(v1, v2)
+func stdRawequal(L *State) int {
+	if L.GetTop() < 2 {
+		L.PushBoolean(false)
+		return 1
+	}
+	v1 := L.vm.GetStack(1)
+	v2 := L.vm.GetStack(2)
+	L.PushBoolean(object.Equal(v1, v2))
+	return 1
+}
+
+// stdRawlen implements rawlen(v)
+func stdRawlen(L *State) int {
+	if L.GetTop() < 1 {
+		L.PushNumber(0)
+		return 1
+	}
+	v := L.vm.GetStack(1)
+	if v.IsString() {
+		s, _ := v.ToString()
+		L.PushNumber(float64(len(s)))
+	} else if v.IsTable() {
+		t, _ := v.ToTable()
+		L.PushNumber(float64(t.Len()))
+	} else {
+		L.PushNumber(0)
+	}
+	return 1
+}
+
+// stdDofile implements dofile([filename])
+func stdDofile(L *State) int {
+	// Minimal implementation - just return nil
+	L.PushNil()
+	return 1
+}
+
+// stdLoadfile implements loadfile([filename [, mode [, env]]])
+func stdLoadfile(L *State) int {
+	// Minimal implementation - just return nil
+	L.PushNil()
+	L.PushString("loadfile not implemented")
+	return 2
 }
