@@ -378,8 +378,24 @@ func (cg *CodeGenerator) genForNumeric(stmt *parser.ForNumericStmt) {
 	// Loop body start
 	bodyStart := cg.GetCurrentPC()
 
+	// Begin scope for loop body - each iteration gets fresh locals
+	cg.beginScope()
+
 	// Generate body
 	cg.genBlock(stmt.Body)
+
+	// End scope for loop body - mark locals as inactive
+	cg.endScope()
+
+	// Close any upvalues captured by closures in the body.
+	// This moves captured locals from the stack to the heap,
+	// allowing the stack slots to be reused in the next iteration.
+	// CLOSE all upvalues at or above baseReg+4 (first body register).
+	cg.EmitABC(vm.OP_CLOSE, baseReg+4, 0, 0)
+
+	// Reset stack top to just after loop variable for next iteration
+	// This ensures temp registers are freed between iterations
+	cg.setStackTop(baseReg + 4)
 
 	// FORLOOP R(A) sBx — jump back to loop body start
 	forLoopPC := cg.EmitAsBx(vm.OP_FORLOOP, baseReg, 0) // Placeholder offset
@@ -474,6 +490,7 @@ func (cg *CodeGenerator) genForGeneric(stmt *parser.ForGenericStmt) {
 	}
 
 	// Add loop variables as locals
+	numVars := len(stmt.Vars)
 	for _, name := range stmt.Vars {
 		reg := cg.allocRegister()
 		cg.addLocal(name.Name, reg, false)
@@ -483,8 +500,24 @@ func (cg *CodeGenerator) genForGeneric(stmt *parser.ForGenericStmt) {
 	// Prepares the generic for loop
 	forGPrepPC := cg.EmitAsBx(vm.OP_FORGPREP, baseReg, 0)
 
+	// Begin scope for loop body - each iteration gets fresh locals
+	cg.beginScope()
+
 	// Generate body
 	cg.genBlock(stmt.Body)
+
+	// End scope for loop body - mark locals as inactive
+	cg.endScope()
+
+	// Close any upvalues captured by closures in the body.
+	// This moves captured locals from the stack to the heap,
+	// allowing the stack slots to be reused in the next iteration.
+	// CLOSE all upvalues at or above first body register.
+	cg.EmitABC(vm.OP_CLOSE, baseReg+3+numVars, 0, 0)
+
+	// Reset stack top to just after loop variables for next iteration
+	// This ensures temp registers are freed between iterations
+	cg.setStackTop(baseReg + 3 + numVars)
 
 	// FORGLOOP R(A) sBx
 	// Executes the generic for loop

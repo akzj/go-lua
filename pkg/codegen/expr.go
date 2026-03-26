@@ -282,10 +282,16 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 			// For C=0, the VM sets StackTop; don't adjust here
 		} else {
 			argReg := cg.genExpr(arg)
+			targetReg := funcReg + 1 + i
 			// Move argument to correct position if needed
-			if argReg != funcReg+1+i {
-				cg.EmitABC(vm.OP_MOVE, funcReg+1+i, argReg, 0)
+			if argReg != targetReg {
+				cg.EmitABC(vm.OP_MOVE, targetReg, argReg, 0)
 				cg.freeRegister()
+			}
+			// Ensure StackTop accounts for this argument
+			// This prevents the next argument's expression from overwriting previous args or the function
+			if cg.StackTop <= targetReg {
+				cg.setStackTop(targetReg + 1)
 			}
 		}
 	}

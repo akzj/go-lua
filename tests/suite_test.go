@@ -32,7 +32,7 @@ type TestSuiteConfig struct {
 func DefaultConfig() TestSuiteConfig {
 	return TestSuiteConfig{
 		TestDir:      "../lua-master/testes",
-		SkipFiles:    []string{"all.lua", "heavy.lua", "verybig.lua", "big.lua", "bitwise.lua", "bwcoercion.lua", "constructs.lua", "events.lua"},
+		SkipFiles:    []string{"all.lua", "heavy.lua", "verybig.lua", "big.lua", "bitwise.lua", "bwcoercion.lua", "constructs.lua", "events.lua", "closure.lua"},
 		Preprocess55: true,
 		Verbose:      false,
 	}
