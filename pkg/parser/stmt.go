@@ -681,10 +681,16 @@ func (p *Parser) parseAssignOrExprStmt() Stmt {
 		}
 	}
 
-	// It's an expression statement (typically a function call)
-	return &ExprStmt{
-		baseStmt: baseStmt{line: line},
-		Expr:     left[0],
+	// Only function calls are valid expression statements in Lua
+	switch left[0].(type) {
+	case *CallExpr, *MethodCallExpr:
+		return &ExprStmt{
+			baseStmt: baseStmt{line: line},
+			Expr:     left[0],
+		}
+	default:
+		p.Error("unexpected expression (only function calls are valid statements)")
+		return nil
 	}
 }
 // parseGlobalStmt parses a Lua 5.4 global statement.
