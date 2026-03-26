@@ -183,7 +183,8 @@ func (cg *CodeGenerator) addLocal(name string, index int, isParam bool) {
 // getLocal looks up a local variable by name.
 func (cg *CodeGenerator) getLocal(name string) (int, bool) {
 	for i := len(cg.Locals) - 1; i >= 0; i-- {
-		for _, local := range cg.Locals[i] {
+		for j := len(cg.Locals[i]) - 1; j >= 0; j-- {
+			local := cg.Locals[i][j]
 			if local.Name == name && local.Active {
 				return local.Index, true
 			}
