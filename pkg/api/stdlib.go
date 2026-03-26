@@ -114,6 +114,11 @@ func stdPrint(L *State) int {
 // stdType implements the Lua type() function.
 // Returns the type name of the argument as a string.
 func stdType(L *State) int {
+	if L.GetTop() < 1 {
+		L.PushString("bad argument #1 to 'type' (value expected)")
+		L.Error()
+		return 0
+	}
 	v := L.vm.GetStack(1)
 	L.PushString(v.Type.String())
 	return 1
