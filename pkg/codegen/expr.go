@@ -159,15 +159,13 @@ func (cg *CodeGenerator) genIndex(expr *parser.IndexExpr) int {
 	// Generate index expression
 	indexReg := cg.genExpr(expr.Index)
 
-	// Allocate result register
+	// Free both operands, then allocate result in tableReg's slot.
+	// For GETTABLE R(A) := R(B)[R(C)], VM reads B and C before writing A.
+	cg.freeRegisters(2)
 	resultReg := cg.allocRegister()
 
 	// Emit GETTABLE: R(A) := R(B)[R(C)]
 	cg.EmitABC(vm.OP_GETTABLE, resultReg, tableReg, indexReg)
-
-	// NOTE: We do NOT free temporaries here because it would decrement StackTop
-	// below resultReg, allowing the next allocRegister() to return the same
-	// slot and overwrite our result. The stack will be adjusted by the caller.
 
 	return resultReg
 }
@@ -177,7 +175,9 @@ func (cg *CodeGenerator) genField(expr *parser.FieldExpr) int {
 	// Generate table expression
 	tableReg := cg.genExpr(expr.Table)
 
-	// Allocate result register
+	// Free table operand, allocate result in its slot.
+	// For GETFIELD R(A) := R(B)[K(C)], VM reads B before writing A, so A == B is safe.
+	cg.freeRegister()
 	resultReg := cg.allocRegister()
 
 	// Load field name as constant
@@ -187,17 +187,12 @@ func (cg *CodeGenerator) genField(expr *parser.FieldExpr) int {
 	if fieldIdx <= 255 {
 		cg.EmitABC(vm.OP_GETFIELD, resultReg, tableReg, fieldIdx)
 	} else {
-		// For large indices, use GETTABUP or similar
-		// Simplified: use GETTABLE with loaded key
+		// For large indices, use GETTABLE with loaded key
 		keyReg := cg.allocRegister()
 		cg.EmitABx(vm.OP_LOADK, keyReg, fieldIdx)
 		cg.EmitABC(vm.OP_GETTABLE, resultReg, tableReg, keyReg)
 		cg.freeRegister() // keyReg
 	}
-
-	// NOTE: We do NOT free tableReg here because it would decrement StackTop
-	// below resultReg, allowing the next allocRegister() to return the same
-	// slot and overwrite our result. The stack will be adjusted by the caller.
 
 	return resultReg
 }
@@ -580,19 +575,18 @@ func (cg *CodeGenerator) genConcat(expr *parser.BinOpExpr) int {
 		}
 	}
 
-	// Allocate result register
-	resultReg := cg.allocRegister()
-
 	// Emit single CONCAT instruction
 	// CONCAT A B C: R(A) := R(B) .. R(B+1) .. ... .. R(C)
 	startReg := startStackTop
 	endReg := startStackTop + len(operands) - 1
-	cg.EmitABC(vm.OP_CONCAT, resultReg, startReg, endReg)
+	// Result goes into startReg (reuses first operand's slot).
+	// VM reads B..C before writing A, so A == B is safe.
+	cg.EmitABC(vm.OP_CONCAT, startReg, startReg, endReg)
 
-	// Free all operand registers by restoring stack top
-	cg.setStackTop(startStackTop)
+	// Free all operand registers except the result
+	cg.setStackTop(startStackTop + 1)
 
-	return resultReg
+	return startReg
 }
 
 // genArithmetic generates code for arithmetic operations.
@@ -602,9 +596,6 @@ func (cg *CodeGenerator) genArithmetic(expr *parser.BinOpExpr) int {
 
 	// Generate right operand
 	rightReg := cg.genExpr(expr.Right)
-
-	// Allocate result register
-	resultReg := cg.allocRegister()
 
 	// Determine opcode
 	var op vm.Opcode
@@ -635,50 +626,55 @@ func (cg *CodeGenerator) genArithmetic(expr *parser.BinOpExpr) int {
 		op = vm.OP_SHR
 	case "==":
 		op = vm.OP_EQ
-		// Lua 5.4: comparison stores boolean result in R(A)
-		cg.EmitABC(op, resultReg, leftReg, rightReg)
+		// Comparisons: free operands, allocate result, emit
 		cg.freeRegisters(2)
+		resultReg := cg.allocRegister()
+		cg.EmitABC(op, resultReg, leftReg, rightReg)
 		return resultReg
 	case "~=":
 		// Not equal: compare and then NOT the result
-		cg.EmitABC(vm.OP_EQ, resultReg, leftReg, rightReg)
-		// Now negate the result
-		cg.EmitABC(vm.OP_NOT, resultReg, resultReg, 0)
 		cg.freeRegisters(2)
+		resultReg := cg.allocRegister()
+		cg.EmitABC(vm.OP_EQ, resultReg, leftReg, rightReg)
+		cg.EmitABC(vm.OP_NOT, resultReg, resultReg, 0)
 		return resultReg
 	case "<":
 		op = vm.OP_LT
-		// Lua 5.4: R(A) := R(B) < R(C)
-		cg.EmitABC(op, resultReg, leftReg, rightReg)
 		cg.freeRegisters(2)
+		resultReg := cg.allocRegister()
+		cg.EmitABC(op, resultReg, leftReg, rightReg)
 		return resultReg
 	case ">":
 		// Greater than: swap operands for <
-		cg.EmitABC(vm.OP_LT, resultReg, rightReg, leftReg)
 		cg.freeRegisters(2)
+		resultReg := cg.allocRegister()
+		cg.EmitABC(vm.OP_LT, resultReg, rightReg, leftReg)
 		return resultReg
 	case "<=":
 		op = vm.OP_LE
-		// Lua 5.4: R(A) := R(B) <= R(C)
-		cg.EmitABC(op, resultReg, leftReg, rightReg)
 		cg.freeRegisters(2)
+		resultReg := cg.allocRegister()
+		cg.EmitABC(op, resultReg, leftReg, rightReg)
 		return resultReg
 	case ">=":
 		// Greater or equal: swap operands for <=
-		cg.EmitABC(vm.OP_LE, resultReg, rightReg, leftReg)
 		cg.freeRegisters(2)
+		resultReg := cg.allocRegister()
+		cg.EmitABC(vm.OP_LE, resultReg, rightReg, leftReg)
 		return resultReg
 	default:
 		// Unknown operator, default to ADD
 		op = vm.OP_ADD
 	}
 
+	// Free both operand registers, then allocate result.
+	// Result reuses leftReg's slot. For R(A) := R(B) op R(C),
+	// the VM reads B and C before writing A, so A == B is safe.
+	cg.freeRegisters(2)
+	resultReg := cg.allocRegister()
+
 	// Emit arithmetic instruction: R(A) := R(B) op R(C)
 	cg.EmitABC(op, resultReg, leftReg, rightReg)
-
-	// Don't free operand registers here - let caller handle cleanup
-	// cg.freeRegister() // rightReg
-	// cg.freeRegister() // leftReg
 
 	return resultReg
 }
@@ -687,9 +683,6 @@ func (cg *CodeGenerator) genArithmetic(expr *parser.BinOpExpr) int {
 func (cg *CodeGenerator) genUnOp(expr *parser.UnOpExpr) int {
 	// Generate operand
 	operandReg := cg.genExpr(expr.Expr)
-
-	// Allocate result register
-	resultReg := cg.allocRegister()
 
 	// Determine opcode
 	var op vm.Opcode
@@ -706,11 +699,13 @@ func (cg *CodeGenerator) genUnOp(expr *parser.UnOpExpr) int {
 		op = vm.OP_UNM
 	}
 
+	// Free operand and allocate result — this reuses the operand's register slot.
+	// For unary ops R(A) := op R(B), A == B is safe because VM reads B before writing A.
+	cg.freeRegister()
+	resultReg := cg.allocRegister()
+
 	// Emit unary instruction: R(A) := op R(B)
 	cg.EmitABC(op, resultReg, operandReg, 0)
-
-	// Don't free operand register here - let caller handle cleanup
-	// cg.freeRegister()
 
 	return resultReg
 }
