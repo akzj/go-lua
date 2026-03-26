@@ -124,8 +124,16 @@ func TestParseMethodCall(t *testing.T) {
 
 func TestParseUnaryMinus(t *testing.T) {
 	expr := parseExpr(t, "-5")
-	if expr, ok := expr.(*NumberExpr); !ok || expr.Value != -5 {
-		t.Errorf("Expected -5, got %v", expr)
+	// Unary minus should parse as UnOpExpr wrapping the operand, not as a negative NumberExpr.
+	// This ensures correct precedence: -2^2 parses as -(2^2) = -4, not (-2)^2 = 4.
+	unOp, ok := expr.(*UnOpExpr)
+	if !ok || unOp.Op != "-" {
+		t.Errorf("Expected UnOpExpr with op '-', got %v", expr)
+		return
+	}
+	num, ok := unOp.Expr.(*NumberExpr)
+	if !ok || num.Value != 5 {
+		t.Errorf("Expected NumberExpr with value 5, got %v", unOp.Expr)
 	}
 }
 

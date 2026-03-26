@@ -790,6 +790,23 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 					vm.Stack[vm.Base+a].SetNil()
 				}
 			}
+		} else if rb.IsString() && vm.Global != nil && vm.Global.StringMetatable != nil {
+			// String indexing: use string metatable's __index
+			mt := vm.Global.StringMetatable
+			indexPath := object.TValue{Type: object.TypeString, Value: object.Value{Str: "__index"}}
+			indexVal := mt.Get(indexPath)
+			if indexVal != nil && indexVal.IsTable() {
+				indexTable, _ := indexVal.ToTable()
+				key := vm.Prototype.Constants[c]
+				val := indexTable.Get(key)
+				if val != nil {
+					vm.Stack[vm.Base+a].CopyFrom(val)
+				} else {
+					vm.Stack[vm.Base+a].SetNil()
+				}
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
 		} else {
 			return vm.runtimeError("attempt to index a non-table value")
 		}
@@ -935,6 +952,22 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			val := t.Get(*rc)
 			if val != nil {
 				vm.Stack[vm.Base+a].CopyFrom(val)
+			} else {
+				vm.Stack[vm.Base+a].SetNil()
+			}
+		} else if rb.IsString() && vm.Global != nil && vm.Global.StringMetatable != nil {
+			// String indexing: use string metatable's __index
+			mt := vm.Global.StringMetatable
+			indexPath := object.TValue{Type: object.TypeString, Value: object.Value{Str: "__index"}}
+			indexVal := mt.Get(indexPath)
+			if indexVal != nil && indexVal.IsTable() {
+				indexTable, _ := indexVal.ToTable()
+				val := indexTable.Get(*rc)
+				if val != nil {
+					vm.Stack[vm.Base+a].CopyFrom(val)
+				} else {
+					vm.Stack[vm.Base+a].SetNil()
+				}
 			} else {
 				vm.Stack[vm.Base+a].SetNil()
 			}
