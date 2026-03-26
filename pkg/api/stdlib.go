@@ -197,7 +197,13 @@ func stdAssert(L *State) int {
 		L.PushString(msg)
 		L.Error()
 	}
-	return L.GetTop()
+	// Push all arguments as return values
+	top := L.GetTop()
+	for i := 1; i <= top; i++ {
+		val := L.vm.GetStack(i)
+		L.vm.Push(*val)
+	}
+	return top
 }
 
 // stdError implements the Lua error() function.
