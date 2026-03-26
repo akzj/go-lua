@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"fmt"
 	"github.com/akzj/go-lua/pkg/object"
 	"github.com/akzj/go-lua/pkg/parser"
 	"github.com/akzj/go-lua/pkg/vm"
@@ -17,7 +18,8 @@ import (
 //
 // Returns:
 //   - *object.Prototype: The compiled prototype with bytecode
-func CompileChunk(block *parser.BlockStmt, source string) *object.Prototype {
+//   - error: Compilation error if any
+func CompileChunk(block *parser.BlockStmt, source string) (*object.Prototype, error) {
 	cg := NewCodeGenerator()
 	cg.Prototype.Source = source
 	cg.Prototype.IsVarArg = true
@@ -38,6 +40,20 @@ func CompileChunk(block *parser.BlockStmt, source string) *object.Prototype {
 	cg.beginScope()
 	cg.genBlock(block)
 
+	// Check for compilation errors
+	if cg.hasError() {
+		return nil, cg.getError()
+	}
+
+	// Check for unresolved forward gotos (labels that were never defined)
+	for labelName, gotos := range cg.forwardGotos {
+		if len(gotos) > 0 {
+			// Use the first goto's line number for the error
+			line := gotos[0].Line
+			return nil, &CompileError{Message: fmt.Sprintf("%s:%d: no visible label '%s' for <goto>", source, line, labelName)}
+		}
+	}
+
 	// Emit trailing RETURN 0, 1 (return no values) if not already returned
 	cg.emitReturn(0, 1)
 	cg.endScope()
@@ -48,7 +64,7 @@ func CompileChunk(block *parser.BlockStmt, source string) *object.Prototype {
 	}
 	cg.Prototype.MaxStackSize = cg.MaxStackSize
 
-	return cg.Prototype
+	return cg.Prototype, nil
 }
 
 // getUpvalue looks up an upvalue by name.

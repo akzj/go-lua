@@ -8,6 +8,31 @@ import (
 	"github.com/akzj/go-lua/pkg/vm"
 )
 
+// CompileError represents a compilation error.
+type CompileError struct {
+	Message string
+}
+
+func (e *CompileError) Error() string {
+	return e.Message
+}
+
+// LabelInfo stores information about a label.
+type LabelInfo struct {
+	PC         int  // Program counter where the label is defined
+	BlockDepth int  // Block depth where the label is defined
+	Line       int  // Source line number
+}
+
+// GotoInfo stores information about a forward goto.
+type GotoInfo struct {
+	PC         int    // Program counter where the goto is emitted
+	Label      string // Label name
+	BlockDepth int    // Block depth where the goto is emitted
+	LocalCount int    // Number of active locals at the goto point
+	Line       int    // Source line number
+}
+
 // CodeGenerator generates bytecode from AST.
 type CodeGenerator struct {
 	Prototype       *object.Prototype
@@ -22,10 +47,12 @@ type CodeGenerator struct {
 	Parent          *CodeGenerator
 	ExpectedResults int // Number of results expected from next expression (-1 = default/1 result, 0 = multireturn, >0 = exact count)
 	currentLine     int // Current source line number for LineInfo
+	err             error // Compilation error
 	
 	// Label tracking for goto support
-	labels      map[string]int       // label name -> PC position
-	forwardGotos map[string][]int    // label name -> list of PC positions to patch
+	labels       map[string]LabelInfo    // label name -> label info
+	forwardGotos map[string][]GotoInfo   // label name -> list of pending forward gotos
+	blockDepth   int                      // Current block nesting depth
 }
 
 // LocalVar represents a local variable during compilation.
@@ -57,9 +84,27 @@ func NewCodeGenerator() *CodeGenerator {
 		Locals:          make([][]LocalVar, 0),
 		JumpList:        make([]JumpEntry, 0),
 		ExpectedResults: -1, // Default: 1 result
-		labels:          make(map[string]int),
-		forwardGotos:    make(map[string][]int),
+		labels:          make(map[string]LabelInfo),
+		forwardGotos:    make(map[string][]GotoInfo),
+		blockDepth:      0,
 	}
+}
+
+// setError sets a compilation error if one hasn't been set yet.
+func (cg *CodeGenerator) setError(format string, args ...interface{}) {
+	if cg.err == nil {
+		cg.err = &CompileError{Message: fmt.Sprintf(format, args...)}
+	}
+}
+
+// hasError returns true if there's a compilation error.
+func (cg *CodeGenerator) hasError() bool {
+	return cg.err != nil
+}
+
+// getError returns the compilation error if any.
+func (cg *CodeGenerator) getError() error {
+	return cg.err
 }
 
 // Generate generates bytecode for a function definition.
@@ -97,6 +142,7 @@ func (cg *CodeGenerator) GenerateFunc(funcExpr *parser.FuncExpr) *object.Prototy
 // beginScope starts a new local variable scope.
 func (cg *CodeGenerator) beginScope() {
 	cg.Locals = append(cg.Locals, make([]LocalVar, 0))
+	cg.blockDepth++
 }
 
 // endScope ends the current local variable scope.
@@ -117,6 +163,7 @@ func (cg *CodeGenerator) endScope() {
 		}
 		cg.Locals = cg.Locals[:len(cg.Locals)-1]
 	}
+	cg.blockDepth--
 }
 
 // addLocal adds a local variable to the current scope.
@@ -143,6 +190,45 @@ func (cg *CodeGenerator) getLocal(name string) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+// countActiveLocals returns the number of active local variables.
+func (cg *CodeGenerator) countActiveLocals() int {
+	count := 0
+	for _, scope := range cg.Locals {
+		for _, local := range scope {
+			if local.Active {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// getActiveLocalNames returns names of all active local variables.
+func (cg *CodeGenerator) getActiveLocalNames() []string {
+	names := make([]string, 0)
+	for _, scope := range cg.Locals {
+		for _, local := range scope {
+			if local.Active {
+				names = append(names, local.Name)
+			}
+		}
+	}
+	return names
+}
+
+// findJumpedLocal finds the name of a local variable that was jumped over.
+// localCount is the number of locals that were active at the goto point.
+func (cg *CodeGenerator) findJumpedLocal(localCount int) string {
+	// Get all active local names
+	activeNames := cg.getActiveLocalNames()
+	// If we have more active locals now than at the goto point,
+	// the extra ones were jumped over. Return the first one.
+	if len(activeNames) > localCount {
+		return activeNames[localCount]
+	}
+	return ""
 }
 
 // resolveUpvalue resolves a variable as an upvalue by walking the parent chain.

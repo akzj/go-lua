@@ -47,7 +47,11 @@ func (s *State) LoadString(code, name string) error {
 	}
 
 	// Compile AST to bytecode
-	proto := codegen.CompileChunk(block, name)
+	proto, err := codegen.CompileChunk(block, name)
+	if err != nil {
+		// Compiler error
+		return RuntimeError(err.Error())
+	}
 
 	// Create closure
 	closure := &object.Closure{
