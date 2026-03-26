@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/akzj/go-lua/pkg/object"
 )
@@ -52,7 +51,7 @@ func stdStringLength(L *State) int {
 		L.PushNumber(0)
 		return 1
 	}
-	L.PushNumber(float64(utf8.RuneCountInString(str)))
+	L.PushNumber(float64(len(str)))
 	return 1
 }
 
@@ -65,9 +64,7 @@ func stdStringSub(L *State) int {
 		return 1
 	}
 
-	// Convert to runes for proper Unicode handling
-	runes := []rune(str)
-	n := len(runes)
+	n := len(str)
 
 	// Get start index (required)
 	i := 1
@@ -105,7 +102,7 @@ func stdStringSub(L *State) int {
 	if i > j {
 		L.PushString("")
 	} else {
-		L.PushString(string(runes[i-1 : j]))
+		L.PushString(str[i-1 : j])
 	}
 	return 1
 }
@@ -341,11 +338,11 @@ func stdStringReverse(L *State) int {
 		return 1
 	}
 
-	runes := []rune(str)
-	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-		runes[i], runes[j] = runes[j], runes[i]
+	bytes := []byte(str)
+	for i, j := 0, len(bytes)-1; i < j; i, j = i+1, j-1 {
+		bytes[i], bytes[j] = bytes[j], bytes[i]
 	}
-	L.PushString(string(runes))
+	L.PushString(string(bytes))
 	return 1
 }
 
@@ -379,8 +376,7 @@ func stdStringByte(L *State) int {
 	}
 
 	// Handle negative indices
-	runes := []rune(str)
-	n := len(runes)
+	n := len(str)
 	if i < 0 {
 		i = n + i + 1
 	}
@@ -400,7 +396,7 @@ func stdStringByte(L *State) int {
 	count := 0
 	for k := i; k <= j; k++ {
 		if k >= 1 && k <= n {
-			L.PushNumber(float64(runes[k-1]))
+			L.PushNumber(float64(str[k-1]))
 			count++
 		}
 	}
@@ -411,15 +407,15 @@ func stdStringByte(L *State) int {
 // Returns string with given character codes.
 func stdStringChar(L *State) int {
 	top := L.GetTop()
-	runes := make([]rune, 0, top)
+	bytes := make([]byte, 0, top)
 
 	for i := 1; i <= top; i++ {
 		if num, ok := L.ToNumber(i); ok {
-			runes = append(runes, rune(int(num)))
+			bytes = append(bytes, byte(int(num)))
 		}
 	}
 
-	L.PushString(string(runes))
+	L.PushString(string(bytes))
 	return 1
 }
 
