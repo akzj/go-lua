@@ -618,12 +618,15 @@ func (cg *CodeGenerator) genBreak(stmt *parser.BreakStmt) {
 	cg.EmitAsBx(vm.OP_JMP, 0, 0)
 }
 
+
 // genDo generates code for a do...end block.
-// A do block simply executes its body statements in a new scope.
+// A do block creates a new scope for local variables.
 func (cg *CodeGenerator) genDo(stmt *parser.DoStmt) {
+	cg.beginScope()
 	if stmt.Body != nil {
 		cg.genBlock(stmt.Body)
 	}
+	cg.endScope()
 }
 
 // genExprStmt generates code for an expression statement.
@@ -711,40 +714,96 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 // genGoto generates code for a goto statement.
 // goto label
 func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
+	if cg.hasError() {
+		return
+	}
+	
 	labelName := stmt.Label
+	currentPC := cg.GetCurrentPC()
 	
 	// Check if label is already defined (backward jump)
-	if targetPC, exists := cg.labels[labelName]; exists {
-		// Backward jump: emit JMP directly to target
+	if labelInfo, exists := cg.labels[labelName]; exists {
+		// Backward jump: check that we're not jumping into an inner block
+		// A goto can only jump to a label in the same or outer scope
+		if labelInfo.BlockDepth > cg.blockDepth {
+			cg.setError("label '%s' is inside an inner block", labelName)
+			return
+		}
+		
+		// Emit JMP directly to target
 		// JMP uses sBx offset: PC = PC + 1 + sBx
 		// We want to jump to targetPC, so: sBx = targetPC - (currentPC + 1)
-		currentPC := cg.GetCurrentPC()
-		offset := targetPC - (currentPC + 1)
+		offset := labelInfo.PC - (currentPC + 1)
 		cg.EmitAsBx(vm.OP_JMP, 0, offset)
 	} else {
 		// Forward jump: emit JMP with placeholder, will be patched when label is found
 		jumpPC := cg.EmitAsBx(vm.OP_JMP, 0, 0) // Placeholder offset
 		
 		// Record this jump for later patching
-		cg.forwardGotos[labelName] = append(cg.forwardGotos[labelName], jumpPC)
+		cg.forwardGotos[labelName] = append(cg.forwardGotos[labelName], GotoInfo{
+			PC:         jumpPC,
+			Label:      labelName,
+			BlockDepth: cg.blockDepth,
+			LocalCount: cg.countActiveLocals(),
+			Line:       stmt.Line(),
+		})
 	}
 }
 
 // genLabel generates code for a label statement.
 // ::label::
 func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
+	if cg.hasError() {
+		return
+	}
+	
 	labelName := stmt.Name
 	currentPC := cg.GetCurrentPC()
 	
+	// Check for duplicate labels
+	if _, exists := cg.labels[labelName]; exists {
+		// Duplicate label is an error
+		cg.setError("duplicate label '%s'", labelName)
+		return
+	}
+	
 	// Record the label position
-	cg.labels[labelName] = currentPC
+	cg.labels[labelName] = LabelInfo{
+		PC:         currentPC,
+		BlockDepth: cg.blockDepth,
+		Line:       stmt.Line(),
+	}
 	
 	// Patch any forward jumps to this label
 	if jumps, exists := cg.forwardGotos[labelName]; exists {
-		for _, jumpPC := range jumps {
+		for _, gotoInfo := range jumps {
+			// Check that the label is not in a deeper block than the goto
+			// A goto can only jump to a label in the same or outer scope
+			// If label's blockDepth > goto's blockDepth, the label is inside an inner block (invisible)
+			if cg.blockDepth > gotoInfo.BlockDepth {
+				cg.setError("label '%s' is outside the scope of the goto", labelName)
+				return
+			}
+			
+			// Check if we jumped over any local variables
+			// If the current scope has more active locals than the goto had, we jumped over declarations
+			currentLocalCount := cg.countActiveLocals()
+			if currentLocalCount > gotoInfo.LocalCount {
+				// Find which variables were jumped over by comparing active locals
+				// We need to find locals that are active now but weren't at the goto point
+				// For simplicity, we report the first local that was added after the goto
+				jumpedVar := cg.findJumpedLocal(gotoInfo.LocalCount)
+				if jumpedVar != "" {
+					cg.setError("goto jumps into the scope of '%s'", jumpedVar)
+				} else {
+					cg.setError("goto jumps into the scope of a local variable")
+				}
+				return
+			}
+			
 			// Patch the jump: sBx = targetPC - (jumpPC + 1)
-			offset := currentPC - (jumpPC + 1)
-			cg.PatchInstruction(jumpPC, object.Instruction(vm.MakeAsBx(vm.OP_JMP, 0, offset)))
+			offset := currentPC - (gotoInfo.PC + 1)
+			cg.PatchInstruction(gotoInfo.PC, object.Instruction(vm.MakeAsBx(vm.OP_JMP, 0, offset)))
 		}
 		// Remove the patched jumps
 		delete(cg.forwardGotos, labelName)
