@@ -17,6 +17,11 @@ func (cg *CodeGenerator) genStmt(stmt parser.Stmt) {
 		return
 	}
 
+	// Track source line for error messages
+	if line := stmt.Line(); line > 0 {
+		cg.currentLine = line
+	}
+
 	switch s := stmt.(type) {
 	case *parser.BlockStmt:
 		cg.genBlock(s)
@@ -157,9 +162,59 @@ func (cg *CodeGenerator) assignToVar(expr parser.Expr, valueReg int) {
 // genLocal generates code for a local variable declaration.
 // local name1, name2, ... = value1, value2, ...
 func (cg *CodeGenerator) genLocal(stmt *parser.LocalStmt) {
-	// For each local variable, generate the value expression directly.
-	// The value register becomes the local's register (no extra MOVE needed
-	// when there's exactly one value per variable generated in order).
+	// Special case: if there are more names than values and the last value is a call expression,
+	// the call should return all its results to fill the remaining variables
+	numNames := len(stmt.Names)
+	numValues := len(stmt.Values)
+
+	// Check if the last value is a call expression
+	var lastIsCall bool
+	if numValues > 0 {
+		lastVal := stmt.Values[numValues-1]
+		_, lastIsCall = lastVal.(*parser.CallExpr)
+		if !lastIsCall {
+			_, lastIsCall = lastVal.(*parser.MethodCallExpr)
+		}
+	}
+
+	// If the last value is a call and we have more names than values,
+	// we need to set ExpectedResults to get all results
+	if lastIsCall && numNames > numValues {
+		// Save old ExpectedResults
+		oldExpected := cg.ExpectedResults
+		
+		// Calculate how many results we need from the call
+		numResultsNeeded := numNames - (numValues - 1)
+		cg.ExpectedResults = numResultsNeeded // Exact number of results needed
+
+		// Process all values except the last one normally
+		for i := 0; i < numValues-1; i++ {
+			valueReg := cg.genExpr(stmt.Values[i])
+			cg.addLocal(stmt.Names[i].Name, valueReg, false)
+		}
+
+		// Generate the last value (the call) which will return multiple results
+		lastValueReg := cg.genExpr(stmt.Values[numValues-1])
+		
+		// Update StackTop to account for all the results
+		// The results are at lastValueReg, lastValueReg+1, ..., lastValueReg+numResultsNeeded-1
+		cg.setStackTop(lastValueReg + numResultsNeeded)
+		if cg.StackTop > cg.MaxStackSize {
+			cg.MaxStackSize = cg.StackTop
+		}
+
+		// The call results are in consecutive registers starting at lastValueReg
+		// Assign them to the remaining names
+		for i := numValues - 1; i < numNames; i++ {
+			cg.addLocal(stmt.Names[i].Name, lastValueReg+(i-(numValues-1)), false)
+		}
+
+		// Restore ExpectedResults
+		cg.ExpectedResults = oldExpected
+		return
+	}
+
+	// Normal case: one value per name (or fewer values than names, with nil for missing)
 	for i, name := range stmt.Names {
 		if i < len(stmt.Values) {
 			// Generate value — this allocates a register at StackTop
@@ -170,7 +225,7 @@ func (cg *CodeGenerator) genLocal(stmt *parser.LocalStmt) {
 		} else {
 			// No value, initialize to nil
 			reg := cg.allocRegister()
-			cg.EmitABC(vm.OP_LOADNIL, reg, 0, 0)
+			cg.EmitABC(vm.OP_LOADNIL, reg, reg, 0)
 			cg.addLocal(name.Name, reg, false)
 		}
 	}
@@ -444,19 +499,106 @@ func (cg *CodeGenerator) genReturn(stmt *parser.ReturnStmt) {
 		return
 	}
 
+	// Check if the last expression is a call expression (for tail call optimization)
+	lastIdx := len(stmt.Values) - 1
+	_, lastIsCall := stmt.Values[lastIdx].(*parser.CallExpr)
+	_, lastIsMethodCall := stmt.Values[lastIdx].(*parser.MethodCallExpr)
+	isLastCall := lastIsCall || lastIsMethodCall
+
 	// Generate return values
 	baseReg := cg.StackTop
+
+	// First, collect all source registers
+	sources := make([]int, len(stmt.Values))
 	for i, expr := range stmt.Values {
+		// For the last expression, if it's a call, set ExpectedResults = 0 (all results)
+		if i == lastIdx && isLastCall {
+			cg.ExpectedResults = 0 // 0 = all results
+		}
 		reg := cg.genExpr(expr)
-		if reg != baseReg+i {
-			cg.EmitABC(vm.OP_MOVE, baseReg+i, reg, 0)
+		sources[i] = reg
+		// Reset ExpectedResults after generating the expression
+		cg.ExpectedResults = -1
+	}
+
+	// Special case: single call expression returning all values
+	if len(stmt.Values) == 1 && isLastCall {
+		// The call results are already in the right place (starting at sources[0])
+		// Return all results from the call
+		cg.emitReturn(sources[0], 0)
+		return
+	}
+
+	// Check if any destination overlaps with any source that would be overwritten
+	hasOverlap := false
+	for i := range sources {
+		dest := baseReg + i
+		for j := range sources {
+			if i != j && dest == sources[j] {
+				hasOverlap = true
+				break
+			}
+		}
+		if hasOverlap {
+			break
+		}
+	}
+
+	if hasOverlap {
+		// Use temporary registers to avoid overlap issues
+		temps := make([]int, len(sources))
+		for i, src := range sources {
+			temps[i] = cg.allocRegister()
+			cg.EmitABC(vm.OP_MOVE, temps[i], src, 0)
+		}
+		for i, tmp := range temps {
+			dest := baseReg + i
+			if tmp != dest {
+				cg.EmitABC(vm.OP_MOVE, dest, tmp, 0)
+			}
+		}
+		for range temps {
 			cg.freeRegister()
 		}
+	} else {
+		// No overlap - check if we need forward or reverse order
+		maxSource := 0
+		for _, s := range sources {
+			if s > maxSource {
+				maxSource = s
+			}
+		}
+
+		if maxSource >= baseReg {
+			// Move in reverse order
+			for i := len(stmt.Values) - 1; i >= 0; i-- {
+				if sources[i] != baseReg+i {
+					cg.EmitABC(vm.OP_MOVE, baseReg+i, sources[i], 0)
+				}
+			}
+		} else {
+			// Move in forward order (no overlap)
+			for i := range stmt.Values {
+				if sources[i] != baseReg+i {
+					cg.EmitABC(vm.OP_MOVE, baseReg+i, sources[i], 0)
+				}
+			}
+		}
+	}
+
+	// Free source registers
+	for range sources {
+		cg.freeRegister()
 	}
 
 	// RETURN R(A) B C
 	// B = number of results + 1, 0 = all available
-	cg.emitReturn(baseReg, len(stmt.Values)+1)
+	// If the last expression is a call, use B=0 to return all results from the call
+	if isLastCall {
+		cg.emitReturn(baseReg, 0)
+	} else {
+		cg.emitReturn(baseReg, len(stmt.Values)+1)
+	}
 }
 
 // genBreak generates code for a break statement.
@@ -486,6 +628,14 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 		nestedGen := NewCodeGenerator()
 		nestedGen.Parent = cg
 
+		// Set up _ENV as upvalue[0] for the nested function
+		// It inherits _ENV from the parent closure (IsLocal=false means from parent's upvalues)
+		nestedGen.Upvalues["_ENV"] = 0
+		nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
+			Index:   0,     // Parent's upvalue[0] (_ENV)
+			IsLocal: false, // Inherited from parent's upvalues
+		})
+
 		if stmt.Func != nil {
 			nestedGen.GenerateFunc(stmt.Func)
 		} else {
@@ -508,6 +658,13 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 		// Non-local function: function name() ... end
 		nestedGen := NewCodeGenerator()
 		nestedGen.Parent = cg
+
+		// Set up _ENV as upvalue[0] for the nested function
+		nestedGen.Upvalues["_ENV"] = 0
+		nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
+			Index:   0,
+			IsLocal: false,
+		})
 
 		if stmt.Func != nil {
 			nestedGen.GenerateFunc(stmt.Func)

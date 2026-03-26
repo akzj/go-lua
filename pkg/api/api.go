@@ -631,4 +631,50 @@ func (s *State) CheckStack(extra int) bool {
 	// In a full implementation, this would grow the stack if needed
 	// For now, we assume the stack is large enough
 	return true
+}// PushLightUserData pushes a light userdata value onto the stack.
+//
+// This corresponds to lua_pushlightuserdata in the C API.
+// Light userdata is a pointer-like value with no individual metatable.
+//
+// Parameters:
+//   - ptr: The pointer value to store
+//
+// Example:
+//
+//	L.PushLightUserData(&myStruct{})
+func (s *State) PushLightUserData(ptr interface{}) {
+	v := object.TValue{
+		Type: object.TypeLightUserData,
+		Value: object.Value{Ptr: ptr},
+	}
+	s.vm.Push(v)
+}
+
+// RegisterModule creates a module table and registers it as a global.
+//
+// This is a convenience function for registering standard library modules.
+// It creates a new table, populates it with the given functions, and
+// sets it as a global variable.
+//
+// Parameters:
+//   - name: The global name for the module (e.g., "string", "table")
+//   - funcs: Map of function names to Function implementations
+//
+// Example:
+//
+//	funcs := map[string]api.Function{
+//	    "len": stdStringLength,
+//	    "sub": stdStringSub,
+//	}
+//	L.RegisterModule("string", funcs)
+func (s *State) RegisterModule(name string, funcs map[string]Function) {
+	s.NewTable()
+	tableIdx := s.GetTop()
+
+	for fname, fn := range funcs {
+		s.PushFunction(fn)
+		s.SetField(tableIdx, fname)
+	}
+
+	s.SetGlobal(name)
 }

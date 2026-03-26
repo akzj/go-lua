@@ -25,6 +25,7 @@ import (
 //   - select: returns arguments from a given index
 //   - unpack: unpacks a table into individual values
 func (s *State) OpenLibs() {
+	// Basic functions
 	s.Register("print", stdPrint)
 	s.Register("type", stdType)
 	s.Register("tostring", stdTostring)
@@ -37,6 +38,16 @@ func (s *State) OpenLibs() {
 	s.Register("ipairs", stdIpairs)
 	s.Register("select", stdSelect)
 	s.Register("unpack", stdUnpack)
+	s.Register("setmetatable", stdSetmetatable)
+	s.Register("getmetatable", stdGetmetatable)
+	s.Register("rawset", stdRawset)
+	s.Register("rawget", stdRawget)
+
+	// Standard library modules
+	s.openStringLib()
+	s.openTableLib()
+	s.openMathLib()
+	s.openIOLib()
 }
 
 // stdPrint implements the Lua print() function.
@@ -80,6 +91,22 @@ func stdType(L *State) int {
 // Converts a value to its string representation.
 func stdTostring(L *State) int {
 	v := L.vm.GetStack(1)
+	
+	// Check for __tostring metamethod for tables
+	if v.IsTable() {
+		t, _ := v.ToTable()
+		mm := L.vm.GetMetamethod(t, "__tostring")
+		if mm != nil && mm.IsFunction() {
+			// Call the metamethod
+			result := L.vm.CallMetamethod(mm, []object.TValue{*v})
+			if result != nil {
+				L.vm.Stack[L.vm.StackTop].CopyFrom(result)
+				L.vm.StackTop++
+				return 1
+			}
+		}
+	}
+	
 	switch v.Type {
 	case object.TypeNil:
 		L.PushString("nil")
@@ -164,97 +191,76 @@ func stdError(L *State) int {
 // Calls a function in protected mode. Returns true, results... on success,
 // or false, errmsg on error.
 func stdPcall(L *State) int {
-	// Save the arguments (skip function at position 1)
+	// Get the function and arguments
 	top := L.GetTop()
-	args := make([]object.TValue, 0, top-1)
-	for i := 2; i <= top; i++ {
-		v := L.vm.GetStack(i)
-		args = append(args, *v)
+	
+	if top < 1 {
+		L.PushBoolean(false)
+		L.PushString("bad argument #1 to 'pcall' (value expected)")
+		return 2
 	}
 
-	// Get the function value
 	fv := L.vm.GetStack(1)
 	if !fv.IsFunction() {
-		L.vm.SetTop(0)
 		L.PushBoolean(false)
 		L.PushString("attempt to call a non-function value")
 		return 2
 	}
 
 	funcVal := *fv
+	nargs := top - 1
 
-	var callErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				if le, ok := r.(*LuaError); ok {
-					callErr = le
-				} else if s, ok := r.(string); ok {
-					callErr = newLuaError(s)
-				} else {
-					callErr = newLuaError(fmt.Sprintf("%v", r))
-				}
-			}
-		}()
+	// The VM saves StackTop before calling us, then moves results from savedStackTop to funcSlot.
+	savedStackTop := L.vm.StackTop
 
-		fn, _ := funcVal.ToFunction()
-		if fn.IsGo {
-			// Set up stack for the Go function call
-			oldBase := L.vm.Base
-			oldTop := L.vm.StackTop
+	// Push function and args for ProtectedCall
+	funcPos := L.vm.StackTop
+	L.vm.Push(funcVal)
+	funcIdx := funcPos - L.vm.Base
 
-			// Clear current stack and push args for the called function
-			L.vm.SetTop(0)
-			for _, arg := range args {
-				L.vm.Push(arg)
-			}
+	for i := 0; i < nargs; i++ {
+		arg := L.vm.Stack[L.vm.Base+1+i]
+		L.vm.Push(arg)
+	}
 
-			newBase := L.vm.Base
-			L.vm.Base = newBase
-			L.vm.StackTop = newBase + len(args)
+	err := L.vm.ProtectedCall(funcIdx, nargs, -1)
 
-			err := fn.GoFn(L.vm)
-
-			L.vm.Base = oldBase
-			_ = oldTop
-
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			// Lua function: use ProtectedCall
-			// The function is already at Stack[Base] (position 1)
-			// Args are already at Stack[Base+1], ... (positions 2, 3, ...)
-			// Call ProtectedCall with function at position 0 (relative to Base)
-			// Note: we need to adjust the stack to have function at Base+0
-			// The function arg is at position 1, which is Stack[Base]
-			err := L.vm.ProtectedCall(0, len(args), -1)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}()
-
-	if callErr != nil {
-		L.vm.SetTop(0)
-		L.PushBoolean(false)
-		L.PushString(callErr.Error())
+	if err != nil {
+		// Error case: reset stack to savedStackTop, then place false + error message
+		L.vm.StackTop = savedStackTop
+		L.vm.Stack[savedStackTop] = object.TValue{Type: object.TypeBoolean}
+		L.vm.Stack[savedStackTop].Value.Bool = false
+		L.vm.Stack[savedStackTop+1] = object.TValue{Type: object.TypeString}
+		L.vm.Stack[savedStackTop+1].Value.Str = err.Error()
+		L.vm.StackTop = savedStackTop + 2
 		return 2
 	}
 
-	// Success: collect results, clear stack, push true + results
-	nresults := L.GetTop()
-	results := make([]object.TValue, nresults)
-	for i := 1; i <= nresults; i++ {
-		v := L.vm.GetStack(i)
-		results[i-1] = *v
+	// Success: ProtectedCall placed results at Stack[funcPos]
+	// Note: funcPos == savedStackTop, so we need to copy results first
+	numResults := L.vm.StackTop - funcPos
+	if numResults < 0 {
+		numResults = 0
 	}
-	L.vm.SetTop(0)
-	L.PushBoolean(true)
-	for _, r := range results {
-		L.vm.Push(r)
+
+	// Copy results to temp slice to avoid overwriting
+	results := make([]object.TValue, numResults)
+	for i := 0; i < numResults; i++ {
+		results[i] = L.vm.Stack[funcPos+i]
 	}
-	return 1 + len(results)
+
+	// Place true at savedStackTop
+	L.vm.Stack[savedStackTop] = object.TValue{Type: object.TypeBoolean}
+	L.vm.Stack[savedStackTop].Value.Bool = true
+
+	// Copy results after true
+	for i := 0; i < numResults; i++ {
+		L.vm.Stack[savedStackTop+1+i] = results[i]
+	}
+
+	L.vm.StackTop = savedStackTop + 1 + numResults
+
+	return 1 + numResults
 }
 
 // stdNext implements the Lua next() function.
@@ -287,13 +293,38 @@ func stdNext(L *State) int {
 
 // stdPairs implements the Lua pairs() function.
 // Returns the next function, the table, and nil (for generic for).
+// If the table has a __pairs metamethod, calls that instead.
 func stdPairs(L *State) int {
 	// Get table from arg 1
-	tbl := *L.vm.GetStack(1)
+	tbl := L.vm.GetStack(1)
 
-	// Push results on top of args: next function, table, nil
+	// Check for __pairs metamethod
+	if tbl.IsTable() {
+		t, _ := tbl.ToTable()
+		mt := t.GetMetatable()
+		if mt != nil {
+			key := object.TValue{Type: object.TypeString}
+			key.Value.Str = "__pairs"
+			mm := mt.Get(key)
+			if mm != nil && mm.IsFunction() {
+				// Call __pairs(table)
+				L.vm.Stack[L.vm.StackTop].CopyFrom(mm)
+				L.vm.Stack[L.vm.StackTop+1].CopyFrom(tbl)
+				L.vm.StackTop += 2
+				L.vm.Base = L.vm.StackTop - 1
+				
+				closure, _ := mm.ToFunction()
+				if closure.IsGo {
+					closure.GoFn(L.vm)
+					return L.vm.StackTop - L.vm.Base
+				}
+			}
+		}
+	}
+
+	// Default behavior: push next function, table, nil
 	L.GetGlobal("next")
-	L.vm.Push(tbl)
+	L.vm.Push(*tbl)
 	L.PushNil()
 	return 3
 }
@@ -302,8 +333,33 @@ func stdPairs(L *State) int {
 // Returns an iterator function, the table, and 0.
 func stdIpairs(L *State) int {
 	// Get table from arg 1
-	tbl := *L.vm.GetStack(1)
+	tbl := L.vm.GetStack(1)
 
+	// Check for __ipairs metamethod
+	if tbl.IsTable() {
+		t, _ := tbl.ToTable()
+		mt := t.GetMetatable()
+		if mt != nil {
+			key := object.TValue{Type: object.TypeString}
+			key.Value.Str = "__ipairs"
+			mm := mt.Get(key)
+			if mm != nil && mm.IsFunction() {
+				// Call __ipairs(table)
+				L.vm.Stack[L.vm.StackTop].CopyFrom(mm)
+				L.vm.Stack[L.vm.StackTop+1].CopyFrom(tbl)
+				L.vm.StackTop += 2
+				L.vm.Base = L.vm.StackTop - 1
+				
+				closure, _ := mm.ToFunction()
+				if closure.IsGo {
+					closure.GoFn(L.vm)
+					return L.vm.StackTop - L.vm.Base
+				}
+			}
+		}
+	}
+
+	// Default behavior: create iterator function
 	// Create iterator function that reads control variable from stack
 	L.PushFunction(func(L *State) int {
 		// Get control variable from stack (arg 2 = control)
@@ -332,7 +388,7 @@ func stdIpairs(L *State) int {
 		return 2
 	})
 	// Push results on top of args: function, table, 0
-	L.vm.Push(tbl)
+	L.vm.Push(*tbl)
 	L.PushNumber(0)
 	return 3
 }
@@ -401,4 +457,114 @@ func stdUnpack(L *State) int {
 		count++
 	}
 	return count
+}
+
+// stdSetmetatable implements the Lua setmetatable(table, metatable) function.
+// Sets the metatable of a table and returns the table.
+// If metatable is nil, removes the metatable.
+func stdSetmetatable(L *State) int {
+	// Get the table argument
+	v := L.vm.GetStack(1)
+	t, ok := v.ToTable()
+	if !ok {
+		L.PushString("setmetatable: argument 1 must be a table")
+		L.Error()
+		return 0
+	}
+
+	// Get the metatable argument (can be nil)
+	mtVal := L.vm.GetStack(2)
+	if mtVal.IsNil() {
+		// Remove metatable
+		t.SetMetatable(nil)
+	} else {
+		mt, ok := mtVal.ToTable()
+		if !ok {
+			L.PushString("setmetatable: argument 2 must be a table or nil")
+			L.Error()
+			return 0
+		}
+		t.SetMetatable(mt)
+	}
+
+	// Return the table
+	L.vm.Push(*v)
+	return 1
+}
+
+// stdGetmetatable implements the Lua getmetatable(table) function.
+// Returns the metatable of a table, or nil if no metatable.
+func stdGetmetatable(L *State) int {
+	// Get the table argument
+	v := L.vm.GetStack(1)
+	t, ok := v.ToTable()
+	if !ok {
+		// For non-tables, could check for __metatable in type's metatable
+		// For now, just return nil
+		L.PushNil()
+		return 1
+	}
+
+	mt := t.GetMetatable()
+	if mt == nil {
+		L.PushNil()
+		return 1
+	}
+
+	// Push the metatable
+	mtVal := object.TValue{Type: object.TypeTable}
+	mtVal.Value.GC = mt
+	L.vm.Push(mtVal)
+	return 1
+}
+
+// stdRawset implements the Lua rawset(table, key, value) function.
+// Sets a key in a table without invoking metamethods.
+func stdRawset(L *State) int {
+	// Get the table argument
+	v := L.vm.GetStack(1)
+	t, ok := v.ToTable()
+	if !ok {
+		L.PushString("rawset: argument 1 must be a table")
+		L.Error()
+		return 0
+	}
+
+	// Get the key
+	key := L.vm.GetStack(2)
+
+	// Get the value
+	val := L.vm.GetStack(3)
+
+	// Set directly without metamethods
+	t.Set(*key, *val)
+
+	// Return the table
+	L.vm.Push(*v)
+	return 1
+}
+
+// stdRawget implements the Lua rawget(table, key) function.
+// Gets a key from a table without invoking metamethods.
+func stdRawget(L *State) int {
+	// Get the table argument
+	v := L.vm.GetStack(1)
+	t, ok := v.ToTable()
+	if !ok {
+		L.PushString("rawget: argument 1 must be a table")
+		L.Error()
+		return 0
+	}
+
+	// Get the key
+	key := L.vm.GetStack(2)
+
+	// Get directly without metamethods
+	val := t.Get(*key)
+	if val == nil {
+		L.PushNil()
+	} else {
+		L.vm.Push(*val)
+	}
+	return 1
 }

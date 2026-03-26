@@ -89,7 +89,10 @@ func (s *State) PCall(nargs, nresults int, msgh int) (err error) {
 	}()
 
 	// Get function value to check if it's a Go function
-	funcVal := s.vm.GetStack(0) // Function is at base (index 0)
+	// Function is at negative index -(nargs+1) from top
+	// Stack layout: [func, arg1, arg2, ..., argN] where -1=argN, -(nargs+1)=func
+	funcIdx := -(nargs + 1)
+	funcVal := s.vm.GetStack(funcIdx)
 	isGoFunc := funcVal.IsFunction()
 	if isGoFunc {
 		if fn, ok := funcVal.ToFunction(); ok {
@@ -97,8 +100,8 @@ func (s *State) PCall(nargs, nresults int, msgh int) (err error) {
 		}
 	}
 
-	// Call the VM
-	if err := s.vm.Call(0, nargs, nresults); err != nil {
+	// Call the VM - function is at negative index from StackTop
+	if err := s.vm.Call(funcIdx, nargs, nresults); err != nil {
 		return wrapError(err)
 	}
 

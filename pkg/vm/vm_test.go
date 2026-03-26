@@ -168,39 +168,51 @@ func TestComparisonInstructions(t *testing.T) {
 	vm.Stack[vm.Base+1].SetNumber(20.0)
 	vm.Prototype = &object.Prototype{}
 
-	// Test EQ - equal values
+	// Test EQ - equal values (Lua 5.4: stores boolean result in R(A))
 	vm.PC = 0
-	instr := MakeABC(OP_EQ, 0, 0, 0) // if (R(0) == R(0)) ~= 0 then pc++
+	instr := MakeABC(OP_EQ, 2, 0, 0) // R(2) = (R(0) == R(0))
 	err := vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("EQ instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to stay at 1 (no skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
 	}
 
-	// Test EQ - different values with skip
+	// Test EQ - different values
 	vm.PC = 0
-	instr = MakeABC(OP_EQ, 1, 0, 1) // if (R(0) == R(1)) ~= 1 then pc++
-	// R(0)=10, R(1)=20, not equal, so (false ~= true) = true, should skip
+	instr = MakeABC(OP_EQ, 2, 0, 1) // R(2) = (R(0) == R(1))
+	// R(0)=10, R(1)=20, not equal
 	err = vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("EQ instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to be 1 (skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be false, got %v", vm.Stack[vm.Base+2])
 	}
 
 	// Test LT
 	vm.PC = 0
-	instr = MakeABC(OP_LT, 0, 0, 1) // if (R(0) < R(1)) ~= 0 then pc++
-	// 10 < 20 is true, (true ~= false) = true, should skip
+	instr = MakeABC(OP_LT, 2, 0, 1) // R(2) = (R(0) < R(1))
+	// 10 < 20 is true
 	err = vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("LT instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to be 1 (skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
+	}
+
+	// Test LE
+	vm.PC = 0
+	instr = MakeABC(OP_LE, 2, 0, 1) // R(2) = (R(0) <= R(1))
+	// 10 <= 20 is true
+	err = vm.ExecuteInstruction(instr)
+	if err != nil {
+		t.Fatalf("LE instruction failed: %v", err)
+	}
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
 	}
 }
 
@@ -681,64 +693,64 @@ func TestComparisonInstructionsMore(t *testing.T) {
 		},
 	}
 
-	// LE - less or equal
+	// LE - less or equal (Lua 5.4: stores boolean result in R(A))
 	vm.PC = 0
-	instr := MakeABC(OP_LE, 0, 0, 1) // if (R(0) <= R(1)) ~= 0 then pc++
-	// 10 <= 20 is true, (true ~= false) = true, should skip
+	instr := MakeABC(OP_LE, 2, 0, 1) // R(2) = (R(0) <= R(1))
+	// 10 <= 20 is true
 	err := vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("LE instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to be 1 (skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
 	}
 
-	// EQI - equal immediate
+	// EQI - equal immediate (Lua 5.4: stores boolean result)
 	vm.PC = 0
-	instr = MakeABC(OP_EQI, 0, 0, 256) // if (R(0) == K(0)) ~= 0 then pc++
-	// R(0)=10, K(0)=15, not equal, (false ~= false) = false, no skip
+	instr = MakeABC(OP_EQI, 2, 0, 256) // R(2) = (R(0) == K(0))
+	// R(0)=10, K(0)=15, not equal
 	err = vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("EQI instruction failed: %v", err)
 	}
-	if vm.PC != 0 {
-		t.Errorf("Expected PC to be 0 (no skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be false, got %v", vm.Stack[vm.Base+2])
 	}
 
-	// LTI - less than immediate
+	// LTI - less than immediate (Lua 5.4: stores boolean result)
 	vm.PC = 0
-	instr = MakeABC(OP_LTI, 0, 0, 256) // if (R(0) < K(0)) ~= 0 then pc++
-	// 10 < 15 is true, (true ~= false) = true, should skip
+	instr = MakeABC(OP_LTI, 2, 0, 256) // R(2) = (R(0) < K(0))
+	// 10 < 15 is true
 	err = vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("LTI instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to be 1 (skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
 	}
 
-	// LEI - less or equal immediate
+	// LEI - less or equal immediate (Lua 5.4: stores boolean result)
 	vm.PC = 0
-	instr = MakeABC(OP_LEI, 0, 0, 256) // if (R(0) <= K(0)) ~= 0 then pc++
-	// 10 <= 15 is true, (true ~= false) = true, should skip
+	instr = MakeABC(OP_LEI, 2, 0, 256) // R(2) = (R(0) <= K(0))
+	// 10 <= 15 is true
 	err = vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("LEI instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to be 1 (skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
 	}
 
-	// GTI - greater than immediate
+	// GTI - greater than immediate (Lua 5.4: stores boolean result)
 	vm.PC = 0
-	instr = MakeABC(OP_GTI, 0, 1, 256) // if (R(1) > K(0)) ~= 0 then pc++
-	// 20 > 15 is true, (true ~= false) = true, should skip
+	instr = MakeABC(OP_GTI, 2, 1, 256) // R(2) = (R(1) > K(0))
+	// 20 > 15 is true
 	err = vm.ExecuteInstruction(instr)
 	if err != nil {
 		t.Fatalf("GTI instruction failed: %v", err)
 	}
-	if vm.PC != 1 {
-		t.Errorf("Expected PC to be 1 (skip), got %d", vm.PC)
+	if !vm.Stack[vm.Base+2].IsBoolean() || !vm.Stack[vm.Base+2].Value.Bool {
+		t.Errorf("Expected R(2) to be true, got %v", vm.Stack[vm.Base+2])
 	}
 }
 
