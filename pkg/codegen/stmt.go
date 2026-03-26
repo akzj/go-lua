@@ -744,7 +744,6 @@ func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
 			PC:         jumpPC,
 			Label:      labelName,
 			BlockDepth: cg.blockDepth,
-			LocalCount: cg.countActiveLocals(),
 			Line:       stmt.Line(),
 		})
 	}
@@ -761,17 +760,22 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 	currentPC := cg.GetCurrentPC()
 	
 	// Check for duplicate labels
-	if _, exists := cg.labels[labelName]; exists {
-		// Duplicate label is an error
-		cg.setError("duplicate label '%s'", labelName)
-		return
+	// A label is visible if it's in the same or outer block (blockDepth <= current)
+	// Labels in outer blocks are visible in inner blocks, so same-name labels in inner blocks are duplicates
+	if existing, exists := cg.labels[labelName]; exists {
+		// If the existing label is at the same or outer block depth, it's visible and this is a duplicate
+		if existing.BlockDepth <= cg.blockDepth {
+			cg.setError("duplicate label '%s'", labelName)
+			return
+		}
 	}
 	
-	// Record the label position
+	// Record the label position with current scope info
 	cg.labels[labelName] = LabelInfo{
 		PC:         currentPC,
 		BlockDepth: cg.blockDepth,
 		Line:       stmt.Line(),
+		ScopeLevel: len(cg.Locals),
 	}
 	
 	// Patch any forward jumps to this label
@@ -781,23 +785,7 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 			// A goto can only jump to a label in the same or outer scope
 			// If label's blockDepth > goto's blockDepth, the label is inside an inner block (invisible)
 			if cg.blockDepth > gotoInfo.BlockDepth {
-				cg.setError("label '%s' is outside the scope of the goto", labelName)
-				return
-			}
-			
-			// Check if we jumped over any local variables
-			// If the current scope has more active locals than the goto had, we jumped over declarations
-			currentLocalCount := cg.countActiveLocals()
-			if currentLocalCount > gotoInfo.LocalCount {
-				// Find which variables were jumped over by comparing active locals
-				// We need to find locals that are active now but weren't at the goto point
-				// For simplicity, we report the first local that was added after the goto
-				jumpedVar := cg.findJumpedLocal(gotoInfo.LocalCount)
-				if jumpedVar != "" {
-					cg.setError("goto jumps into the scope of '%s'", jumpedVar)
-				} else {
-					cg.setError("goto jumps into the scope of a local variable")
-				}
+				cg.setError("label '%s' is inside an inner block", labelName)
 				return
 			}
 			

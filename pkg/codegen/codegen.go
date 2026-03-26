@@ -22,14 +22,14 @@ type LabelInfo struct {
 	PC         int  // Program counter where the label is defined
 	BlockDepth int  // Block depth where the label is defined
 	Line       int  // Source line number
+	ScopeLevel int  // Scope level (len(cg.Locals)) when label was defined
 }
 
 // GotoInfo stores information about a forward goto.
 type GotoInfo struct {
-	PC         int    // Program counter where the goto is emitted
+	PC         int    // Program counter where the goto JMP instruction is emitted
 	Label      string // Label name
 	BlockDepth int    // Block depth where the goto is emitted
-	LocalCount int    // Number of active locals at the goto point
 	Line       int    // Source line number
 }
 
@@ -163,6 +163,16 @@ func (cg *CodeGenerator) endScope() {
 		}
 		cg.Locals = cg.Locals[:len(cg.Locals)-1]
 	}
+	
+	// Remove labels defined in this scope
+	// Labels are scoped to their enclosing block
+	currentScopeLevel := len(cg.Locals)
+	for name, labelInfo := range cg.labels {
+		if labelInfo.ScopeLevel > currentScopeLevel {
+			delete(cg.labels, name)
+		}
+	}
+	
 	cg.blockDepth--
 }
 
@@ -191,45 +201,6 @@ func (cg *CodeGenerator) getLocal(name string) (int, bool) {
 		}
 	}
 	return -1, false
-}
-
-// countActiveLocals returns the number of active local variables.
-func (cg *CodeGenerator) countActiveLocals() int {
-	count := 0
-	for _, scope := range cg.Locals {
-		for _, local := range scope {
-			if local.Active {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-// getActiveLocalNames returns names of all active local variables.
-func (cg *CodeGenerator) getActiveLocalNames() []string {
-	names := make([]string, 0)
-	for _, scope := range cg.Locals {
-		for _, local := range scope {
-			if local.Active {
-				names = append(names, local.Name)
-			}
-		}
-	}
-	return names
-}
-
-// findJumpedLocal finds the name of a local variable that was jumped over.
-// localCount is the number of locals that were active at the goto point.
-func (cg *CodeGenerator) findJumpedLocal(localCount int) string {
-	// Get all active local names
-	activeNames := cg.getActiveLocalNames()
-	// If we have more active locals now than at the goto point,
-	// the extra ones were jumped over. Return the first one.
-	if len(activeNames) > localCount {
-		return activeNames[localCount]
-	}
-	return ""
 }
 
 // resolveUpvalue resolves a variable as an upvalue by walking the parent chain.
