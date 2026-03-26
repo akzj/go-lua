@@ -368,8 +368,14 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := math.Mod(rb.Value.Num, rc.Value.Num)
-			vm.Stack[vm.Base+a].SetNumber(result)
+			// Lua floor division modulo: a % b = a - floor(a/b) * b
+			// Handle division by zero
+			if rc.Value.Num == 0 {
+				vm.Stack[vm.Base+a].SetNumber(math.NaN())
+			} else {
+				result := rb.Value.Num - math.Floor(rb.Value.Num/rc.Value.Num)*rc.Value.Num
+				vm.Stack[vm.Base+a].SetNumber(result)
+			}
 		}
 
 	case OP_POW:
@@ -392,8 +398,13 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		result := math.Floor(rb.Value.Num / rc.Value.Num)
-		vm.Stack[vm.Base+a].SetNumber(result)
+		// Handle division by zero
+		if rc.Value.Num == 0 {
+			vm.Stack[vm.Base+a].SetNumber(math.NaN())
+		} else {
+			result := math.Floor(rb.Value.Num / rc.Value.Num)
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_UNM:
 		a, b := instr.A(), instr.B()
