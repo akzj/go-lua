@@ -148,6 +148,8 @@ func (p *Parser) parseStmt() Stmt {
 		return p.parseFuncDefStmt()
 	case lexer.TK_GOTO:
 		return p.parseGotoStmt()
+	case lexer.TK_GLOBAL:
+		return p.parseGlobalStmt()
 	case lexer.TK_DBCOLON:
 		return p.parseLabelStmt()
 	default:

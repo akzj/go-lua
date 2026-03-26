@@ -24,12 +24,13 @@ type CodeGenerator struct {
 	currentLine     int // Current source line number for LineInfo
 }
 
-// LocalVar represents a local variable.
+// LocalVar represents a local variable during compilation.
 type LocalVar struct {
-	Name    string
-	Index   int
-	Active  bool
-	IsParam bool
+	Name     string
+	Index    int
+	Active   bool
+	IsParam  bool
+	StartPC  int // PC where variable becomes active
 }
 
 // JumpEntry represents a pending jump to patch.
@@ -96,8 +97,17 @@ func (cg *CodeGenerator) beginScope() {
 func (cg *CodeGenerator) endScope() {
 	if len(cg.Locals) > 0 {
 		scope := &cg.Locals[len(cg.Locals)-1]
+		// Record debug info for each variable going out of scope
 		for i := range *scope {
-			(*scope)[i].Active = false
+			local := &(*scope)[i]
+			local.Active = false
+			// Add to Prototype.LocVars
+			cg.Prototype.LocVars = append(cg.Prototype.LocVars, object.LocVar{
+				Name:     local.Name,
+				Start:    local.StartPC,
+				End:      cg.PC, // Current PC is the end
+				RegIndex: local.Index,
+			})
 		}
 		cg.Locals = cg.Locals[:len(cg.Locals)-1]
 	}
@@ -113,6 +123,7 @@ func (cg *CodeGenerator) addLocal(name string, index int, isParam bool) {
 		Index:   index,
 		Active:  true,
 		IsParam: isParam,
+		StartPC: cg.PC, // Capture when variable becomes active
 	})
 }
 

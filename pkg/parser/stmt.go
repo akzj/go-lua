@@ -352,6 +352,20 @@ func (p *Parser) parseLocalStmt() Stmt {
 	names := []*VarExpr{}
 	attrs := []string{}
 
+	// Check for leading attribute: local <const> a, b
+	// This attribute applies to all variables in the list
+	var leadingAttr string
+	if p.match(lexer.TK_LT) {
+		if p.Current.Type == lexer.TK_NAME {
+			leadingAttr = p.Current.Value.(string)
+			p.advance()
+		}
+		if !p.expect(lexer.TK_GT, "'>'") {
+			p.sync()
+			return nil
+		}
+	}
+
 	// Parse variable names
 	for {
 		if p.Current.Type != lexer.TK_NAME {
@@ -368,8 +382,20 @@ func (p *Parser) parseLocalStmt() Stmt {
 			Name:     name,
 		})
 
-		// Check for attribute (simplified - not fully implemented)
-		// Lua 5.4 supports <const> attribute
+		// Check for per-variable attribute: local a<const>, b, c<const>
+		if p.match(lexer.TK_LT) {
+			if p.Current.Type == lexer.TK_NAME {
+				// Store the attribute (we're ignoring semantics for now)
+				p.advance()
+			}
+			if !p.expect(lexer.TK_GT, "'>'") {
+				p.sync()
+				return nil
+			}
+		} else if leadingAttr != "" {
+			// Apply leading attribute to this variable
+			// (we're storing empty strings for now, semantics ignored)
+		}
 
 		if !p.match(lexer.TK_COMMA) {
 			break
@@ -643,5 +669,90 @@ func (p *Parser) parseAssignOrExprStmt() Stmt {
 	return &ExprStmt{
 		baseStmt: baseStmt{line: line},
 		Expr:     left[0],
+	}
+}
+// parseGlobalStmt parses a Lua 5.4 global statement.
+// Syntax: global [attr] ('*' | namelist) [attr]
+// where attr ::= '<' NAME '>'
+// For Lua 5.4 compatibility, we parse and ignore these statements.
+func (p *Parser) parseGlobalStmt() Stmt {
+	line := p.Current.Line
+	p.advance() // Skip 'global'
+
+	// Check for optional attribute before name list or '*'
+	// attr ::= '<' NAME '>'
+	if p.match(lexer.TK_LT) {
+		// Consume attribute name
+		if p.Current.Type == lexer.TK_NAME {
+			p.advance()
+		}
+		// Expect '>'
+		if !p.expect(lexer.TK_GT, "'>'") {
+			p.sync()
+			return nil
+		}
+	}
+
+	var names []string
+	var values []Expr
+
+	// Now parse either '*' or a name list
+	if p.match(lexer.TK_STAR) {
+		// global <attr> * - wildcard form
+		// Optionally, there might be another attribute after
+		if p.match(lexer.TK_LT) {
+			if p.Current.Type == lexer.TK_NAME {
+				p.advance()
+			}
+			if !p.expect(lexer.TK_GT, "'>'") {
+				p.sync()
+				return nil
+			}
+		}
+	} else if p.Current.Type == lexer.TK_NAME {
+		// global <attr> name1, name2, ... [attr] [= value]
+		names = []string{}
+		for {
+			// Get the name
+			name := p.Current.Value.(string)
+			names = append(names, name)
+			p.advance() // Skip name
+			
+			// Check for attribute after name
+			if p.match(lexer.TK_LT) {
+				if p.Current.Type == lexer.TK_NAME {
+					p.advance()
+				}
+				if !p.expect(lexer.TK_GT, "'>'") {
+					p.sync()
+					return nil
+				}
+			}
+			
+			if !p.match(lexer.TK_COMMA) {
+				break
+			}
+		}
+		
+		// Check for assignment: global name = value
+		if p.match(lexer.TK_ASSIGN) {
+			// Parse the value expressions
+			values = []Expr{}
+			for {
+				val := p.parseExpr()
+				if val != nil {
+					values = append(values, val)
+				}
+				if !p.match(lexer.TK_COMMA) {
+					break
+				}
+			}
+		}
+	}
+
+	return &GlobalStmt{
+		baseStmt: baseStmt{line: line},
+		Names:    names,
+		Values:   values,
 	}
 }

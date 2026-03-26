@@ -24,6 +24,7 @@ import (
 //   - next: table traversal function
 //   - select: returns arguments from a given index
 //   - unpack: unpacks a table into individual values
+//   - debug: debug library (getinfo, getlocal, traceback, etc.)
 func (s *State) OpenLibs() {
 	// Basic functions
 	s.Register("print", stdPrint)
@@ -50,6 +51,7 @@ func (s *State) OpenLibs() {
 	s.openTableLib()
 	s.openMathLib()
 	s.openIOLib()
+	s.openDebugLib()
 }
 
 // stdPrint implements the Lua print() function.
@@ -172,8 +174,13 @@ func stdAssert(L *State) int {
 
 // stdError implements the Lua error() function.
 // Raises an error with the given message.
+// error(message [, level])
+// level 0 = no stack trace
+// level 1 = add stack trace (default)
 func stdError(L *State) int {
 	msg := "error"
+	level := 1 // Default level
+	
 	if L.GetTop() >= 1 {
 		v := L.vm.GetStack(1)
 		switch v.Type {
@@ -184,8 +191,21 @@ func stdError(L *State) int {
 			msg = fmt.Sprintf("%g", num)
 		}
 	}
-	L.PushString(msg)
-	L.Error()
+	
+	if L.GetTop() >= 2 {
+		levelFloat, ok := L.ToNumber(2)
+		if ok {
+			level = int(levelFloat)
+		}
+	}
+	
+	if level == 0 {
+		// No stack trace - just panic with the message
+		panic(&LuaError{Message: msg})
+	} else {
+		L.PushString(msg)
+		L.Error()
+	}
 	return 0 // never reached
 }
 
@@ -209,58 +229,37 @@ func stdPcall(L *State) int {
 		return 2
 	}
 
-	funcVal := *fv
 	nargs := top - 1
-
-	// The VM saves StackTop before calling us, then moves results from savedStackTop to funcSlot.
+	
+	// Save the StackTop that the outer CALL handler set
+	// This is where our results should start
 	savedStackTop := L.vm.StackTop
-
-	// Push function and args for ProtectedCall
-	funcPos := L.vm.StackTop
-	L.vm.Push(funcVal)
-	funcIdx := funcPos - L.vm.Base
-
-	for i := 0; i < nargs; i++ {
-		arg := L.vm.Stack[L.vm.Base+1+i]
-		L.vm.Push(arg)
-	}
-
-	err := L.vm.ProtectedCall(funcIdx, nargs, -1)
+	
+	// Call the function - it's at Stack[Base], so funcIdx=0
+	err := L.vm.ProtectedCall(0, nargs, -1)
 
 	if err != nil {
-		// Error case: reset stack to savedStackTop, then place false + error message
+		// Restore StackTop and push error results
 		L.vm.StackTop = savedStackTop
-		L.vm.Stack[savedStackTop] = object.TValue{Type: object.TypeBoolean}
-		L.vm.Stack[savedStackTop].Value.Bool = false
-		L.vm.Stack[savedStackTop+1] = object.TValue{Type: object.TypeString}
-		L.vm.Stack[savedStackTop+1].Value.Str = err.Error()
-		L.vm.StackTop = savedStackTop + 2
+		L.PushBoolean(false)
+		L.PushString(err.Error())
 		return 2
 	}
 
-	// Success: ProtectedCall placed results at Stack[funcPos]
-	// Note: funcPos == savedStackTop, so we need to copy results first
-	numResults := L.vm.StackTop - funcPos
-	if numResults < 0 {
-		numResults = 0
-	}
-
-	// Copy results to temp slice to avoid overwriting
-	results := make([]object.TValue, numResults)
+	// Success: ProtectedCall placed results starting at Stack[Base]
+	// Count the results before we change StackTop
+	numResults := L.vm.StackTop - L.vm.Base
+	
+	// Restore StackTop to where the outer CALL expects results
+	L.vm.StackTop = savedStackTop
+	
+	// Push true
+	L.PushBoolean(true)
+	
+	// Copy results from Stack[Base] to stack top
 	for i := 0; i < numResults; i++ {
-		results[i] = L.vm.Stack[funcPos+i]
+		L.vm.Push(L.vm.Stack[L.vm.Base+i])
 	}
-
-	// Place true at savedStackTop
-	L.vm.Stack[savedStackTop] = object.TValue{Type: object.TypeBoolean}
-	L.vm.Stack[savedStackTop].Value.Bool = true
-
-	// Copy results after true
-	for i := 0; i < numResults; i++ {
-		L.vm.Stack[savedStackTop+1+i] = results[i]
-	}
-
-	L.vm.StackTop = savedStackTop + 1 + numResults
 
 	return 1 + numResults
 }
