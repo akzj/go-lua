@@ -45,6 +45,14 @@ func (p *Parser) parseExprPrecedence(minPrecedence precedenceLevel) Expr {
 		return nil
 	}
 
+	// Continue with binary operators
+	return p.parseBinaryExprFromLeft(left, minPrecedence)
+}
+
+// parseBinaryExprFromLeft continues parsing binary expressions from an existing left expression.
+// This is used when we've already parsed a prefix expression (possibly with suffixes) and
+// need to continue with binary operator parsing.
+func (p *Parser) parseBinaryExprFromLeft(left Expr, minPrecedence precedenceLevel) Expr {
 	// Parse infix operators
 	for {
 		// Get precedence of current operator
@@ -142,7 +150,9 @@ func (p *Parser) parsePrefixExpr() Expr {
 		return p.parseAnonFunc()
 
 	case lexer.TK_LBRACE:
-		return p.parseTableConstructor()
+		line := p.Current.Line
+		expr := p.parseTableConstructor()
+		return p.parseSuffixes(expr, line)
 
 	case lexer.TK_NAME:
 		return p.parseVarExpr()
@@ -159,18 +169,10 @@ func (p *Parser) parsePrefixExpr() Expr {
 	}
 }
 
-// parseVarExpr parses a variable expression (name, field access, index).
-func (p *Parser) parseVarExpr() Expr {
-	line := p.Current.Line
-	name := p.Current.Value.(string)
-	p.advance()
-
-	var expr Expr = &VarExpr{
-		baseExpr: baseExpr{line: line},
-		Name:     name,
-	}
-
-	// Parse suffixes (field access, index, call)
+// parseSuffixes parses suffixes (field access, index, call) on an expression.
+// This is used after parsing primary expressions like variables, table constructors,
+// and parenthesized expressions.
+func (p *Parser) parseSuffixes(expr Expr, line int) Expr {
 	for {
 		switch p.Current.Type {
 		case lexer.TK_DOT:
@@ -232,6 +234,21 @@ func (p *Parser) parseVarExpr() Expr {
 	}
 }
 
+// parseVarExpr parses a variable expression (name, field access, index).
+func (p *Parser) parseVarExpr() Expr {
+	line := p.Current.Line
+	name := p.Current.Value.(string)
+	p.advance()
+
+	expr := &VarExpr{
+		baseExpr: baseExpr{line: line},
+		Name:     name,
+	}
+
+	// Parse suffixes (field access, index, call)
+	return p.parseSuffixes(expr, line)
+}
+
 // parseParenExpr parses a parenthesized expression.
 func (p *Parser) parseParenExpr() Expr {
 	line := p.Current.Line
@@ -244,10 +261,12 @@ func (p *Parser) parseParenExpr() Expr {
 		return expr
 	}
 
-	return &ParenExpr{
+	// Parenthesized expressions can have suffixes like indexing and field access
+	// e.g., (expr)[1], (expr).field
+	return p.parseSuffixes(&ParenExpr{
 		baseExpr: baseExpr{line: line},
 		Expr:     expr,
-	}
+	}, line)
 }
 
 // parseUnaryExpr parses a unary expression.
@@ -464,12 +483,85 @@ func (p *Parser) parseTableEntry() *TableEntry {
 			entry.Value = value
 			return entry
 		} else {
-			// It's a value-only entry (just a name/expression)
-			entry.Kind = TableEntryValue
-			entry.Value = &VarExpr{
+			// It's a value-only entry - could be a simple name or a function call
+			var expr Expr = &VarExpr{
 				baseExpr: baseExpr{line: line},
 				Name:     name,
 			}
+
+			// Check for function call suffixes
+		suffixLoop:
+			for {
+				switch p.Current.Type {
+				case lexer.TK_COLON:
+					// Method call
+					p.advance()
+					if p.Current.Type != lexer.TK_NAME {
+						p.Error("expected method name after ':'")
+						entry.Kind = TableEntryValue
+						entry.Value = expr
+						return entry
+					}
+					method := p.Current.Value.(string)
+					p.advance()
+					args := p.parseArgs()
+					expr = &MethodCallExpr{
+						baseExpr: baseExpr{line: line},
+						Object:   expr,
+						Method:   method,
+						Args:     args,
+					}
+
+				case lexer.TK_LPAREN, lexer.TK_LBRACE, lexer.TK_STRING:
+					// Function call
+					args := p.parseArgs()
+					expr = &CallExpr{
+						baseExpr: baseExpr{line: line},
+						Func:     expr,
+						Args:     args,
+					}
+
+				case lexer.TK_DOT:
+					// Field access - continue parsing
+					p.advance()
+					if p.Current.Type != lexer.TK_NAME {
+						p.Error("expected field name after '.'")
+						entry.Kind = TableEntryValue
+						entry.Value = expr
+						return entry
+					}
+					field := p.Current.Value.(string)
+					p.advance()
+					expr = &FieldExpr{
+						baseExpr: baseExpr{line: line},
+						Table:    expr,
+						Field:    field,
+					}
+
+				case lexer.TK_LBRACK:
+					// Index access - continue parsing
+					p.advance()
+					index := p.parseExpr()
+					if !p.match(lexer.TK_RBRACK) {
+						p.Error("expected ']' after index expression")
+						entry.Kind = TableEntryValue
+						entry.Value = expr
+						return entry
+					}
+					expr = &IndexExpr{
+						baseExpr: baseExpr{line: line},
+						Table:    expr,
+						Index:    index,
+					}
+
+				default:
+					// No more suffixes - break out to check for binary operators
+					break suffixLoop
+				}
+			}
+			// After parsing suffixes, continue with binary expression parsing
+			entry.Kind = TableEntryValue
+			entry.Value = p.parseBinaryExprFromLeft(expr, precNone)
 			return entry
 		}
 	}

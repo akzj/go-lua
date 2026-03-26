@@ -42,6 +42,8 @@ func (s *State) OpenLibs() {
 	s.Register("getmetatable", stdGetmetatable)
 	s.Register("rawset", stdRawset)
 	s.Register("rawget", stdRawget)
+	s.Register("require", stdRequire)
+	s.Register("load", stdLoad)
 
 	// Standard library modules
 	s.openStringLib()
@@ -566,5 +568,124 @@ func stdRawget(L *State) int {
 	} else {
 		L.vm.Push(*val)
 	}
+	return 1
+}
+
+// stdRequire implements a minimal require() function.
+// For now, returns an empty table for unknown modules.
+func stdRequire(L *State) int {
+	// Get module name (argument 1)
+	_ = L.vm.GetStack(1) // module name - not used in this minimal implementation
+
+	// Return an empty table for unknown modules
+	L.NewTable()
+	return 1
+}
+
+// stdLoad implements the Lua load() function.
+// load(chunk [, chunkname [, mode [, env]]])
+// Loads a chunk of Lua code and returns it as a function.
+func stdLoad(L *State) int {
+	top := L.GetTop()
+	if top < 1 {
+		L.PushNil()
+		L.PushString("bad argument #1 to 'load' (string expected, got no value)")
+		return 2
+	}
+
+	// Get the chunk (argument 1)
+	chunkVal := L.vm.GetStack(1)
+
+	// Check if chunk is a string or function
+	var code string
+	var isFunction bool
+
+	if chunkVal.IsString() {
+		code, _ = chunkVal.ToString()
+	} else if chunkVal.IsFunction() {
+		isFunction = true
+	} else {
+		L.PushNil()
+		L.PushString("bad argument #1 to 'load' (string or function expected)")
+		return 2
+	}
+
+	// Get optional chunkname (argument 2)
+	name := "load"
+	if top >= 2 {
+		v := L.vm.GetStack(2)
+		if v != nil && !v.IsNil() {
+			if s, ok := v.ToString(); ok {
+				name = s
+			}
+		}
+	}
+
+	// mode (argument 3) is ignored for now - we only support text mode
+
+	// Get optional env (argument 4)
+	var envTable *object.Table
+	if top >= 4 {
+		envVal := L.vm.GetStack(4)
+		if envVal != nil && envVal.IsTable() {
+			envTable, _ = envVal.ToTable()
+		}
+	}
+
+	// Handle function chunk (reader function)
+	if isFunction {
+		// Call the function repeatedly to get the chunk
+		// For simplicity, we'll collect all results into a string
+		var chunks []byte
+
+		for {
+			// Push function and call it
+			L.vm.Push(*chunkVal)
+			if err := L.Call(0, 1); err != nil {
+				L.PushNil()
+				L.PushString(err.Error())
+				return 2
+			}
+
+			// Get result
+			result := L.vm.GetStack(-1)
+			if result.IsNil() || result.IsString() {
+				if result.IsString() {
+					s, _ := result.ToString()
+					chunks = append(chunks, []byte(s)...)
+				}
+				L.Pop(1) // Pop the result
+				break // End of chunk
+			}
+
+			L.Pop(1) // Pop the result
+		}
+		code = string(chunks)
+	}
+
+	// Load the code
+	err := L.LoadString(code, name)
+	if err != nil {
+		L.PushNil()
+		L.PushString(err.Error())
+		return 2
+	}
+
+	// If env is provided, set it as the _ENV upvalue
+	if envTable != nil {
+		// Get the function from the stack
+		funcVal := L.vm.GetStack(-1)
+		if funcVal.IsFunction() {
+			closure, ok := funcVal.ToFunction()
+			if ok && !closure.IsGo && len(closure.Upvalues) > 0 {
+				// Set the _ENV upvalue (index 0) to point to the provided env table
+				envTValue := &object.TValue{Type: object.TypeTable}
+				envTValue.Value.GC = envTable
+				closure.Upvalues[0].Value = envTValue
+			}
+		}
+	}
+
+	// Return the function
 	return 1
 }

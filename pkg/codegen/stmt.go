@@ -130,9 +130,10 @@ func (cg *CodeGenerator) assignToVar(expr parser.Expr, valueReg int) {
 		} else if upIdx, ok := cg.resolveUpvalue(e.Name); ok {
 			cg.EmitABC(vm.OP_SETUPVAL, valueReg, upIdx, 0)
 		} else {
-			// Global: SETTABUP 0, K(name), RK(value)
+			// Global: SETTABUP A=0, B=constIdx, C=RK(value)
+			// B is constant index directly (K[B] format), C is RK mode
 			nameIdx := cg.addOrGetConstant(*object.NewString(e.Name))
-			cg.EmitABC(vm.OP_SETTABUP, 0, nameIdx+256, valueReg)
+			cg.EmitABC(vm.OP_SETTABUP, 0, nameIdx, valueReg)
 		}
 
 	case *parser.IndexExpr:
