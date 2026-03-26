@@ -146,7 +146,15 @@ func (l *Lexer) NextToken() (Token, error) {
 			if l.Match('=') {
 				return Token{Type: TK_NE, Line: tokenLine, Column: tokenColumn}, nil
 			}
-			return Token{Type: TK_CARET, Value: "~", Line: tokenLine, Column: tokenColumn}, nil
+			return Token{Type: TK_BXOR, Line: tokenLine, Column: tokenColumn}, nil
+
+		case '&': // '&'
+			l.Advance()
+			return Token{Type: TK_BAND, Line: tokenLine, Column: tokenColumn}, nil
+
+		case '|': // '|'
+			l.Advance()
+			return Token{Type: TK_BOR, Line: tokenLine, Column: tokenColumn}, nil
 
 		case ':': // ':' or '::'
 			l.Advance()
@@ -625,6 +633,14 @@ func (l *Lexer) readNumber() (Token, error) {
 
 	val, err := strconv.ParseInt(numStr, 0, 64)
 	if err != nil {
+		// For hex numbers, try parsing as uint64 first (for large values like 0xFFFFFFFFFFFFFFFF)
+		if isHex {
+			uval, uerr := strconv.ParseUint(numStr, 0, 64)
+			if uerr == nil {
+				// Return as float since Lua treats these as numbers
+				return Token{Type: TK_FLOAT, Value: float64(uval), Line: tokenLine, Column: tokenColumn}, nil
+			}
+		}
 		// Try parsing as float if int parsing fails
 		fval, ferr := strconv.ParseFloat(numStr, 64)
 		if ferr != nil {

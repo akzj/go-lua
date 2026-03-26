@@ -160,7 +160,7 @@ func (p *Parser) parsePrefixExpr() Expr {
 	case lexer.TK_LPAREN:
 		return p.parseParenExpr()
 
-	case lexer.TK_MINUS, lexer.TK_NOT, lexer.TK_HASH, lexer.TK_CARET:
+	case lexer.TK_MINUS, lexer.TK_NOT, lexer.TK_HASH, lexer.TK_CARET, lexer.TK_BXOR:
 		return p.parseUnaryExpr()
 
 	default:
@@ -315,6 +315,9 @@ func (p *Parser) parseUnaryExpr() Expr {
 	case lexer.TK_CARET:
 		// This shouldn't happen in unary context, but handle it
 		opStr = "^"
+	case lexer.TK_BXOR:
+		// Unary ~ for bitwise NOT
+		opStr = "~"
 	}
 
 	return &UnOpExpr{
@@ -657,6 +660,12 @@ func (p *Parser) createBinOpExpr(left Expr, op lexer.Token, right Expr) Expr {
 		opStr = "<<"
 	case lexer.TK_SHR:
 		opStr = ">>"
+	case lexer.TK_BAND:
+		opStr = "&"
+	case lexer.TK_BOR:
+		opStr = "|"
+	case lexer.TK_BXOR:
+		opStr = "~"
 	}
 
 	return &BinOpExpr{
@@ -676,6 +685,12 @@ func (p *Parser) getOperatorPrecedence() precedenceLevel {
 		return precAnd
 	case lexer.TK_LT, lexer.TK_GT, lexer.TK_LE, lexer.TK_GE, lexer.TK_EQ, lexer.TK_NE:
 		return precComparison
+	case lexer.TK_BOR:
+		return precBitOr
+	case lexer.TK_BXOR:
+		return precBitXor
+	case lexer.TK_BAND:
+		return precBitAnd
 	case lexer.TK_SHL, lexer.TK_SHR:
 		return precShift
 	case lexer.TK_CONCAT:
