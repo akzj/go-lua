@@ -132,6 +132,8 @@ func (p *Parser) parseStmt() Stmt {
 		return p.parseIfStmt()
 	case lexer.TK_WHILE:
 		return p.parseWhileStmt()
+	case lexer.TK_DO:
+		return p.parseDoBlock()
 	case lexer.TK_REPEAT:
 		return p.parseRepeatStmt()
 	case lexer.TK_FOR:

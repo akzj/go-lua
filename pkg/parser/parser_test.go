@@ -387,6 +387,39 @@ func TestParseLabel(t *testing.T) {
 	}
 }
 
+func TestParseDoBlock(t *testing.T) {
+	stmt := parseStmt(t, "do local x = 1 print(x) end")
+	if stmt, ok := stmt.(*DoStmt); !ok {
+		t.Errorf("Expected do statement, got %v", stmt)
+	}
+}
+
+func TestParseDoBlockEmpty(t *testing.T) {
+	stmt := parseStmt(t, "do end")
+	if stmt, ok := stmt.(*DoStmt); !ok {
+		t.Errorf("Expected empty do statement, got %v", stmt)
+	}
+}
+
+func TestParseDoBlockNested(t *testing.T) {
+	source := "do do print('nested') end end"
+	p := parseSource(t, source)
+	block := p.parseChunk()
+	if len(block.Stmts) != 1 {
+		t.Fatalf("Expected 1 statement, got %d", len(block.Stmts))
+	}
+	outerDo, ok := block.Stmts[0].(*DoStmt)
+	if !ok {
+		t.Fatalf("Expected outer do statement, got %T", block.Stmts[0])
+	}
+	if len(outerDo.Body.Stmts) != 1 {
+		t.Fatalf("Expected 1 statement in outer do body, got %d", len(outerDo.Body.Stmts))
+	}
+	if _, ok := outerDo.Body.Stmts[0].(*DoStmt); !ok {
+		t.Errorf("Expected nested do statement, got %T", outerDo.Body.Stmts[0])
+	}
+}
+
 func TestParseExprStmt(t *testing.T) {
 	stmt := parseStmt(t, "print('hello')")
 	if stmt, ok := stmt.(*ExprStmt); !ok {

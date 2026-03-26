@@ -486,3 +486,71 @@ end`
 	}
 }
 
+// TestShebang tests that shebang lines are skipped.
+func TestShebang(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected lexer.TokenType
+	}{
+		{"simple_shebang", "#!/usr/bin/lua\nreturn", lexer.TK_RETURN},
+		{"shebang_with_args", "#!../lua\nprint('hello')", lexer.TK_NAME},
+		{"shebang_relative", "#!./lua\nlocal x = 1", lexer.TK_LOCAL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.NewLexer([]byte(tt.input), "test")
+			tok, err := l.NextToken()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tok.Type != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, tok.Type)
+			}
+		})
+	}
+}
+
+// TestShebangPreservesLineNumbers tests that shebang doesn't affect line counting.
+func TestShebangPreservesLineNumbers(t *testing.T) {
+	input := "#!/usr/bin/lua\nlocal x = 1"
+	l := lexer.NewLexer([]byte(input), "test")
+
+	tok, err := l.NextToken()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 'local' should be on line 2
+	if tok.Line != 2 {
+		t.Errorf("expected line 2, got line %d", tok.Line)
+	}
+}
+
+// TestShebangNotAtStart tests that #! in the middle of file is not treated as shebang.
+func TestShebangNotAtStart(t *testing.T) {
+	// When # is not at start, it should be treated as length operator
+	input := "local x = #y"
+	l := lexer.NewLexer([]byte(input), "test")
+
+	// local
+	tok, _ := l.NextToken()
+	if tok.Type != lexer.TK_LOCAL {
+		t.Errorf("expected TK_LOCAL, got %v", tok.Type)
+	}
+	// x
+	tok, _ = l.NextToken()
+	// =
+	tok, _ = l.NextToken()
+	// # (this is what we're testing)
+	tok, _ = l.NextToken()
+	if tok.Type != lexer.TK_HASH {
+		t.Errorf("expected TK_HASH for # in middle of file, got %v", tok.Type)
+	}
+	// y
+	tok, _ = l.NextToken()
+	if tok.Value != "y" {
+		t.Errorf("expected identifier 'y', got %v", tok.Value)
+	}
+}
+

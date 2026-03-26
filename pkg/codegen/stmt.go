@@ -26,6 +26,9 @@ func (cg *CodeGenerator) genStmt(stmt parser.Stmt) {
 	case *parser.BlockStmt:
 		cg.genBlock(s)
 
+	case *parser.DoStmt:
+		cg.genDo(s)
+
 	case *parser.AssignStmt:
 		cg.genAssign(s)
 
@@ -607,6 +610,14 @@ func (cg *CodeGenerator) genBreak(stmt *parser.BreakStmt) {
 	// This requires loop context tracking
 	// Simplified: emit JMP with 0 offset (to be patched by loop)
 	cg.EmitAsBx(vm.OP_JMP, 0, 0)
+}
+
+// genDo generates code for a do...end block.
+// A do block simply executes its body statements in a new scope.
+func (cg *CodeGenerator) genDo(stmt *parser.DoStmt) {
+	if stmt.Body != nil {
+		cg.genBlock(stmt.Body)
+	}
 }
 
 // genExprStmt generates code for an expression statement.
