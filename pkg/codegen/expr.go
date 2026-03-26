@@ -207,22 +207,91 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 	// Generate function expression
 	funcReg := cg.genExpr(expr.Func)
 
-	// Check if it's actually a method call in disguise (table:method)
-	// For regular calls, arguments start at funcReg + 1
+	// Check if the last argument is a call expression (for multi-return propagation)
+	lastArgIsCall := false
+	if len(expr.Args) > 0 {
+		lastArg := expr.Args[len(expr.Args)-1]
+		_, lastArgIsCall = lastArg.(*parser.CallExpr)
+		if !lastArgIsCall {
+			_, lastArgIsCall = lastArg.(*parser.MethodCallExpr)
+		}
+	}
 
 	// Generate arguments
 	argCount := len(expr.Args)
 	for i, arg := range expr.Args {
-		argReg := cg.genExpr(arg)
-		// Move argument to correct position if needed
-		if argReg != funcReg+1+i {
-			cg.EmitABC(vm.OP_MOVE, funcReg+1+i, argReg, 0)
-			cg.freeRegister()
+		isLast := (i == len(expr.Args)-1)
+		if isLast && lastArgIsCall {
+			// Last argument is a call - generate with ExpectedResults=0 (all results)
+			// The inner call's result will be at funcReg+1+i
+			argFuncReg := funcReg + 1 + i
+			// Handle both CallExpr and MethodCallExpr
+			if callExpr, ok := arg.(*parser.CallExpr); ok {
+				// Generate the inner call's function at the correct position
+				innerFuncReg := cg.genExpr(callExpr.Func)
+				if innerFuncReg != argFuncReg {
+					cg.EmitABC(vm.OP_MOVE, argFuncReg, innerFuncReg, 0)
+					cg.freeRegister()
+				}
+				// Generate inner call's arguments at argFuncReg+1, argFuncReg+2, ...
+				for j, innerArg := range callExpr.Args {
+					innerArgReg := cg.genExpr(innerArg)
+					targetReg := argFuncReg + 1 + j
+					if innerArgReg != targetReg {
+						cg.EmitABC(vm.OP_MOVE, targetReg, innerArgReg, 0)
+						cg.freeRegister()
+					}
+				}
+				// Emit inner CALL with C=0 (all results), result at argFuncReg
+				cg.EmitABC(vm.OP_CALL, argFuncReg, len(callExpr.Args)+1, 0)
+			} else if methodExpr, ok := arg.(*parser.MethodCallExpr); ok {
+				// Method call: obj:method(args)
+				// Generate object at argFuncReg (for SELF)
+				objReg := cg.genExpr(methodExpr.Object)
+				if objReg != argFuncReg {
+					cg.EmitABC(vm.OP_MOVE, argFuncReg, objReg, 0)
+					cg.freeRegister()
+				}
+				// Get method constant
+				methodIdx := cg.addOrGetConstant(*object.NewString(methodExpr.Method))
+				// Use SELF: R(A+1) := R(B); R(A) := R(B)[RK(C)]
+				// This loads the method and puts object in R(A+1)
+				if methodIdx <= 255 {
+					cg.EmitABC(vm.OP_SELF, argFuncReg, argFuncReg, methodIdx+256)
+				} else {
+					keyReg := cg.allocRegister()
+					cg.EmitABx(vm.OP_LOADK, keyReg, methodIdx)
+					cg.EmitABC(vm.OP_MOVE, argFuncReg+1, argFuncReg, 0)
+					cg.EmitABC(vm.OP_GETTABLE, argFuncReg, argFuncReg, keyReg)
+					cg.freeRegister()
+				}
+				// Now argFuncReg contains method, argFuncReg+1 contains self
+				cg.setStackTop(argFuncReg + 2)
+				// Generate arguments at argFuncReg+2, argFuncReg+3, ...
+				for j, innerArg := range methodExpr.Args {
+					innerArgReg := cg.genExpr(innerArg)
+					targetReg := argFuncReg + 2 + j
+					if innerArgReg != targetReg {
+						cg.EmitABC(vm.OP_MOVE, targetReg, innerArgReg, 0)
+						cg.freeRegister()
+					}
+				}
+				// Emit inner CALL with C=0 (all results), arg count includes self
+				cg.EmitABC(vm.OP_CALL, argFuncReg, len(methodExpr.Args)+2, 0)
+			}
+			// For C=0, the VM sets StackTop; don't adjust here
+		} else {
+			argReg := cg.genExpr(arg)
+			// Move argument to correct position if needed
+			if argReg != funcReg+1+i {
+				cg.EmitABC(vm.OP_MOVE, funcReg+1+i, argReg, 0)
+				cg.freeRegister()
+			}
 		}
 	}
 
 	// Emit CALL: R(A) := R(A)(R(A+1), ..., R(A+C-1))
-	// B = argCount + 1 (including function), 0 = vararg
+	// B = argCount + 1 (including function), 0 = vararg (when last arg is multi-return call)
 	// C = nresults + 1, or 0 = multiple results
 	resultReg := funcReg
 	cField := 2 // default: 1 result (c = nresults + 1)
@@ -233,7 +302,12 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 		cField = 0
 	}
 	// ExpectedResults == -1 means "default" (1 result, cField = 2)
-	cg.EmitABC(vm.OP_CALL, resultReg, argCount+1, cField)
+	
+	bField := argCount + 1
+	if lastArgIsCall {
+		bField = 0 // Variable number of args from stack top
+	}
+	cg.EmitABC(vm.OP_CALL, resultReg, bField, cField)
 
 	// After CALL, result is in funcReg
 	// Set stack top based on expected results
@@ -280,14 +354,85 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 		cg.MaxStackSize = cg.StackTop
 	}
 
+	// Check if the last argument is a call expression (for multi-return propagation)
+	lastArgIsCall := false
+	if len(expr.Args) > 0 {
+		lastArg := expr.Args[len(expr.Args)-1]
+		_, lastArgIsCall = lastArg.(*parser.CallExpr)
+		if !lastArgIsCall {
+			_, lastArgIsCall = lastArg.(*parser.MethodCallExpr)
+		}
+	}
+
 	// Generate arguments (starting at funcReg+2)
 	argCount := len(expr.Args)
 	for i, arg := range expr.Args {
-		argReg := cg.genExpr(arg)
-		targetReg := funcReg + 2 + i
-		if argReg != targetReg {
-			cg.EmitABC(vm.OP_MOVE, targetReg, argReg, 0)
-			cg.freeRegister()
+		isLast := (i == len(expr.Args)-1)
+		if isLast && lastArgIsCall {
+			// Last argument is a call - generate with ExpectedResults=0 (all results)
+			// The inner call's result will be at funcReg+2+i
+			argFuncReg := funcReg + 2 + i
+			// Handle both CallExpr and MethodCallExpr
+			if callExpr, ok := arg.(*parser.CallExpr); ok {
+				// Generate the inner call's function at the correct position
+				innerFuncReg := cg.genExpr(callExpr.Func)
+				if innerFuncReg != argFuncReg {
+					cg.EmitABC(vm.OP_MOVE, argFuncReg, innerFuncReg, 0)
+					cg.freeRegister()
+				}
+				// Generate inner call's arguments at argFuncReg+1, argFuncReg+2, ...
+				for j, innerArg := range callExpr.Args {
+					innerArgReg := cg.genExpr(innerArg)
+					targetReg := argFuncReg + 1 + j
+					if innerArgReg != targetReg {
+						cg.EmitABC(vm.OP_MOVE, targetReg, innerArgReg, 0)
+						cg.freeRegister()
+					}
+				}
+				// Emit inner CALL with C=0 (all results), result at argFuncReg
+				cg.EmitABC(vm.OP_CALL, argFuncReg, len(callExpr.Args)+1, 0)
+			} else if methodExpr, ok := arg.(*parser.MethodCallExpr); ok {
+				// Method call: obj:method(args)
+				// Generate object at argFuncReg (for SELF)
+				objReg := cg.genExpr(methodExpr.Object)
+				if objReg != argFuncReg {
+					cg.EmitABC(vm.OP_MOVE, argFuncReg, objReg, 0)
+					cg.freeRegister()
+				}
+				// Get method constant
+				methodIdx := cg.addOrGetConstant(*object.NewString(methodExpr.Method))
+				// Use SELF: R(A+1) := R(B); R(A) := R(B)[RK(C)]
+				if methodIdx <= 255 {
+					cg.EmitABC(vm.OP_SELF, argFuncReg, argFuncReg, methodIdx+256)
+				} else {
+					keyReg := cg.allocRegister()
+					cg.EmitABx(vm.OP_LOADK, keyReg, methodIdx)
+					cg.EmitABC(vm.OP_MOVE, argFuncReg+1, argFuncReg, 0)
+					cg.EmitABC(vm.OP_GETTABLE, argFuncReg, argFuncReg, keyReg)
+					cg.freeRegister()
+				}
+				// Now argFuncReg contains method, argFuncReg+1 contains self
+				cg.setStackTop(argFuncReg + 2)
+				// Generate arguments at argFuncReg+2, argFuncReg+3, ...
+				for j, innerArg := range methodExpr.Args {
+					innerArgReg := cg.genExpr(innerArg)
+					targetReg := argFuncReg + 2 + j
+					if innerArgReg != targetReg {
+						cg.EmitABC(vm.OP_MOVE, targetReg, innerArgReg, 0)
+						cg.freeRegister()
+					}
+				}
+				// Emit inner CALL with C=0 (all results), arg count includes self
+				cg.EmitABC(vm.OP_CALL, argFuncReg, len(methodExpr.Args)+2, 0)
+			}
+			// For C=0, the VM sets StackTop; don't adjust here
+		} else {
+			argReg := cg.genExpr(arg)
+			targetReg := funcReg + 2 + i
+			if argReg != targetReg {
+				cg.EmitABC(vm.OP_MOVE, targetReg, argReg, 0)
+				cg.freeRegister()
+			}
 		}
 	}
 
@@ -300,7 +445,12 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 		cField = 0
 	}
 	// ExpectedResults == -1 means "default" (1 result, cField = 2)
-	cg.EmitABC(vm.OP_CALL, funcReg, argCount+2, cField) // +2 for self
+	
+	bField := argCount + 2 // +2 for self
+	if lastArgIsCall {
+		bField = 0 // Variable number of args from stack top
+	}
+	cg.EmitABC(vm.OP_CALL, funcReg, bField, cField)
 
 	// Set stack top based on expected results
 	// For cField == 0 (all results), the VM handles stack top
