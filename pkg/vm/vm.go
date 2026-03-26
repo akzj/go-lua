@@ -486,7 +486,14 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaLt); ok {
 			vm.Stack[vm.Base+a].SetBoolean(result != nil && !object.IsFalse(result))
 		} else {
-			result := rb.Value.Num < rc.Value.Num
+			var result bool
+			if rb.Type == object.TypeString && rc.Type == object.TypeString {
+				s1, _ := rb.ToString()
+				s2, _ := rc.ToString()
+				result = s1 < s2
+			} else {
+				result = rb.Value.Num < rc.Value.Num
+			}
 			vm.Stack[vm.Base+a].SetBoolean(result)
 		}
 
@@ -498,7 +505,14 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		if result, ok := vm.tryBinaryMetamethod(rb, rc, MetaLe); ok {
 			vm.Stack[vm.Base+a].SetBoolean(result != nil && !object.IsFalse(result))
 		} else {
-			result := rb.Value.Num <= rc.Value.Num
+			var result bool
+			if rb.Type == object.TypeString && rc.Type == object.TypeString {
+				s1, _ := rb.ToString()
+				s2, _ := rc.ToString()
+				result = s1 <= s2
+			} else {
+				result = rb.Value.Num <= rc.Value.Num
+			}
 			vm.Stack[vm.Base+a].SetBoolean(result)
 		}
 
