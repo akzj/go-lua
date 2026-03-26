@@ -32,6 +32,16 @@ func (s *State) openMathLib() {
 		"sin":    stdMathSin,
 		"cos":    stdMathCos,
 		"tan":    stdMathTan,
+		"log":    stdMathLog,
+		"exp":    stdMathExp,
+		"asin":   stdMathAsin,
+		"acos":   stdMathAcos,
+		"atan":   stdMathAtan,
+		"deg":    stdMathDeg,
+		"rad":    stdMathRad,
+		"modf":   stdMathModf,
+		"fmod":   stdMathFmod,
+		"ult":    stdMathUlt,
 	}
 
 	for name, fn := range funcs {
@@ -45,6 +55,13 @@ func (s *State) openMathLib() {
 
 	s.PushNumber(math.Inf(1)) // +Inf for math.huge
 	s.SetField(tableIdx, "huge")
+
+	// Integer limits (Lua 5.3+)
+	s.PushNumber(float64(math.MinInt64))
+	s.SetField(tableIdx, "mininteger")
+
+	s.PushNumber(float64(math.MaxInt64))
+	s.SetField(tableIdx, "maxinteger")
 
 	// Register as global
 	s.SetGlobal("math")
@@ -244,5 +261,158 @@ func stdMathTan(L *State) int {
 		return 1
 	}
 	L.PushNumber(math.Tan(x))
+	return 1
+}
+
+// stdMathLog implements math.log(x [, base])
+// Returns logarithm of x. If base is provided, uses that base.
+func stdMathLog(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	
+	if L.GetTop() >= 2 {
+		base, ok := L.ToNumber(2)
+		if ok && base > 0 && base != 1 {
+			L.PushNumber(math.Log(x) / math.Log(base))
+			return 1
+		}
+	}
+	
+	L.PushNumber(math.Log(x))
+	return 1
+}
+
+// stdMathExp implements math.exp(x)
+// Returns e^x.
+func stdMathExp(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(1)
+		return 1
+	}
+	L.PushNumber(math.Exp(x))
+	return 1
+}
+
+// stdMathAsin implements math.asin(x)
+// Returns arcsine of x in radians.
+func stdMathAsin(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	L.PushNumber(math.Asin(x))
+	return 1
+}
+
+// stdMathAcos implements math.acos(x)
+// Returns arccosine of x in radians.
+func stdMathAcos(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	L.PushNumber(math.Acos(x))
+	return 1
+}
+
+// stdMathAtan implements math.atan(y [, x])
+// Returns arctangent. If x is provided, returns atan2(y, x).
+func stdMathAtan(L *State) int {
+	y, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	
+	if L.GetTop() >= 2 {
+		x, ok := L.ToNumber(2)
+		if ok {
+			L.PushNumber(math.Atan2(y, x))
+			return 1
+		}
+	}
+	
+	L.PushNumber(math.Atan(y))
+	return 1
+}
+
+// stdMathDeg implements math.deg(x)
+// Converts radians to degrees.
+func stdMathDeg(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	L.PushNumber(x * 180 / math.Pi)
+	return 1
+}
+
+// stdMathRad implements math.rad(x)
+// Converts degrees to radians.
+func stdMathRad(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	L.PushNumber(x * math.Pi / 180)
+	return 1
+}
+
+// stdMathModf implements math.modf(x)
+// Returns integer and fractional parts of x.
+func stdMathModf(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		L.PushNumber(0)
+		return 2
+	}
+	intPart := math.Trunc(x)
+	fracPart := x - intPart
+	L.PushNumber(intPart)
+	L.PushNumber(fracPart)
+	return 2
+}
+
+// stdMathFmod implements math.fmod(x, y)
+// Returns remainder of x/y.
+func stdMathFmod(L *State) int {
+	x, ok := L.ToNumber(1)
+	if !ok {
+		L.PushNumber(0)
+		return 1
+	}
+	y, ok := L.ToNumber(2)
+	if !ok || y == 0 {
+		L.PushNumber(0)
+		return 1
+	}
+	L.PushNumber(math.Mod(x, y))
+	return 1
+}
+
+// stdMathUlt implements math.ult(m, n)
+// Returns true if m < n using unsigned comparison.
+func stdMathUlt(L *State) int {
+	m, ok := L.ToNumber(1)
+	if !ok {
+		L.PushBoolean(false)
+		return 1
+	}
+	n, ok := L.ToNumber(2)
+	if !ok {
+		L.PushBoolean(false)
+		return 1
+	}
+	// Convert to uint64 for unsigned comparison
+	L.PushBoolean(uint64(m) < uint64(n))
 	return 1
 }

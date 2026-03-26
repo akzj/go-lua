@@ -22,6 +22,10 @@ type CodeGenerator struct {
 	Parent          *CodeGenerator
 	ExpectedResults int // Number of results expected from next expression (-1 = default/1 result, 0 = multireturn, >0 = exact count)
 	currentLine     int // Current source line number for LineInfo
+	
+	// Label tracking for goto support
+	labels      map[string]int       // label name -> PC position
+	forwardGotos map[string][]int    // label name -> list of PC positions to patch
 }
 
 // LocalVar represents a local variable during compilation.
@@ -53,6 +57,8 @@ func NewCodeGenerator() *CodeGenerator {
 		Locals:          make([][]LocalVar, 0),
 		JumpList:        make([]JumpEntry, 0),
 		ExpectedResults: -1, // Default: 1 result
+		labels:          make(map[string]int),
+		forwardGotos:    make(map[string][]int),
 	}
 }
 
