@@ -405,6 +405,15 @@ type ExprStmt struct {
 
 func (s *ExprStmt) stmtNode() {}
 
+// DoStmt represents a standalone do...end block.
+// A do block creates a new scope for local variables.
+type DoStmt struct {
+	baseStmt
+	Body *BlockStmt
+}
+
+func (s *DoStmt) stmtNode() {}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================

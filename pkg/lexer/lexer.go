@@ -25,6 +25,7 @@ type Lexer struct {
 	Scanner              // Embed scanner for character operations
 	name     string      // Source name for error messages
 	buffer   strings.Builder // Buffer for building token strings
+	atStart  bool        // Track if we're at the start of the file (for shebang handling)
 }
 
 // NewLexer creates a new lexer for the given source code.
@@ -33,6 +34,7 @@ func NewLexer(source []byte, name string) *Lexer {
 	return &Lexer{
 		Scanner: *NewScanner(source),
 		name:    name,
+		atStart: true,
 	}
 }
 
@@ -41,6 +43,21 @@ func NewLexer(source []byte, name string) *Lexer {
 // Returns TK_EOF when the end of the source is reached.
 func (l *Lexer) NextToken() (Token, error) {
 	l.buffer.Reset()
+
+	// Handle shebang at start of file (#!...)
+	// Shebang lines are treated as comments and skipped
+	if l.atStart && l.current == '#' && l.Peek1() == '!' {
+		l.atStart = false
+		// Skip the entire shebang line
+		for !isNewline(l.current) && l.current != 0 {
+			l.Advance()
+		}
+		// Skip the newline if present
+		if isNewline(l.current) {
+			l.skipNewline()
+		}
+	}
+	l.atStart = false // Mark that we've started parsing
 
 	for {
 		// Save start position for this token
@@ -275,6 +292,8 @@ func (l *Lexer) skipLongString(sep int) {
 				}
 				return
 			}
+			// Not the closing separator, just a ] character - advance
+			l.Advance()
 		} else if isNewline(l.current) {
 			l.skipNewline()
 		} else {
@@ -286,7 +305,11 @@ func (l *Lexer) skipLongString(sep int) {
 // checkSep checks if the current position has a closing separator of the given level.
 // Does not advance the scanner.
 func (l *Lexer) checkSep(sep int) bool {
-	pos := l.pos
+	// Save state
+	savedPos := l.pos
+	savedColumn := l.column
+	savedCurrent := l.current
+
 	l.Advance()
 	count := 0
 	for l.current == '=' {
@@ -294,12 +317,11 @@ func (l *Lexer) checkSep(sep int) bool {
 		count++
 	}
 	result := l.current == ']' && count+2 == sep
-	// Restore position
-	l.pos = pos
-	l.column = pos
-	if pos < len(l.source) {
-		l.current = l.source[pos]
-	}
+
+	// Restore state
+	l.pos = savedPos
+	l.column = savedColumn
+	l.current = savedCurrent
 	return result
 }
 
@@ -317,14 +339,15 @@ func (l *Lexer) readLongString(sep int) string {
 		if l.current == ']' {
 			if l.checkSep(sep) {
 				result := string(l.Substring(startPos, l.pos))
-				l.Advance() // Skip ]
-				l.Advance() // Skip =...=
-				for i := 0; i < countFromSep(sep)-2; i++ {
+				// Skip the closing separator: ]=...=]
+				// Total characters to skip = sep (] + (sep-2) ='s + ])
+				for i := 0; i < sep; i++ {
 					l.Advance()
 				}
-				l.Advance() // Skip final ]
 				return result
 			}
+			// Not the closing separator, just a ] character - advance
+			l.Advance()
 		} else if isNewline(l.current) {
 			l.skipNewline()
 		} else {
@@ -589,6 +612,10 @@ func (l *Lexer) readNumber() (Token, error) {
 	}
 
 	if isFloat {
+		// For hex floats without exponent, add p0 (Lua allows this, Go requires p)
+		if isHex && !strings.ContainsAny(numStr, "pP") {
+			numStr = numStr + "p0"
+		}
 		val, err := strconv.ParseFloat(numStr, 64)
 		if err != nil {
 			return Token{}, l.Error("malformed number: %v", err)

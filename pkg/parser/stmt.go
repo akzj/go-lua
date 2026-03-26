@@ -110,6 +110,27 @@ func (p *Parser) parseWhileStmt() Stmt {
 	}
 }
 
+// parseDoBlock parses a standalone do...end block.
+// A do block creates a new scope for local variables.
+func (p *Parser) parseDoBlock() Stmt {
+	line := p.Current.Line
+	p.advance() // Skip 'do'
+
+	// Parse body
+	body := p.parseBlock()
+
+	// Expect 'end'
+	if !p.expect(lexer.TK_END, "'end'") {
+		p.sync()
+		return nil
+	}
+
+	return &DoStmt{
+		baseStmt: baseStmt{line: line},
+		Body:     body,
+	}
+}
+
 // parseRepeatStmt parses a repeat-until loop.
 func (p *Parser) parseRepeatStmt() Stmt {
 	line := p.Current.Line
