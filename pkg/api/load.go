@@ -42,7 +42,8 @@ func (s *State) LoadString(code, name string) error {
 	// Parse the code into AST
 	block, err := p.ParseChunk()
 	if err != nil {
-		return SyntaxError(err.Error(), name, l.Line())
+		// Parser error already includes source:line: prefix, don't double-wrap
+		return RuntimeError(err.Error())
 	}
 
 	// Compile AST to bytecode

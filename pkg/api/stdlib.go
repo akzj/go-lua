@@ -444,12 +444,25 @@ func stdSelect(L *State) int {
 		return 1
 	}
 	idx := int(num)
+	
+	// Handle negative indices (Lua 5.4 spec: -1 is the last argument)
+	if idx < 0 {
+		idx = (top - 1) + idx + 1
+	}
+	
 	if idx < 1 || idx > top-1 {
 		return 0
 	}
 
-	// Return all values from index idx+1 to top
-	return top - idx
+	// Push all values from stack position idx+1 to top
+	// (vararg position k is at stack position k+1, since stack[1] is the index)
+	count := 0
+	for i := idx + 1; i <= top; i++ {
+		val := L.vm.GetStack(i)
+		L.vm.Push(*val)
+		count++
+	}
+	return count
 }
 
 // stdUnpack implements the Lua unpack() function.
