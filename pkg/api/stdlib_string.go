@@ -904,6 +904,100 @@ func formatHexFloat(num float64, upper bool, precision int, showPlus bool) strin
 // parseFormatFlags extracts format flags and precision from formatSpec.
 // Returns (hasPrecision, precision, showPlus).
 // For "%.3a", returns (true, 3, false). For "%+.2A", returns (true, 2, true).
+// validateFormatSpec validates a format specifier and returns an error message if invalid.
+func validateFormatSpec(formatSpec string, conversion byte) string {
+	if len(formatSpec) > 255 {
+		return "too long"
+	}
+	
+	i := 0
+	hasWidth := false
+	width := 0
+	hasPrec := false
+	prec := 0
+	hasHash := false
+	hasZero := false
+	
+	for i < len(formatSpec) {
+		switch formatSpec[i] {
+		case '#':
+			hasHash = true
+			i++
+		case '0':
+			hasZero = true
+			i++
+		case '-', '+', ' ':
+			i++
+		default:
+			goto afterFlags
+		}
+	}
+afterFlags:
+	for i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+		hasWidth = true
+		width = width*10 + int(formatSpec[i]-'0')
+		i++
+	}
+	
+	if i < len(formatSpec) && formatSpec[i] == '.' {
+		i++
+		hasPrec = true
+		if i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+			for i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+				prec = prec*10 + int(formatSpec[i]-'0')
+				i++
+			}
+		}
+	}
+	
+	if hasWidth && width >= 100 {
+		return "invalid conversion"
+	}
+	if hasPrec && prec >= 100 {
+		return "invalid conversion"
+	}
+	
+	switch conversion {
+	case '%':
+		// %% literal percent - no modifiers allowed
+		if formatSpec != "" {
+			return "invalid conversion"
+		}
+	case 'c':
+		// %c allows width and '-' flag, but not '0' flag or precision
+		if hasPrec || hasZero {
+			return "invalid conversion"
+		}
+	case 'p':
+		// %p allows width but not precision
+		if hasPrec {
+			return "invalid conversion"
+		}
+	case 's':
+		// %s allows width and precision, but not '0' flag (Lua 5.4)
+		if hasZero {
+			return "invalid conversion"
+		}
+	case 'q':
+		if formatSpec != "" {
+			return "cannot have modifiers"
+		}
+	case 'd', 'i':
+		if hasHash {
+			return "invalid conversion"
+		}
+	case 'o', 'u', 'x', 'X', 'e', 'E', 'f', 'g', 'G', 'a', 'A':
+		// numeric conversions allow standard flags
+	case 'F':
+		return "invalid conversion"
+	default:
+		return "invalid conversion"
+	}
+	
+	return ""
+}
+
+
 func parseFormatFlags(formatSpec string) (bool, int, bool) {
 	if formatSpec == "" {
 		return false, -1, false
@@ -996,7 +1090,18 @@ func stdStringFormat(L *State) int {
 			conversion := format[i]
 			formatSpec := format[start:i] // everything between % and conversion (flags, width, precision)
 			
-			// Handle based on conversion type
+			if errMsg := validateFormatSpec(formatSpec, conversion); errMsg != "" {
+				L.PushString("bad argument #2 to 'format' (" + errMsg + ")")
+				L.Error()
+				return 0
+			}
+			
+			if conversion != '%' && argIdx > top {
+				L.PushString("bad argument #2 to 'format' (no value)")
+				L.Error()
+				return 0
+			}
+			
 			switch conversion {
 			case '%':
 				result.WriteByte('%')
