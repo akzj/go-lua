@@ -179,23 +179,27 @@ func (cg *CodeGenerator) genLocal(stmt *parser.LocalStmt) {
 	numNames := len(stmt.Names)
 	numValues := len(stmt.Values)
 
-	// Check if the last value is a call expression
+	// Check if the last value is a call expression or vararg
 	var lastIsCall bool
+	var lastIsDots bool
 	if numValues > 0 {
 		lastVal := stmt.Values[numValues-1]
 		_, lastIsCall = lastVal.(*parser.CallExpr)
 		if !lastIsCall {
 			_, lastIsCall = lastVal.(*parser.MethodCallExpr)
 		}
+		if !lastIsCall {
+			_, lastIsDots = lastVal.(*parser.DotsExpr)
+		}
 	}
 
-	// If the last value is a call and we have more names than values,
+	// If the last value is a call/vararg and we have more names than values,
 	// we need to set ExpectedResults to get all results
-	if lastIsCall && numNames > numValues {
+	if (lastIsCall || lastIsDots) && numNames > numValues {
 		// Save old ExpectedResults
 		oldExpected := cg.ExpectedResults
 		
-		// Calculate how many results we need from the call
+		// Calculate how many results we need from the call/vararg
 		numResultsNeeded := numNames - (numValues - 1)
 		cg.ExpectedResults = numResultsNeeded // Exact number of results needed
 
@@ -205,7 +209,7 @@ func (cg *CodeGenerator) genLocal(stmt *parser.LocalStmt) {
 			cg.addLocal(stmt.Names[i].Name, valueReg, false)
 		}
 
-		// Generate the last value (the call) which will return multiple results
+		// Generate the last value (the call/vararg) which will return multiple results
 		lastValueReg := cg.genExpr(stmt.Values[numValues-1])
 		
 		// Update StackTop to account for all the results
@@ -215,7 +219,7 @@ func (cg *CodeGenerator) genLocal(stmt *parser.LocalStmt) {
 			cg.MaxStackSize = cg.StackTop
 		}
 
-		// The call results are in consecutive registers starting at lastValueReg
+		// The call/vararg results are in consecutive registers starting at lastValueReg
 		// Assign them to the remaining names
 		for i := numValues - 1; i < numNames; i++ {
 			cg.addLocal(stmt.Names[i].Name, lastValueReg+(i-(numValues-1)), false)

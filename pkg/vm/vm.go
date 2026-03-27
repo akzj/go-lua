@@ -57,13 +57,15 @@ type UpvalueDesc struct {
 
 //   - NResults: Expected number of results
 type CallInfo struct {
-	Func      *object.TValue   // Function being called
-	Closure   *object.Closure  // Reference to closure for upvalue access
-	Base      int              // Stack base for this call
-	Top       int              // Stack top for this call
-	PC        int              // Program counter
-	NResults  int              // Expected number of results
-	Status    CallStatus       // Call status
+	Func       *object.TValue  // Function being called
+	Closure    *object.Closure // Reference to closure for upvalue access
+	Base       int             // Stack base for this call
+	Top        int             // Stack top for this call
+	PC         int             // Program counter
+	NResults   int             // Expected number of results
+	Status     CallStatus      // Call status
+	VarargBase int             // Stack index where varargs start (Base + NumParams)
+	VarargCount int            // Number of varargs (nargs - NumParams, if > 0)
 }
 
 // CallStatus represents the status of a call.
@@ -717,9 +719,26 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		vm.closeUpvalues(vm.Base + a)
 
 	case OP_VARARGPREP:
-		// Vararg preparation — no-op for now; the main chunk is always vararg
-		// and the arguments are already set up by the caller.
-		// In a full implementation, this would adjust the stack for vararg functions.
+		// Vararg preparation: move varargs to a safe location above MaxStackSize
+		// This prevents them from being overwritten by local variables and temporaries.
+		// A = number of fixed parameters (unused, we get NumParams from prototype)
+		
+		ci := vm.CallInfo[vm.CI]
+		if ci.VarargCount > 0 {
+			// Allocate space above MaxStackSize for varargs
+			// The current frame's MaxStackSize is in vm.Prototype.MaxStackSize
+			safeBase := vm.Base + vm.Prototype.MaxStackSize
+			vm.ensureStack(safeBase + ci.VarargCount)
+			
+			// Copy varargs from their current location to the safe area
+			// Copy in reverse order to handle potential overlap
+			for i := ci.VarargCount - 1; i >= 0; i-- {
+				vm.Stack[safeBase+i].CopyFrom(&vm.Stack[ci.VarargBase+i])
+			}
+			
+			// Update VarargBase to point to the safe location
+			ci.VarargBase = safeBase
+		}
 
 	case OP_TBC:
 		a := instr.A()
@@ -1455,14 +1474,22 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 			neededTop := newBase + proto.MaxStackSize
 			vm.ensureStack(neededTop)
 
+			// Calculate varargs
+			varargCount := nargs - proto.NumParams
+			if varargCount < 0 {
+				varargCount = 0
+			}
+
 			vm.CallInfo[vm.CI] = &CallInfo{
-				Func:     funcVal,
-				Closure:  fn,
-				Base:     newBase,
-				Top:      neededTop,
-				PC:       0,
-				NResults: nresults,
-				Status:   CallOK,
+				Func:        funcVal,
+				Closure:     fn,
+				Base:        newBase,
+				Top:         neededTop,
+				PC:          0,
+				NResults:    nresults,
+				Status:      CallOK,
+				VarargBase:  newBase + proto.NumParams,
+				VarargCount: varargCount,
 			}
 
 			// Pad missing args with nil
@@ -1665,14 +1692,31 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 	// Vararg instruction
 	case OP_VARARG:
 		a, c := instr.A(), instr.C()
-		numWanted := c - 1 // c=0 means all
+		numWanted := c - 1 // c=0 means all, c=2 means 1 result
 
-		// For now, just set nil (varargs are complex and rarely needed in basic tests)
+		// Get vararg info from current CallInfo
+		ci := vm.CallInfo[vm.CI]
+		available := ci.VarargCount
+		
+		// If C=0, copy all varargs
 		if numWanted < 0 {
-			numWanted = 0
+			numWanted = available
 		}
+
+		// Copy varargs to destination registers starting at R(A)
 		for i := 0; i < numWanted; i++ {
-			vm.Stack[vm.Base+a+i].SetNil()
+			if i < available {
+				// Copy from vararg slot
+				vm.Stack[vm.Base+a+i].CopyFrom(&vm.Stack[ci.VarargBase+i])
+			} else {
+				// Fill with nil if we want more than available
+				vm.Stack[vm.Base+a+i].SetNil()
+			}
+		}
+
+		// Update StackTop when C=0 so B=0 CALL sees correct arg count
+		if c == 0 {
+			vm.StackTop = vm.Base + a + numWanted
 		}
 
 	default:
@@ -1849,14 +1893,20 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 
 	// Initialize CallInfo[0] if this is the first call
 	if vm.CI == 0 {
+		varargCount := nargs - proto.NumParams
+		if varargCount < 0 {
+			varargCount = 0
+		}
 		vm.CallInfo[0] = &CallInfo{
-			Func:     funcVal,
-			Closure:  fn,
-			Base:     vm.Base,
-			Top:      vm.StackTop,
-			PC:       0,
-			NResults: nresults,
-			Status:   CallOK,
+			Func:        funcVal,
+			Closure:     fn,
+			Base:        vm.Base,
+			Top:         vm.StackTop,
+			PC:          0,
+			NResults:    nresults,
+			Status:      CallOK,
+			VarargBase:  vm.Base + proto.NumParams,
+			VarargCount: varargCount,
 		}
 	}
 
@@ -1870,14 +1920,20 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 	}
 
 	newBase := funcBase + 1
+	varargCount := nargs - proto.NumParams
+	if varargCount < 0 {
+		varargCount = 0
+	}
 	vm.CallInfo[vm.CI] = &CallInfo{
-		Func:     funcVal,
-		Closure:  fn,
-		Base:     newBase,
-		Top:      newBase + nargs + proto.MaxStackSize,
-		PC:       0,
-		NResults: nresults,
-		Status:   CallOK,
+		Func:        funcVal,
+		Closure:     fn,
+		Base:        newBase,
+		Top:         newBase + nargs + proto.MaxStackSize,
+		PC:          0,
+		NResults:    nresults,
+		Status:      CallOK,
+		VarargBase:  newBase + proto.NumParams,
+		VarargCount: varargCount,
 	}
 
 	// Set up new execution context
@@ -2287,13 +2343,22 @@ func (vm *VM) CallMetamethod(fn *object.TValue, args []object.TValue) *object.TV
 			neededTop := newBase + proto.MaxStackSize
 			vm.ensureStack(neededTop)
 
+			// Calculate varargs
+			nargs := len(args)
+			varargCount := nargs - proto.NumParams
+			if varargCount < 0 {
+				varargCount = 0
+			}
+
 			vm.CallInfo[vm.CI] = &CallInfo{
-				Func:     fn,
-				Closure:  closure,
-				Base:     newBase,
-				Top:      neededTop,
-				PC:       0,
-				NResults: 1,
+				Func:        fn,
+				Closure:     closure,
+				Base:        newBase,
+				Top:         neededTop,
+				PC:          0,
+				NResults:    1,
+				VarargBase:  newBase + proto.NumParams,
+				VarargCount: varargCount,
 			}
 
 			// Copy arguments to their proper locations (they're already at newBase+0, newBase+1, etc.)
