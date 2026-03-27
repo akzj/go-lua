@@ -849,7 +849,14 @@ func stdStringFormat(L *State) int {
 								str = object.ToStringRaw(v)
 							}
 						} else {
-							str = object.ToStringRaw(v)
+							// Check for __name (Lua 5.4+ behavior)
+							nameMM := L.vm.GetMetamethod(t, "__name")
+							if nameMM != nil && nameMM.IsString() {
+								name, _ := nameMM.ToString()
+								str = fmt.Sprintf("%s: %p", name, v.Value.GC)
+							} else {
+								str = object.ToStringRaw(v)
+							}
 						}
 					} else {
 						str = object.ToStringRaw(v)

@@ -888,10 +888,7 @@ func (cg *CodeGenerator) genFunc(expr *parser.FuncExpr) int {
 
 	// Set up _ENV as upvalue[0] for the nested function
 	// Use resolveUpvalue to correctly handle local _ENV in parent scope
-	if idx, ok := nestedGen.resolveUpvalue("_ENV"); ok {
-		// _ENV resolved from parent scope (could be local or upvalue)
-		nestedGen.Upvalues["_ENV"] = idx
-	} else {
+	if _, ok := nestedGen.resolveUpvalue("_ENV"); !ok {
 		// Fallback: inherit from parent's upvalue[0]
 		nestedGen.Upvalues["_ENV"] = 0
 		nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
