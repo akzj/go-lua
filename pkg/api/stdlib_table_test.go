@@ -639,16 +639,19 @@ func TestTable_HolesInTable(t *testing.T) {
 }
 
 func TestTable_ConcatWithHoles(t *testing.T) {
+	// Lua's table.concat raises an error for nil values in the range
+	// This matches standard Lua behavior
 	output := captureOutput(t, `
 		local concat = table.concat
 		local t = {1, 2, 3}
 		t[2] = nil
-		print(concat(t, ","))
+		local ok, err = pcall(concat, t, ",")
+		print(ok, err ~= nil)
 	`)
 	
-	// concat should skip nil values
-	if output != "1,3\n" {
-		t.Errorf("Expected '1,3\\n', got %q", output)
+	// Should get an error about nil at index 2
+	if output != "false\ttrue\n" {
+		t.Errorf("Expected 'false\\ttrue\\n', got %q", output)
 	}
 }
 

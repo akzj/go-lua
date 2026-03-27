@@ -223,8 +223,13 @@ func stdTableConcat(L *State) int {
 	v := L.vm.GetStack(1)
 	t, ok := v.ToTable()
 	if !ok {
-		L.PushString("")
-		return 1
+		typeName := "nil"
+		if v != nil {
+			typeName = object.TypeName(v)
+		}
+		L.PushString("bad argument #1 to 'concat' (table expected, got " + typeName + ")")
+		L.Error()
+		return 0
 	}
 
 	// Get separator (default: "")
@@ -233,40 +238,65 @@ func stdTableConcat(L *State) int {
 		sep, _ = L.ToString(2)
 	}
 
-	// Get start index (default: 1)
-	i := 1
+	// Get start index (default: 1) - use int64 to handle maxi/mini
+	var i int64 = 1
 	if L.GetTop() >= 3 {
-		if num, ok := L.ToNumber(3); ok {
-			i = int(num)
-		}
-	}
-
-	// Get end index (default: length)
-	j := t.Len()
-	if L.GetTop() >= 4 {
-		if num, ok := L.ToNumber(4); ok {
-			j = int(num)
-		}
-	}
-
-	// Collect string parts
-	parts := make([]string, 0)
-	for k := i; k <= j; k++ {
-		val := t.GetI(k)
-		if val != nil && !val.IsNil() {
-			if val.IsString() {
-				str, _ := val.ToString()
-				parts = append(parts, str)
-			} else if val.IsNumber() {
-				num, _ := val.ToNumber()
-				parts = append(parts, formatNumber(num))
-			} else {
-				// Cannot concatenate non-string/number
-				L.PushString("table.concat: invalid value in table")
-				L.Error()
-				return 0
+		sv := L.vm.GetStack(3)
+		if sv != nil {
+			if ival, ok := sv.ToInteger(); ok {
+				i = ival
+			} else if num, ok := sv.ToNumber(); ok {
+				i = int64(num)
 			}
 		}
+	}
+
+	// Get end index (default: length) - use int64
+	var j int64 = int64(t.Len())
+	if L.GetTop() >= 4 {
+		sv := L.vm.GetStack(4)
+		if sv != nil {
+			if ival, ok := sv.ToInteger(); ok {
+				j = ival
+			} else if num, ok := sv.ToNumber(); ok {
+				j = int64(num)
+			}
+		}
+	}
+
+	// Empty range: return ""
+	if i > j {
+		L.PushString("")
+		return 1
+	}
+
+	// Collect string parts - each element MUST be string or number
+	parts := make([]string, 0)
+	k := i
+	for {
+		val := t.GetI(int(k))
+		if val == nil || val.IsNil() {
+			// Lua raises error for nil values in concat range
+			L.PushString("invalid value (nil) at index " + formatInt64(k) + " in table for 'concat'")
+			L.Error()
+			return 0
+		}
+		if val.IsString() {
+			str, _ := val.ToString()
+			parts = append(parts, str)
+		} else if val.IsNumber() {
+			num, _ := val.ToNumber()
+			parts = append(parts, formatNumber(num))
+		} else {
+			// Cannot concatenate non-string/number
+			L.PushString("invalid value (" + object.TypeName(val) + ") at index " + formatInt64(k) + " in table for 'concat'")
+			L.Error()
+			return 0
+		}
+		if k == j {
+			break
+		}
+		k++
 	}
 
 	// Join and return
@@ -280,6 +310,34 @@ func stdTableConcat(L *State) int {
 
 	L.PushString(result)
 	return 1
+}
+
+// formatInt64 formats an int64 as a string
+func formatInt64(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := false
+	if n < 0 {
+		neg = true
+		// Handle math.mininteger carefully
+		if n == -9223372036854775808 {
+			return "-9223372036854775808"
+		}
+		n = -n
+	}
+	var digits []byte
+	for n > 0 {
+		digits = append(digits, byte('0'+n%10))
+		n /= 10
+	}
+	if neg {
+		digits = append(digits, '-')
+	}
+	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
+		digits[i], digits[j] = digits[j], digits[i]
+	}
+	return string(digits)
 }
 
 // stdTablePack implements table.pack(...)
