@@ -738,40 +738,137 @@ func stdStringFormat(L *State) int {
 		return 1
 	}
 
-	// Simple implementation: handle %s, %d, %f, %%
-	args := make([]interface{}, 0)
+	// Check for %p format which needs special handling
+	// %p formats pointer values (tables, functions, threads, userdata)
+	// For non-pointer values (numbers, strings, booleans, nil), returns "(null)"
 	top := L.GetTop()
-	for i := 2; i <= top; i++ {
-		v := L.vm.GetStack(i)
-		switch v.Type {
-		case object.TypeNumber:
-			num, _ := v.ToNumber()
-			// Check if integer for %d
-			if num == float64(int(num)) {
-				args = append(args, int(num))
-			} else {
-				args = append(args, num)
+	argIdx := 2
+	
+	var result strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] == '%' && i+1 < len(format) {
+			spec := format[i+1]
+			switch spec {
+			case '%':
+				result.WriteByte('%')
+				i++
+			case 'p':
+				// %p format: pointer or "(null)"
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					// Check if it's a pointer type (table, function, thread, userdata)
+					if v.IsTable() || v.IsFunction() || v.IsThread() || v.IsUserData() {
+						result.WriteString(fmt.Sprintf("%p", v.Value.GC))
+					} else {
+						result.WriteString("(null)")
+					}
+				} else {
+					result.WriteString("(null)")
+				}
+				i++
+			case 's', 'q':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					str, _ := v.ToString()
+					if spec == 'q' {
+						result.WriteString(fmt.Sprintf("%q", str))
+					} else {
+						result.WriteString(str)
+					}
+				}
+				i++
+			case 'd', 'i':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						result.WriteString(strconv.Itoa(int(num)))
+					}
+				}
+				i++
+			case 'f':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						result.WriteString(strconv.FormatFloat(num, 'f', -1, 64))
+					}
+				}
+				i++
+			case 'c':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						result.WriteByte(byte(int(num)))
+					}
+				}
+				i++
+			case 'x', 'X':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						if spec == 'x' {
+							result.WriteString(strconv.FormatInt(int64(num), 16))
+						} else {
+							result.WriteString(strings.ToUpper(strconv.FormatInt(int64(num), 16)))
+						}
+					}
+				}
+				i++
+			case 'o':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						result.WriteString(strconv.FormatInt(int64(num), 8))
+					}
+				}
+				i++
+			case 'u':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						result.WriteString(strconv.FormatUint(uint64(num), 10))
+					}
+				}
+				i++
+			case 'a', 'A':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						// Go uses 'x' for hex float format (like 0x1.fp+3)
+						if spec == 'a' {
+							result.WriteString(strconv.FormatFloat(num, 'x', -1, 64))
+						} else {
+							result.WriteString(strings.ToUpper(strconv.FormatFloat(num, 'x', -1, 64)))
+						}
+					}
+				}
+				i++
+			case 'e', 'E', 'g', 'G':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					if num, ok := v.ToNumber(); ok {
+						result.WriteString(strconv.FormatFloat(num, byte(spec), -1, 64))
+					}
+				}
+				i++
+			default:
+				result.WriteByte(format[i])
 			}
-		case object.TypeString:
-			str, _ := v.ToString()
-			args = append(args, str)
-		case object.TypeBoolean:
-			b, _ := v.ToBoolean()
-			args = append(args, b)
-		case object.TypeNil:
-			args = append(args, "nil")
-		default:
-			args = append(args, fmt.Sprintf("%s: %p", v.Type.String(), v.Value.GC))
+		} else {
+			result.WriteByte(format[i])
 		}
 	}
 
-	result, err := formatString(format, args...)
-	if err != nil {
-		L.PushString(err.Error())
-		return 1
-	}
-
-	L.PushString(result)
+	L.PushString(result.String())
 	return 1
 }
 

@@ -206,20 +206,15 @@ func stdTostring(L *State) int {
 			L.PushString("false")
 		}
 	case object.TypeNumber:
-			// Check IsInt flag for integer formatting
-			if v.IsInt {
-				fmt.Fprintf(os.Stdout, "%d", v.Value.Int)
-			} else {
-				num, _ := v.ToNumber()
-				// Print with .0 for whole number floats to distinguish from integers
-				if math.Trunc(num) == num && !math.IsInf(num, 0) {
-					fmt.Fprintf(os.Stdout, "%.1f", num)
-				} else {
-					fmt.Fprintf(os.Stdout, "%g", num)
-				}
-			}
-		num, _ := v.ToNumber()
-		L.PushString(fmt.Sprintf("%g", num))
+		// Check IsInt flag for integer formatting
+		if v.IsInt {
+			L.PushString(fmt.Sprintf("%d", v.Value.Int))
+		} else {
+			num, _ := v.ToNumber()
+			// Use %g for general format, but ensure integers don't get .0
+			// Lua 5.4 behavior: integers print without decimal, floats with appropriate format
+			L.PushString(fmt.Sprintf("%g", num))
+		}
 	case object.TypeString:
 		str, _ := v.ToString()
 		L.PushString(str)
