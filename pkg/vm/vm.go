@@ -1869,7 +1869,8 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 		
 		// Adjust stack: remove function and args, keep nresults
 		// Results are on top of stack now, starting at funcBase+1+nargs
-		numResults := vm.StackTop - (funcBase + 1)
+		// numResults counts only the actual results pushed by the Go function
+		numResults := vm.StackTop - (funcBase + 1 + nargs)
 		if numResults < 0 {
 			numResults = 0
 		}
@@ -1883,8 +1884,9 @@ func (vm *VM) Call(funcIdx int, nargs, nresults int) error {
 			vm.StackTop = funcBase + nresults
 		} else {
 			// All results: move them to function position
+			resultStart := funcBase + 1 + nargs
 			for i := 0; i < numResults; i++ {
-				vm.Stack[funcBase+i] = vm.Stack[funcBase+1+i]
+				vm.Stack[funcBase+i] = vm.Stack[resultStart+i]
 			}
 			vm.StackTop = funcBase + numResults
 		}
