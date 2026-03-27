@@ -456,8 +456,47 @@ func stdPairs(L *State) int {
 	return 3
 }
 
+// ipairsIterator is the shared stateless iterator function for ipairs.
+// This single function works for all tables, maintaining function identity
+// as required by the Lua spec.
+var ipairsIterator Function
+
+// ipairsCachedTValue caches the TValue containing the ipairs iterator closure.
+// This ensures all ipairs() calls return the exact same function identity.
+var ipairsCachedTValue object.TValue
+
+func init() {
+	ipairsIterator = func(L *State) int {
+		// Get control variable from stack (arg 2 = control)
+		ctrl := L.vm.GetStack(2)
+		idx := 0
+		if ctrl != nil && ctrl.IsNumber() {
+			num, _ := ctrl.ToNumber()
+			idx = int(num)
+		}
+		idx++ // next index
+
+		// Get table from arg 1 (state)
+		tv := L.vm.GetStack(1)
+		t, ok := tv.ToTable()
+		if !ok {
+			L.PushNil()
+			return 1
+		}
+		val := t.GetI(idx)
+		if val == nil || val.IsNil() {
+			L.PushNil()
+			return 1
+		}
+		L.PushNumber(float64(idx))
+		L.vm.Push(*val)
+		return 2
+	}
+}
+
 // stdIpairs implements the Lua ipairs() function.
 // Returns an iterator function, the table, and 0.
+// The iterator function is always the same (stateless), as required by Lua spec.
 func stdIpairs(L *State) int {
 	// Get table from arg 1
 	tbl := L.vm.GetStack(1)
@@ -486,34 +525,19 @@ func stdIpairs(L *State) int {
 		}
 	}
 
-	// Default behavior: create iterator function
-	// Create iterator function that reads control variable from stack
-	L.PushFunction(func(L *State) int {
-		// Get control variable from stack (arg 2 = control)
-		ctrl := L.vm.GetStack(2)
-		idx := 0
-		if ctrl != nil && ctrl.IsNumber() {
-			num, _ := ctrl.ToNumber()
-			idx = int(num)
-		}
-		idx++ // next index
+	// Default behavior: create closure once and cache the TValue
+	if ipairsCachedTValue.Type == object.TypeNil {
+		// Push the function to create the closure
+		L.PushFunction(ipairsIterator)
+		// Get the closure TValue from the top of the stack and cache it
+		// Use -1 to get the top element regardless of Base
+		ipairsCachedTValue = *L.vm.GetStack(-1)
+		// Pop the temporary push
+		L.vm.StackTop--
+	}
 
-		// Get table from arg 1 (state)
-		tv := L.vm.GetStack(1)
-		t, ok := tv.ToTable()
-		if !ok {
-			L.PushNil()
-			return 1
-		}
-		val := t.GetI(idx)
-		if val == nil || val.IsNil() {
-			L.PushNil()
-			return 1
-		}
-		L.PushNumber(float64(idx))
-		L.vm.Push(*val)
-		return 2
-	})
+	// Push the cached TValue
+	L.vm.Push(ipairsCachedTValue)
 	// Push results on top of args: function, table, 0
 	L.vm.Push(*tbl)
 	L.PushNumber(0)
