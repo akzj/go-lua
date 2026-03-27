@@ -17,8 +17,17 @@ func (s *State) openTableLib() {
 		"concat": stdTableConcat,
 		"pack":   stdTablePack,
 		"unpack": stdTableUnpack,
+		"create": stdTableCreate, // Lua 5.5 function
 	}
 	s.RegisterModule("table", funcs)
+}
+
+// stdTableCreate implements table.create(n) - Lua 5.5 function
+// Creates a table with pre-allocated array part for n elements.
+func stdTableCreate(L *State) int {
+	// Just create a new table - Go tables don't need pre-allocation
+	L.NewTable()
+	return 1
 }
 
 // stdTableInsert implements table.insert(t, [pos,] value)
@@ -293,7 +302,7 @@ func stdTablePack(L *State) int {
 	}
 
 	// Set n field
-	L.PushNumber(float64(n))
+	L.PushInteger(int64(n))
 	L.SetField(tableIdx, "n")
 
 	return 1

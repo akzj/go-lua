@@ -44,12 +44,12 @@ func NewLexer(source []byte, name string) *Lexer {
 func (l *Lexer) NextToken() (Token, error) {
 	l.buffer.Reset()
 
-	// Handle shebang at start of file (#!...)
-	// Shebang lines are treated as comments and skipped
-	if l.atStart && l.current == '#' && l.Peek1() == '!' {
+	// Handle first line starting with '#' (shebang or comment)
+	// Per Lua spec, if the first line starts with '#', the entire line is skipped
+	if l.atStart && l.current == '#' {
 		l.atStart = false
 		// Skip the entire shebang line
-		for !isNewline(l.current) && l.current != 0 {
+		for !isNewline(l.current) && !l.AtEnd() {
 			l.Advance()
 		}
 		// Skip the newline if present
@@ -65,8 +65,12 @@ func (l *Lexer) NextToken() (Token, error) {
 		tokenColumn := l.column
 
 		switch l.current {
-		case 0: // EOF
-			return Token{Type: TK_EOF, Line: tokenLine, Column: tokenColumn}, nil
+		case 0: // EOF or NUL byte
+			if l.AtEnd() {
+				return Token{Type: TK_EOF, Line: tokenLine, Column: tokenColumn}, nil
+			}
+			// NUL byte in source - treat as unexpected character
+			return Token{}, l.Error("unexpected character '\\x00'")
 
 		case '\n', '\r': // Newlines
 			l.skipNewline()
@@ -92,7 +96,7 @@ func (l *Lexer) NextToken() (Token, error) {
 				}
 			}
 			// Short comment - skip until end of line
-			for !isNewline(l.current) && l.current != 0 {
+			for !isNewline(l.current) && !l.AtEnd() {
 				l.Advance()
 			}
 			continue
@@ -256,11 +260,27 @@ func (l *Lexer) singleCharToken(c byte, line, column int) (Token, error) {
 }
 
 // skipNewline skips a newline sequence (\n, \r, \n\r, or \r\n).
+// It always increments the line counter once.
 func (l *Lexer) skipNewline() {
 	c := l.current
-	l.Advance()
+	// Always count one line for the newline
+	l.line++
+	l.column = 0
+	// Advance past the first newline character
+	l.pos++
+	if l.pos < len(l.source) {
+		l.current = l.source[l.pos]
+	} else {
+		l.current = 0
+	}
+	// If the next char is also a newline but different type, skip it too (\r\n or \n\r)
 	if isNewline(l.current) && l.current != c {
-		l.Advance()
+		l.pos++
+		if l.pos < len(l.source) {
+			l.current = l.source[l.pos]
+		} else {
+			l.current = 0
+		}
 	}
 }
 
@@ -289,7 +309,7 @@ func (l *Lexer) skipLongString(sep int) {
 		l.skipNewline()
 	}
 	for {
-		if l.current == 0 {
+		if l.AtEnd() {
 			return // EOF
 		}
 		if l.current == ']' {
@@ -339,26 +359,29 @@ func (l *Lexer) readLongString(sep int) string {
 	if isNewline(l.current) {
 		l.skipNewline()
 	}
-	startPos := l.pos
+	// Build the string with \r normalization
+	var result strings.Builder
 	for {
-		if l.current == 0 {
+		if l.AtEnd() {
 			return "" // Will be caught by error handling
 		}
 		if l.current == ']' {
 			if l.checkSep(sep) {
-				result := string(l.Substring(startPos, l.pos))
 				// Skip the closing separator: ]=...=]
-				// Total characters to skip = sep (] + (sep-2) ='s + ])
 				for i := 0; i < sep; i++ {
 					l.Advance()
 				}
-				return result
+				return result.String()
 			}
-			// Not the closing separator, just a ] character - advance
+			// Not the closing separator, just a ] character
+			result.WriteByte(']')
 			l.Advance()
 		} else if isNewline(l.current) {
+			// Normalize all newline sequences to \n
+			result.WriteByte('\n')
 			l.skipNewline()
 		} else {
+			result.WriteByte(l.current)
 			l.Advance()
 		}
 	}
@@ -374,7 +397,7 @@ func (l *Lexer) readString(delim byte) (string, error) {
 	l.Advance() // Skip opening delimiter
 
 	for l.current != delim {
-		if l.current == 0 {
+		if l.AtEnd() {
 			return "", l.Error("unfinished string")
 		}
 		if isNewline(l.current) {
@@ -418,6 +441,15 @@ func (l *Lexer) readString(delim byte) (string, error) {
 				l.skipNewline()
 			case 'x': // \xHH
 				l.Advance()
+				// Check if we have hex digits
+				if !isHexDigit(l.current) {
+					// Build the near context including \x and whatever follows
+					near := "\\x"
+					if l.current != 0 && l.current != '\n' && l.current != '\r' {
+						near += string(l.current)
+					}
+					return "", l.ErrorNear(near, "hexadecimal digit expected")
+				}
 				hex, err := l.readHex()
 				if err != nil {
 					return "", err
@@ -425,11 +457,13 @@ func (l *Lexer) readString(delim byte) (string, error) {
 				l.buffer.WriteByte(hex)
 			case 'u': // \u{X}
 				l.Advance()
-				rune, err := l.readUTF8()
+				r, err := l.readUTF8()
 				if err != nil {
 					return "", err
 				}
-				l.buffer.WriteRune(rune)
+				// Write UTF-8 bytes directly, even for invalid code points
+				// Lua allows code points up to 0x7FFFFFFF for raw byte sequences
+				l.writeUTF8Bytes(r)
 			case 'z': // \z (skip whitespace)
 				l.Advance()
 				for isSpace(l.current) || isNewline(l.current) {
@@ -494,6 +528,42 @@ func (l *Lexer) readUTF8() (rune, error) {
 	}
 	l.Advance()
 	return val, nil
+}
+
+// writeUTF8Bytes writes a code point as UTF-8 bytes to the buffer.
+// This handles the full range of code points (0 to 0x7FFFFFFF),
+// including invalid ones beyond Unicode's U+10FFFF limit.
+// Lua uses this for testing raw UTF-8 byte sequences.
+func (l *Lexer) writeUTF8Bytes(r rune) {
+	switch {
+	case r <= 0x7F:
+		l.buffer.WriteByte(byte(r))
+	case r <= 0x7FF:
+		l.buffer.WriteByte(byte(0xC0 | (r >> 6)))
+		l.buffer.WriteByte(byte(0x80 | (r & 0x3F)))
+	case r <= 0xFFFF:
+		l.buffer.WriteByte(byte(0xE0 | (r >> 12)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 6) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | (r & 0x3F)))
+	case r <= 0x1FFFFF:
+		l.buffer.WriteByte(byte(0xF0 | (r >> 18)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 12) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 6) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | (r & 0x3F)))
+	case r <= 0x3FFFFFF:
+		l.buffer.WriteByte(byte(0xF8 | (r >> 24)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 18) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 12) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 6) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | (r & 0x3F)))
+	default: // up to 0x7FFFFFFF
+		l.buffer.WriteByte(byte(0xFC | (r >> 30)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 24) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 18) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 12) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | ((r >> 6) & 0x3F)))
+		l.buffer.WriteByte(byte(0x80 | (r & 0x3F)))
+	}
 }
 
 // readDecimal reads a decimal escape sequence (up to 3 digits).
@@ -562,18 +632,27 @@ func (l *Lexer) readNumber() (Token, error) {
 	tokenColumn := l.column
 	startPos := l.pos
 	isHex := false
+	isOctal := false
 
-	// Check for hex prefix
+	// Check for hex prefix (0x or 0X)
 	if l.current == '0' && (l.Peek1() == 'x' || l.Peek1() == 'X') {
 		l.Advance() // Skip 0
 		l.Advance() // Skip x/X
 		isHex = true
+	} else if l.current == '0' && (l.Peek1() == 'o' || l.Peek1() == 'O') {
+		// Check for octal prefix (0o or 0O) - Lua 5.4+ syntax
+		l.Advance() // Skip 0
+		l.Advance() // Skip o/O
+		isOctal = true
 	}
 
 	// Read integer part
 	l.SkipWhile(func(c byte) bool {
 		if isHex {
 			return isHexDigit(c)
+		}
+		if isOctal {
+			return c >= '0' && c <= '7'
 		}
 		return isDigit(c)
 	})
@@ -631,16 +710,30 @@ func (l *Lexer) readNumber() (Token, error) {
 		return Token{Type: TK_FLOAT, Value: val, Line: tokenLine, Column: tokenColumn}, nil
 	}
 
-	val, err := strconv.ParseInt(numStr, 0, 64)
-	if err != nil {
-		// For hex numbers, try parsing as uint64 first (for large values like 0xFFFFFFFFFFFFFFFF)
-		if isHex {
-			uval, uerr := strconv.ParseUint(numStr, 0, 64)
+	// Parse the number with the appropriate base
+	var val int64
+	var err error
+	if isHex {
+		// Hex: strip 0x prefix and parse with base 16
+		hexStr := strings.TrimPrefix(strings.TrimPrefix(numStr, "0x"), "0X")
+		val, err = strconv.ParseInt(hexStr, 16, 64)
+		if err != nil {
+			// Try as uint64 for large values
+			uval, uerr := strconv.ParseUint(hexStr, 16, 64)
 			if uerr == nil {
-				// Return as float since Lua treats these as numbers
 				return Token{Type: TK_FLOAT, Value: float64(uval), Line: tokenLine, Column: tokenColumn}, nil
 			}
 		}
+	} else if isOctal {
+		// Octal: strip 0o prefix and parse with base 8
+		octStr := strings.TrimPrefix(strings.TrimPrefix(numStr, "0o"), "0O")
+		val, err = strconv.ParseInt(octStr, 8, 64)
+	} else {
+		// Decimal: use base 10 (NOT auto-detect, to avoid treating 010 as octal)
+		val, err = strconv.ParseInt(numStr, 10, 64)
+	}
+	
+	if err != nil {
 		// Try parsing as float if int parsing fails
 		fval, ferr := strconv.ParseFloat(numStr, 64)
 		if ferr != nil {
@@ -648,6 +741,7 @@ func (l *Lexer) readNumber() (Token, error) {
 		}
 		return Token{Type: TK_FLOAT, Value: fval, Line: tokenLine, Column: tokenColumn}, nil
 	}
+	
 	return Token{Type: TK_INT, Value: val, Line: tokenLine, Column: tokenColumn}, nil
 }
 
@@ -676,8 +770,36 @@ func (l *Lexer) Peek() Token {
 }
 
 // Error creates a lexer error with the current position.
+// Lua error format: "source:line: message near 'token'"
 func (l *Lexer) Error(format string, args ...interface{}) error {
-	return fmt.Errorf("%s:%d: %s", l.name, l.line, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	// Get the current token context for "near" part
+	var near string
+	if l.current != 0 {
+		// Show the current character or context
+		if l.current == '\n' || l.current == '\r' {
+			near = "<newline>"
+		} else if l.current == '\\' {
+			// For escape sequence errors, show the escape
+			near = "\\"
+			if l.pos < len(l.source) {
+				next := l.source[l.pos]
+				if next != 0 {
+					near = "\\" + string(next)
+				}
+			}
+		} else {
+			near = string(l.current)
+		}
+		return fmt.Errorf("%s:%d: %s near '%s'", l.name, l.line, msg, near)
+	}
+	return fmt.Errorf("%s:%d: %s", l.name, l.line, msg)
+}
+
+// ErrorNear creates a lexer error with a specific near context.
+func (l *Lexer) ErrorNear(near, format string, args ...interface{}) error {
+	msg := fmt.Sprintf(format, args...)
+	return fmt.Errorf("%s:%d: %s near '%s'", l.name, l.line, msg, near)
 }
 
 // Name returns the source name (filename) for error messages.

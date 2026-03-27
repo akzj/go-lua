@@ -260,7 +260,7 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 
 	case OP_LOADI:
 		a, sbx := instr.A(), instr.SBx()
-		vm.Stack[vm.Base+a].SetNumber(float64(sbx))
+		vm.Stack[vm.Base+a].SetInteger(int64(sbx))
 
 	case OP_LOADF:
 		a, sbx := instr.A(), instr.SBx()
@@ -304,8 +304,21 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := rb.Value.Num + rc.Value.Num
-			vm.Stack[vm.Base+a].SetNumber(result)
+			// Coerce strings to numbers if needed
+			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			if rbIsInt && rcIsInt {
+				vm.Stack[vm.Base+a].SetInteger(int64(rbNum) + int64(rcNum))
+			} else {
+				result := rbNum + rcNum
+				vm.Stack[vm.Base+a].SetNumber(result)
+			}
 		}
 
 	case OP_SUB:
@@ -320,8 +333,21 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := rb.Value.Num - rc.Value.Num
-			vm.Stack[vm.Base+a].SetNumber(result)
+			// Coerce strings to numbers if needed
+			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			if rbIsInt && rcIsInt {
+				vm.Stack[vm.Base+a].SetInteger(int64(rbNum) - int64(rcNum))
+			} else {
+				result := rbNum - rcNum
+				vm.Stack[vm.Base+a].SetNumber(result)
+			}
 		}
 
 	case OP_MUL:
@@ -336,8 +362,21 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := rb.Value.Num * rc.Value.Num
-			vm.Stack[vm.Base+a].SetNumber(result)
+			// Coerce strings to numbers if needed
+			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			if rbIsInt && rcIsInt {
+				vm.Stack[vm.Base+a].SetInteger(int64(rbNum) * int64(rcNum))
+			} else {
+				result := rbNum * rcNum
+				vm.Stack[vm.Base+a].SetNumber(result)
+			}
 		}
 
 	case OP_DIV:
@@ -352,7 +391,16 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := rb.Value.Num / rc.Value.Num
+			// Coerce strings to numbers if needed
+			rbNum, _, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, _, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			result := rbNum / rcNum
 			vm.Stack[vm.Base+a].SetNumber(result)
 		}
 
@@ -368,13 +416,40 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			// Lua floor division modulo: a % b = a - floor(a/b) * b
-			// Handle division by zero
-			if rc.Value.Num == 0 {
-				vm.Stack[vm.Base+a].SetNumber(math.NaN())
+			// Coerce strings to numbers if needed
+			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			if rbIsInt && rcIsInt {
+				rbInt := int64(rbNum)
+				rcInt := int64(rcNum)
+				// Lua floor modulo: a % b = a - floor(a/b) * b
+				// Handle division by zero
+				if rcInt == 0 {
+					vm.Stack[vm.Base+a].SetNumber(math.NaN())
+				} else {
+					// Floor division: q = a/b, if remainder != 0 and signs differ, q--
+					q := rbInt / rcInt
+					r := rbInt % rcInt
+					if r != 0 && (r^rcInt) < 0 {
+						q--
+					}
+					result := rbInt - q*rcInt
+					vm.Stack[vm.Base+a].SetInteger(result)
+				}
 			} else {
-				result := rb.Value.Num - math.Floor(rb.Value.Num/rc.Value.Num)*rc.Value.Num
-				vm.Stack[vm.Base+a].SetNumber(result)
+				// Float modulo: a % b = a - floor(a/b) * b
+				if rcNum == 0 {
+					vm.Stack[vm.Base+a].SetNumber(math.NaN())
+				} else {
+					result := rbNum - math.Floor(rbNum/rcNum)*rcNum
+					vm.Stack[vm.Base+a].SetNumber(result)
+				}
 			}
 		}
 
@@ -390,7 +465,16 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := math.Pow(rb.Value.Num, rc.Value.Num)
+			// Coerce strings to numbers if needed
+			rbNum, _, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, _, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			result := math.Pow(rbNum, rcNum)
 			vm.Stack[vm.Base+a].SetNumber(result)
 		}
 
@@ -398,12 +482,37 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
+		// Coerce strings to numbers if needed
+		rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
+		if !rbOk {
+			return vm.runtimeError("attempt to perform arithmetic on a string value")
+		}
+		rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
+		if !rcOk {
+			return vm.runtimeError("attempt to perform arithmetic on a string value")
+		}
 		// Handle division by zero
-		if rc.Value.Num == 0 {
-			vm.Stack[vm.Base+a].SetNumber(math.NaN())
+		if rbIsInt && rcIsInt {
+			rbInt := int64(rbNum)
+			rcInt := int64(rcNum)
+			if rcInt == 0 {
+				vm.Stack[vm.Base+a].SetNumber(math.NaN())
+			} else {
+				// Floor division: q = a/b, if remainder != 0 and signs differ, q--
+				q := rbInt / rcInt
+				r := rbInt % rcInt
+				if r != 0 && (r^rcInt) < 0 {
+					q--
+				}
+				vm.Stack[vm.Base+a].SetInteger(q)
+			}
 		} else {
-			result := math.Floor(rb.Value.Num / rc.Value.Num)
-			vm.Stack[vm.Base+a].SetNumber(result)
+			if rcNum == 0 {
+				vm.Stack[vm.Base+a].SetNumber(math.NaN())
+			} else {
+				result := math.Floor(rbNum / rcNum)
+				vm.Stack[vm.Base+a].SetNumber(result)
+			}
 		}
 
 	case OP_UNM:
@@ -417,8 +526,17 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			result := -rb.Value.Num
-			vm.Stack[vm.Base+a].SetNumber(result)
+			// Coerce strings to numbers if needed
+			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			if rbIsInt {
+				vm.Stack[vm.Base+a].SetInteger(-int64(rbNum))
+			} else {
+				result := -rbNum
+				vm.Stack[vm.Base+a].SetNumber(result)
+			}
 		}
 
 	case OP_BAND:
@@ -932,14 +1050,14 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				if result != nil {
 					vm.Stack[vm.Base+a].CopyFrom(result)
 				} else {
-					vm.Stack[vm.Base+a].SetNumber(0)
+					vm.Stack[vm.Base+a].SetInteger(0)
 				}
 			} else {
-				vm.Stack[vm.Base+a].SetNumber(float64(t.Len()))
+				vm.Stack[vm.Base+a].SetInteger(int64(t.Len()))
 			}
 		} else if rb.IsString() {
 			s, _ := rb.ToString()
-			vm.Stack[vm.Base+a].SetNumber(float64(len(s)))
+			vm.Stack[vm.Base+a].SetInteger(int64(len(s)))
 		} else {
 			return vm.runtimeError("attempt to get length of a non-table/string value")
 		}
@@ -991,8 +1109,12 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		rb := vm.getStackValue(vm.Base + b)
 		// c is signed in ADDI
 		sc := int16(c)
-		result := rb.Value.Num + float64(sc)
-		vm.Stack[vm.Base+a].SetNumber(result)
+		if rb.IsInt {
+			vm.Stack[vm.Base+a].SetInteger(rb.Value.Int + int64(sc))
+		} else {
+			result := rb.Value.Num + float64(sc)
+			vm.Stack[vm.Base+a].SetNumber(result)
+		}
 
 	case OP_RETURN:
 		a, b := instr.A(), instr.B()
@@ -1271,7 +1393,8 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		nresults := c - 1 // c=0 means all results, c=1 means 0 results, c=2 means 1 result
 
 		if fn.IsGo {
-			// Go function call
+			// Go function call - save current PC first
+			vm.CallInfo[vm.CI].PC = vm.PC
 			oldBase := vm.Base
 			startTop := funcSlot + 1 + nargs // Save where results will start
 			vm.Base = funcSlot + 1
@@ -1360,32 +1483,70 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 	case OP_FORPREP:
 		a, sbx := instr.A(), instr.SBx()
 		// R(A) = initial, R(A+1) = limit, R(A+2) = step
-		init := vm.Stack[vm.Base+a].Value.Num
-		step := vm.Stack[vm.Base+a+2].Value.Num
-		// Subtract step so first FORLOOP iteration adds it back
-		vm.Stack[vm.Base+a].SetNumber(init - step)
+		init := vm.Stack[vm.Base+a]
+		step := vm.Stack[vm.Base+a+2]
+		// Check if we can use integer arithmetic
+		if init.IsInt && step.IsInt {
+			initVal := init.Value.Int
+			stepVal := step.Value.Int
+			// Subtract step so first FORLOOP iteration adds it back
+			vm.Stack[vm.Base+a].SetInteger(initVal - stepVal)
+		} else {
+			initVal := init.Value.Num
+			stepVal := step.Value.Num
+			// Subtract step so first FORLOOP iteration adds it back
+			vm.Stack[vm.Base+a].SetNumber(initVal - stepVal)
+		}
 		// Jump forward to FORLOOP
 		vm.PC += sbx
 
 	case OP_FORLOOP:
 		a, sbx := instr.A(), instr.SBx()
-		step := vm.Stack[vm.Base+a+2].Value.Num
-		// Add step
-		idx := vm.Stack[vm.Base+a].Value.Num + step
-		vm.Stack[vm.Base+a].SetNumber(idx)
-		limit := vm.Stack[vm.Base+a+1].Value.Num
+		idxVal := vm.Stack[vm.Base+a]
+		limitVal := vm.Stack[vm.Base+a+1]
+		stepVal := vm.Stack[vm.Base+a+2]
 
-		// Check loop condition
-		continueLoop := false
-		if step > 0 {
-			continueLoop = idx <= limit
+		// Check if we can use integer arithmetic
+		if idxVal.IsInt && limitVal.IsInt && stepVal.IsInt {
+			idx := idxVal.Value.Int
+			limit := limitVal.Value.Int
+			step := stepVal.Value.Int
+			// Add step
+			idx += step
+			vm.Stack[vm.Base+a].SetInteger(idx)
+
+			// Check loop condition
+			continueLoop := false
+			if step > 0 {
+				continueLoop = idx <= limit
+			} else {
+				continueLoop = idx >= limit
+			}
+
+			if continueLoop {
+				vm.Stack[vm.Base+a+3].SetInteger(idx) // Update external loop variable
+				vm.PC += sbx                          // Jump back to loop body
+			}
 		} else {
-			continueLoop = idx >= limit
-		}
+			idx := idxVal.Value.Num
+			limit := limitVal.Value.Num
+			step := stepVal.Value.Num
+			// Add step
+			idx += step
+			vm.Stack[vm.Base+a].SetNumber(idx)
 
-		if continueLoop {
-			vm.Stack[vm.Base+a+3].SetNumber(idx) // Update external loop variable
-			vm.PC += sbx                          // Jump back to loop body
+			// Check loop condition
+			continueLoop := false
+			if step > 0 {
+				continueLoop = idx <= limit
+			} else {
+				continueLoop = idx >= limit
+			}
+
+			if continueLoop {
+				vm.Stack[vm.Base+a+3].SetNumber(idx) // Update external loop variable
+				vm.PC += sbx                         // Jump back to loop body
+			}
 		}
 
 	// Generic for loop instructions
@@ -1553,6 +1714,23 @@ func (vm *VM) getRKValue(index int) *object.TValue {
 //   - *object.TValue: The value at the stack index
 func (vm *VM) getStackValue(index int) *object.TValue {
 	return &vm.Stack[index]
+}
+
+// coerceToNumber attempts to coerce a TValue to a number.
+// If the value is already a number, returns it unchanged.
+// If the value is a string, attempts to convert it to a number.
+// Returns (num, isInt, ok) where ok indicates if the coercion succeeded.
+func (vm *VM) coerceToNumber(v *object.TValue) (num float64, isInt bool, ok bool) {
+	if v.Type == object.TypeNumber {
+		if v.IsInt {
+			return float64(v.Value.Int), true, true
+		}
+		return v.Value.Num, false, true
+	}
+	if v.Type == object.TypeString {
+		return object.LuaStringToNumber(v.Value.Str, 0)
+	}
+	return 0, false, false
 }
 
 // closeUpvalues closes all open upvalues at or above the given index.

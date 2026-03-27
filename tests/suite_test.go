@@ -115,8 +115,8 @@ func runTestFile(t *testing.T, path string, config TestSuiteConfig) TestResult {
 	// Open standard libraries
 	L.OpenLibs()
 
-	// Run the test
-	err = L.DoString(code, "@"+name)
+	// Run the test (use full path so require() can find sibling modules)
+	err = L.DoString(code, "@"+path)
 	if err != nil {
 		return TestResult{
 			Name:   name,
@@ -142,28 +142,69 @@ func preprocessLua55(source string) string {
 	var result []string
 	scanner := bufio.NewScanner(strings.NewReader(source))
 
-	// Buffer for detecting assert(VARNAME == false) followed by VARNAME = nil
-	var pendingLines []string
-	var pendingVarName string
+	// Track long-string nesting - stack of = counts for each open bracket
+	// [[ has count 0, [=[ has count 1, [==[ has count 2, etc.
+	var longStringStack []int
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
 
-		// Skip global declarations (Lua 5.5 syntax)
-		if strings.HasPrefix(trimmed, "global ") || strings.HasPrefix(trimmed, "global<") {
-			// Flush pending lines if any
-			for _, pl := range pendingLines {
-				result = append(result, pl)
+		// Process the line for long-string bracket detection
+		// Opening: [ followed by =* followed by [
+		// Closing: ] followed by =* followed by ]
+		for i := 0; i < len(line); i++ {
+			if line[i] == '[' {
+				// Check for opening long bracket
+				eqCount := 0
+				j := i + 1
+				for j < len(line) && line[j] == '=' {
+					eqCount++
+					j++
+				}
+				if j < len(line) && line[j] == '[' {
+					// Found opening long bracket: [[ (eqCount=0) or [=[ (eqCount=1) etc.
+					longStringStack = append(longStringStack, eqCount)
+					i = j // Skip past the opening bracket
+				}
+			} else if line[i] == ']' {
+				// Check for closing long bracket
+				eqCount := 0
+				j := i + 1
+				for j < len(line) && line[j] == '=' {
+					eqCount++
+					j++
+				}
+				if j < len(line) && line[j] == ']' {
+					// Found closing long bracket: ]] (eqCount=0) or ]=] (eqCount=1) etc.
+					// Only pop if it matches the top of the stack
+					if len(longStringStack) > 0 && longStringStack[len(longStringStack)-1] == eqCount {
+						longStringStack = longStringStack[:len(longStringStack)-1]
+					}
+					i = j // Skip past the closing bracket
+				}
 			}
-			pendingLines = nil
-			pendingVarName = ""
+		}
+
+		// Skip all preprocessing when inside a long string
+		if len(longStringStack) > 0 {
+			result = append(result, line)
+			continue
+		}
+
+		// Convert global declarations to plain assignments (Lua 5.5 syntax)
+		if strings.HasPrefix(trimmed, "global ") || strings.HasPrefix(trimmed, "global<") {
+			// Strip "global" keyword and attributes, keep assignment if present
+			converted := convertGlobalDecl(trimmed)
+			// Always append to preserve line count (empty string if declaration-only)
+			result = append(result, converted)
 			continue
 		}
 
 		// Strip <const> attributes from local declarations
 		// e.g., "local x <const> = 1" -> "local x = 1"
-		if strings.HasPrefix(trimmed, "local ") {
+		// Also handles "local<const>" (no space)
+		if strings.HasPrefix(trimmed, "local ") || strings.HasPrefix(trimmed, "local<") {
 			line = stripConstAttribute(line)
 			trimmed = strings.TrimSpace(line)
 		}
@@ -173,133 +214,10 @@ func preprocessLua55(source string) string {
 		line = convertNamedVararg(line)
 		trimmed = strings.TrimSpace(line)
 
-		// Check for assert(VARNAME == false) pattern
-		if pendingVarName == "" && strings.HasPrefix(trimmed, "assert(") {
-			varName := extractVarNameFromAssertFalse(trimmed)
-			if varName != "" {
-				// Found potential pattern, buffer this line
-				pendingLines = append(pendingLines, line)
-				pendingVarName = varName
-				continue
-			}
-		}
-
-		// Check if we're waiting for VARNAME = nil
-		if pendingVarName != "" {
-			pendingLines = append(pendingLines, line)
-			// Check if this line is "VARNAME = nil"
-			if matchesVarEqualsNil(trimmed, pendingVarName) {
-				// Pattern confirmed - convert the assert line
-				for i, pl := range pendingLines {
-					if i == 0 {
-						// Convert the first line (the assert)
-						pl = convertAssertFalseToNil(pl, pendingVarName)
-					}
-					result = append(result, pl)
-				}
-				pendingLines = nil
-				pendingVarName = ""
-				continue
-			}
-			// If we have more than 2 pending lines, the pattern didn't match
-			if len(pendingLines) > 2 {
-				for _, pl := range pendingLines {
-					result = append(result, pl)
-				}
-				pendingLines = nil
-				pendingVarName = ""
-				continue
-			}
-			continue
-		}
-
 		result = append(result, line)
 	}
 
-	// Flush any remaining pending lines
-	for _, pl := range pendingLines {
-		result = append(result, pl)
-	}
-
 	return strings.Join(result, "\n")
-}
-
-// extractVarNameFromAssertFalse extracts VARNAME from "assert(VARNAME == false)"
-// Returns empty string if the pattern doesn't match.
-// Only matches simple cases like "assert(x == false)" not "assert(a == false and b == 10)"
-func extractVarNameFromAssertFalse(line string) string {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "assert(") || !strings.HasSuffix(trimmed, ")") {
-		return ""
-	}
-	// Remove "assert(" prefix and ")" suffix
-	inner := trimmed[7 : len(trimmed)-1]
-	// Check for simple "VARNAME == false" pattern (no "and", "or", etc.)
-	if strings.Contains(inner, " and ") || strings.Contains(inner, " or ") {
-		return ""
-	}
-	// Check for "not " prefix (e.g., "assert(not 10 == false)")
-	if strings.HasPrefix(inner, "not ") {
-		return ""
-	}
-	// Match pattern: VARNAME == false
-	parts := strings.Split(inner, "==")
-	if len(parts) != 2 {
-		return ""
-	}
-	varName := strings.TrimSpace(parts[0])
-	rightSide := strings.TrimSpace(parts[1])
-	if rightSide != "false" {
-		return ""
-	}
-	// Validate varName is a simple identifier
-	if !isValidIdentifier(varName) {
-		return ""
-	}
-	return varName
-}
-
-// matchesVarEqualsNil checks if the line matches "VARNAME = nil"
-func matchesVarEqualsNil(line string, varName string) bool {
-	// Match pattern: VARNAME = nil (possibly with trailing comment)
-	parts := strings.SplitN(line, "=", 2)
-	if len(parts) != 2 {
-		return false
-	}
-	leftSide := strings.TrimSpace(parts[0])
-	rightSide := strings.TrimSpace(parts[1])
-	// Remove any trailing comment from right side
-	if idx := strings.Index(rightSide, "--"); idx != -1 {
-		rightSide = strings.TrimSpace(rightSide[:idx])
-	}
-	return leftSide == varName && rightSide == "nil"
-}
-
-// convertAssertFalseToNil converts "assert(VARNAME == false)" to "assert(VARNAME == nil)"
-func convertAssertFalseToNil(line string, varName string) string {
-	// Replace "== false" with "== nil" for this specific variable
-	oldPattern := varName + " == false"
-	newPattern := varName + " == nil"
-	return strings.Replace(line, oldPattern, newPattern, 1)
-}
-
-// isValidIdentifier checks if a string is a valid Lua identifier
-func isValidIdentifier(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for i, c := range s {
-		if i == 0 {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
-				return false
-			}
-		} else {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // stripConstAttribute removes <const> and <toclose> attributes from local declarations.
@@ -362,6 +280,52 @@ func convertNamedVararg(line string) string {
 		break
 	}
 	return result
+}
+
+// convertGlobalDecl converts a global declaration to a plain assignment.
+// "global fact = false" -> "fact = false"
+// "global <const> *" -> "" (skip)
+// "global<const> print, assert" -> "" (skip, just declarations)
+// "global none" -> "" (skip, just declaration)
+// "global a; a = nil" -> "a = nil" (split on semicolon, keep rest)
+// "global foo;" -> "" (semicolon with nothing after)
+// "global XX; local x" -> "local x" (keep code after semicolon)
+// "global function foo (x)" -> "function foo (x)" (function definition)
+func convertGlobalDecl(line string) string {
+	// Remove "global" prefix
+	rest := strings.TrimPrefix(line, "global")
+	rest = strings.TrimSpace(rest)
+	// Remove attributes like <const>
+	for strings.HasPrefix(rest, "<") {
+		idx := strings.Index(rest, ">")
+		if idx >= 0 {
+			rest = strings.TrimSpace(rest[idx+1:])
+		} else {
+			break
+		}
+	}
+	// Skip wildcard declarations
+	if rest == "*" || rest == "" {
+		return ""
+	}
+	// Handle semicolon: split on first ';', discard declaration part, keep rest
+	if idx := strings.Index(rest, ";"); idx >= 0 {
+		afterSemi := strings.TrimSpace(rest[idx+1:])
+		if afterSemi == "" {
+			return ""
+		}
+		return afterSemi
+	}
+	// Check for function definition: "function foo (x)"
+	if strings.HasPrefix(rest, "function ") {
+		return rest
+	}
+	// Check if there's an assignment
+	if strings.Contains(rest, "=") {
+		return rest
+	}
+	// Just a declaration (no assignment) - skip
+	return ""
 }
 
 // CountResults counts the number of each status type.

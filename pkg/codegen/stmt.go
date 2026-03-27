@@ -252,7 +252,9 @@ func (cg *CodeGenerator) genIf(stmt *parser.IfStmt) {
 	cg.freeRegister()
 
 	// Generate then block
+	cg.beginScope()
 	cg.genBlock(stmt.Then)
+	cg.endScope()
 
 	// Jump over else/elseif blocks
 	endJump := cg.EmitAsBx(vm.OP_JMP, 0, 0)
@@ -271,7 +273,9 @@ func (cg *CodeGenerator) genIf(stmt *parser.IfStmt) {
 		cg.freeRegister()
 
 		// Generate then block
+		cg.beginScope()
 		cg.genBlock(elseif.Then)
+		cg.endScope()
 
 		// Jump over remaining
 		_ = cg.EmitAsBx(vm.OP_JMP, 0, 0)
@@ -282,7 +286,9 @@ func (cg *CodeGenerator) genIf(stmt *parser.IfStmt) {
 
 	// Generate else block if present
 	if stmt.Else != nil {
+		cg.beginScope()
 		cg.genBlock(stmt.Else)
+		cg.endScope()
 	}
 
 	// Patch end jump
@@ -303,7 +309,9 @@ func (cg *CodeGenerator) genWhile(stmt *parser.WhileStmt) {
 	cg.freeRegister()
 
 	// Generate body
+	cg.beginScope()
 	cg.genBlock(stmt.Body)
+	cg.endScope()
 
 	// Jump back to condition
 	cg.EmitAsBx(vm.OP_JMP, 0, loopStart-cg.GetCurrentPC()-1)
@@ -313,20 +321,26 @@ func (cg *CodeGenerator) genWhile(stmt *parser.WhileStmt) {
 }
 
 // genRepeat generates code for a repeat-until loop.
+// Note: In Lua, the until condition can reference locals declared in the body,
+// so we must keep the scope open until after the condition is evaluated.
 func (cg *CodeGenerator) genRepeat(stmt *parser.RepeatStmt) {
 	// Loop start label
 	loopStart := cg.GetCurrentPC()
 
-	// Generate body
+	// Generate body - begin scope for locals
+	cg.beginScope()
 	cg.genBlock(stmt.Body)
 
-	// Generate condition
+	// Generate condition WHILE STILL IN SCOPE (Lua semantics)
 	condReg := cg.genExpr(stmt.Cond)
 
 	// Test condition and jump back if false (repeat until true)
 	cg.EmitABC(vm.OP_TEST, condReg, 0, 0)
 	cg.EmitAsBx(vm.OP_JMP, 0, loopStart-cg.GetCurrentPC()-1)
 	cg.freeRegister()
+
+	// End scope AFTER condition evaluation
+	cg.endScope()
 }
 
 // genForNumeric generates code for a numeric for loop.
@@ -746,7 +760,11 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 		if len(stmt.Name) > 0 {
 			reg := cg.allocRegister()
 			cg.EmitABx(vm.OP_CLOSURE, reg, protoIdx)
-			nameExpr := stmt.Name[0]
+			// Use FullName for dotted function definitions (a.f), otherwise use Name[0]
+			var nameExpr parser.Expr = stmt.Name[0]
+			if stmt.FullName != nil {
+				nameExpr = stmt.FullName
+			}
 			cg.assignToVar(nameExpr, reg)
 			cg.freeRegister()
 		}
@@ -787,6 +805,7 @@ func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
 			Label:      labelName,
 			BlockDepth: cg.blockDepth,
 			Line:       stmt.Line(),
+			NumLocals:  cg.countLocals(),
 		})
 	}
 }
@@ -829,6 +848,18 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 			if cg.blockDepth > gotoInfo.BlockDepth {
 				cg.setError("label '%s' is inside an inner block", labelName)
 				return
+			}
+			
+			// Check if the goto jumps into the scope of a local variable
+			// If there are more locals now than at goto time, the goto jumps over a local
+			currentLocals := cg.countLocals()
+			if currentLocals > gotoInfo.NumLocals {
+				// Find the first local that was declared after the goto
+				newLocals := cg.getLocalsSince(gotoInfo.NumLocals)
+				if len(newLocals) > 0 {
+					cg.setError("jump into the scope of '%s'", newLocals[0])
+					return
+				}
 			}
 			
 			// Patch the jump: sBx = targetPC - (jumpPC + 1)

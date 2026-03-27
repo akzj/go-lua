@@ -213,8 +213,28 @@ func (s *State) PushBoolean(b bool) {
 //	L.PushNumber(42)     // Stack: [42]
 //	L.PushNumber(3.14)   // Stack: [42, 3.14]
 func (s *State) PushNumber(n float64) {
-	v := object.TValue{Type: object.TypeNumber}
+	v := object.TValue{Type: object.TypeNumber, IsInt: false}
 	v.Value.Num = n
+	s.vm.Push(v)
+}
+
+// PushInteger pushes an integer onto the stack.
+//
+// This corresponds to lua_pushinteger in the C API.
+// Integers are stored as int64 with full precision.
+//
+// Parameters:
+//   - n: The integer to push
+//
+// Example:
+//
+//	L.PushInteger(42)     // Stack: [42]
+//	L.PushInteger(-1000)  // Stack: [42, -1000]
+func (s *State) PushInteger(n int64) {
+	v := object.TValue{Type: object.TypeNumber}
+	v.Value.Int = n
+	v.Value.Num = float64(n)
+	v.IsInt = true
 	s.vm.Push(v)
 }
 

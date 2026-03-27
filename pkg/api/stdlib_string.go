@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/akzj/go-lua/pkg/object"
 )
@@ -27,6 +28,7 @@ func (s *State) openStringLib() {
 		"match":   stdStringMatch,
 		"gmatch":  stdStringGmatch,
 	}
+
 	s.RegisterModule("string", funcs)
 
 	// Create string metatable with __index pointing to string module
@@ -48,10 +50,10 @@ func (s *State) openStringLib() {
 func stdStringLength(L *State) int {
 	str, ok := L.ToString(1)
 	if !ok {
-		L.PushNumber(0)
+		L.PushInteger(0)
 		return 1
 	}
-	L.PushNumber(float64(len(str)))
+	L.PushInteger(int64(len(str)))
 	return 1
 }
 
@@ -131,9 +133,490 @@ func stdStringLower(L *State) int {
 	return 1
 }
 
+// ============================================================================
+// Lua Pattern Matching Implementation
+// ============================================================================
+
+// patternItemType represents the type of a pattern item
+type patternItemType int
+
+const (
+	itemLiteral patternItemType = iota // literal character
+	itemClass                          // %a, %d, etc.
+	itemAny                            // . (any character)
+	itemSet                            // [abc] or [^abc]
+	itemAnchorStart                    // ^ at start
+	itemAnchorEnd                      // $ at end
+	itemCapture                        // () position capture
+	itemGroupStart                     // ( start capture group
+	itemGroupEnd                       // ) end capture group
+)
+
+// quantifierType represents how many times to match
+type quantifierType int
+
+const (
+	quantOne quantifierType = iota // exactly one
+	quantZeroPlus                   // * 0 or more (greedy)
+	quantOnePlus                    // + 1 or more (greedy)
+	quantZeroMinus                  // - 0 or more (non-greedy)
+	quantOptional                   // ? 0 or 1
+)
+
+// patternItem represents a single pattern element
+type patternItem struct {
+	itemType   patternItemType
+	quantifier quantifierType
+	literal    byte           // for itemLiteral
+	classChar  byte           // for itemClass (the char after %)
+	setChars   []byte         // for itemSet
+	setNegated bool           // for itemSet (true if [^...])
+	classFunc  func(byte) bool // for itemClass
+}
+
+// matchResult holds the result of a pattern match
+type matchResult struct {
+	matched  bool
+	start    int
+	end      int
+	captures []capture
+}
+
+// capture holds a captured substring or position
+type capture struct {
+	start, end int // positions in string
+}
+
+// Character class functions
+func isAlpha(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isControl(c byte) bool {
+	return c < 32 || c == 127
+}
+
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
+func isLower(c byte) bool {
+	return c >= 'a' && c <= 'z'
+}
+
+func isPunct(c byte) bool {
+	return unicode.IsPunct(rune(c))
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
+
+func isUpper(c byte) bool {
+	return c >= 'A' && c <= 'Z'
+}
+
+func isAlnum(c byte) bool {
+	return isAlpha(c) || isDigit(c)
+}
+
+func isHex(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// getClassFunc returns the function for a character class
+func getClassFunc(classChar byte) func(byte) bool {
+	switch classChar {
+	case 'a', 'A':
+		return isAlpha
+	case 'c', 'C':
+		return isControl
+	case 'd', 'D':
+		return isDigit
+	case 'l', 'L':
+		return isLower
+	case 'p', 'P':
+		return isPunct
+	case 's', 'S':
+		return isSpace
+	case 'u', 'U':
+		return isUpper
+	case 'w', 'W':
+		return isAlnum
+	case 'x', 'X':
+		return isHex
+	case 'z', 'Z':
+		return func(c byte) bool { return c == 0 }
+	default:
+		// For unknown classes, match the literal character
+		return func(c byte) bool { return c == classChar }
+	}
+}
+
+// parsePattern parses a Lua pattern into a list of pattern items
+func parsePattern(pattern string) []patternItem {
+	items := make([]patternItem, 0, len(pattern))
+	i := 0
+
+	for i < len(pattern) {
+		item := patternItem{itemType: itemLiteral, quantifier: quantOne}
+
+		switch pattern[i] {
+		case '^':
+			if i == 0 {
+				item.itemType = itemAnchorStart
+			} else {
+				item.literal = '^'
+			}
+			i++
+
+		case '$':
+			if i == len(pattern)-1 {
+				item.itemType = itemAnchorEnd
+				i++
+			} else {
+				item.literal = '$'
+				i++
+			}
+
+		case '.':
+			item.itemType = itemAny
+			i++
+
+		case '%':
+			if i+1 >= len(pattern) {
+				// % at end is literal %
+				item.literal = '%'
+				i++
+				break
+			}
+			next := pattern[i+1]
+			item.itemType = itemClass
+			item.classChar = next
+			item.classFunc = getClassFunc(next)
+			i += 2
+
+		case '[':
+			// Character set
+			item.itemType = itemSet
+			i++
+			if i < len(pattern) && pattern[i] == '^' {
+				item.setNegated = true
+				i++
+			}
+			item.setChars = parseCharSet(pattern, &i)
+
+		case '(':
+			if i+1 < len(pattern) && pattern[i+1] == ')' {
+				item.itemType = itemCapture
+				i += 2
+			} else {
+				item.itemType = itemGroupStart
+				i++
+			}
+
+		case ')':
+			item.itemType = itemGroupEnd
+			i++
+
+		default:
+			item.literal = pattern[i]
+			i++
+		}
+
+		// Check for quantifier
+		if i < len(pattern) && item.itemType != itemAnchorStart && item.itemType != itemAnchorEnd {
+			switch pattern[i] {
+			case '*':
+				item.quantifier = quantZeroPlus
+				i++
+			case '+':
+				item.quantifier = quantOnePlus
+				i++
+			case '-':
+				item.quantifier = quantZeroMinus
+				i++
+			case '?':
+				item.quantifier = quantOptional
+				i++
+			}
+		}
+
+		items = append(items, item)
+	}
+
+	return items
+}
+
+// parseCharSet parses a character set [...] or [^...]
+func parseCharSet(pattern string, i *int) []byte {
+	chars := make([]byte, 0, 16)
+
+	// Handle ] as first char (or after ^)
+	if *i < len(pattern) && pattern[*i] == ']' {
+		chars = append(chars, ']')
+		*i++
+	}
+
+	for *i < len(pattern) && pattern[*i] != ']' {
+		if pattern[*i] == '%' && *i+1 < len(pattern) {
+			// %x in set
+			classChar := pattern[*i+1]
+			classFunc := getClassFunc(classChar)
+			// Add all chars matching the class
+			for c := byte(0); c < 128; c++ {
+				if classFunc(c) {
+					chars = append(chars, c)
+				}
+			}
+			*i += 2
+		} else if *i+2 < len(pattern) && pattern[*i+1] == '-' && pattern[*i+2] != ']' {
+			// Range a-z
+			startChar := pattern[*i]
+			endChar := pattern[*i+2]
+			for c := startChar; c <= endChar; c++ {
+				chars = append(chars, c)
+			}
+			*i += 3
+		} else {
+			chars = append(chars, pattern[*i])
+			*i++
+		}
+	}
+
+	// Skip closing ]
+	if *i < len(pattern) && pattern[*i] == ']' {
+		*i++
+	}
+
+	return chars
+}
+
+// matchSingleChar checks if a single character matches a pattern item
+func matchSingleChar(c byte, item patternItem) bool {
+	switch item.itemType {
+	case itemLiteral:
+		return c == item.literal
+	case itemClass:
+		if item.classFunc == nil {
+			// Fallback: use classChar to get the function
+			item.classFunc = getClassFunc(item.classChar)
+		}
+		if item.classChar >= 'A' && item.classChar <= 'Z' {
+			// Uppercase classes are negated
+			baseFunc := getClassFunc(item.classChar + 32) // lowercase version
+			return !baseFunc(c)
+		}
+		return item.classFunc(c)
+	case itemAny:
+		return true
+	case itemSet:
+		matches := byteInSet(c, item.setChars)
+		if item.setNegated {
+			return !matches
+		}
+		return matches
+	default:
+		return false
+	}
+}
+
+// byteInSet checks if a byte is in a character set
+func byteInSet(c byte, set []byte) bool {
+	for _, b := range set {
+		if c == b {
+			return true
+		}
+	}
+	return false
+}
+
+// matchPattern attempts to match a pattern against a string starting at startPos
+// Returns: matched (bool), start, end, captures
+func matchPattern(str string, startPos int, pattern []patternItem, anchored bool) matchResult {
+	// Try matching at each position (unless anchored)
+	for pos := startPos; pos <= len(str); pos++ {
+		result := matchAtPosition(str, pos, pattern, 0)
+		if result.matched {
+			result.start = pos
+			return result
+		}
+		if anchored {
+			break
+		}
+	}
+
+	return matchResult{matched: false}
+}
+
+// matchAtPosition recursively matches pattern starting at given string position and pattern index
+func matchAtPosition(str string, strPos int, pattern []patternItem, patIdx int) matchResult {
+	// Base case: all pattern items matched
+	if patIdx >= len(pattern) {
+		return matchResult{matched: true, end: strPos, captures: make([]capture, 0)}
+	}
+
+	item := pattern[patIdx]
+
+	// Handle anchor start
+	if item.itemType == itemAnchorStart {
+		if strPos != 0 {
+			return matchResult{matched: false}
+		}
+		return matchAtPosition(str, strPos, pattern, patIdx+1)
+	}
+
+	// Handle anchor end
+	if item.itemType == itemAnchorEnd {
+		if strPos != len(str) {
+			return matchResult{matched: false}
+		}
+		return matchAtPosition(str, strPos, pattern, patIdx+1)
+	}
+
+	// Handle position capture ()
+	if item.itemType == itemCapture {
+		result := matchAtPosition(str, strPos, pattern, patIdx+1)
+		if result.matched {
+			result.captures = append([]capture{{start: strPos + 1, end: strPos}}, result.captures...)
+		}
+		return result
+	}
+
+	// Handle group start
+	if item.itemType == itemGroupStart {
+		// Find matching group end
+		depth := 1
+		endIdx := patIdx + 1
+		for endIdx < len(pattern) {
+			if pattern[endIdx].itemType == itemGroupStart {
+				depth++
+			} else if pattern[endIdx].itemType == itemGroupEnd {
+				depth--
+				if depth == 0 {
+					break
+				}
+			}
+			endIdx++
+		}
+
+		// Try to match the group content
+		groupStart := strPos
+		result := matchAtPosition(str, strPos, pattern, patIdx+1)
+		if result.matched {
+			// Add group capture
+			result.captures = append([]capture{{start: groupStart, end: result.end}}, result.captures...)
+			return result
+		}
+		return matchResult{matched: false}
+	}
+
+	// Handle group end
+	if item.itemType == itemGroupEnd {
+		return matchAtPosition(str, strPos, pattern, patIdx+1)
+	}
+
+	// Handle quantifiers
+	switch item.quantifier {
+	case quantOne:
+		// Match exactly one
+		if strPos >= len(str) {
+			return matchResult{matched: false}
+		}
+		if !matchSingleChar(str[strPos], item) {
+			return matchResult{matched: false}
+		}
+		return matchAtPosition(str, strPos+1, pattern, patIdx+1)
+
+	case quantOptional:
+		// Match zero or one
+		// Try one first
+		if strPos < len(str) && matchSingleChar(str[strPos], item) {
+			result := matchAtPosition(str, strPos+1, pattern, patIdx+1)
+			if result.matched {
+				return result
+			}
+		}
+		// Try zero
+		return matchAtPosition(str, strPos, pattern, patIdx+1)
+
+	case quantZeroPlus:
+		// Match zero or more (greedy)
+		return matchGreedy(str, strPos, pattern, patIdx, item)
+
+	case quantOnePlus:
+		// Match one or more (greedy)
+		if strPos >= len(str) {
+			return matchResult{matched: false}
+		}
+		if !matchSingleChar(str[strPos], item) {
+			return matchResult{matched: false}
+		}
+		// Now match zero or more
+		return matchGreedy(str, strPos+1, pattern, patIdx, item)
+
+	case quantZeroMinus:
+		// Match zero or more (non-greedy)
+		return matchNonGreedy(str, strPos, pattern, patIdx, item)
+	}
+
+	return matchResult{matched: false}
+}
+
+// matchGreedy matches * quantifier (greedy)
+func matchGreedy(str string, strPos int, pattern []patternItem, patIdx int, item patternItem) matchResult {
+	// Collect all possible end positions
+	positions := []int{strPos}
+	pos := strPos
+	for pos < len(str) {
+		if !matchSingleChar(str[pos], item) {
+			break
+		}
+		pos++
+		positions = append(positions, pos)
+	}
+
+	// Try from longest to shortest (greedy)
+	for i := len(positions) - 1; i >= 0; i-- {
+		result := matchAtPosition(str, positions[i], pattern, patIdx+1)
+		if result.matched {
+			return result
+		}
+	}
+
+	return matchResult{matched: false}
+}
+
+// matchNonGreedy matches - quantifier (non-greedy)
+func matchNonGreedy(str string, strPos int, pattern []patternItem, patIdx int, item patternItem) matchResult {
+	// Try from shortest to longest (non-greedy)
+	pos := strPos
+	for {
+		// Try matching rest of pattern at current position
+		result := matchAtPosition(str, pos, pattern, patIdx+1)
+		if result.matched {
+			return result
+		}
+
+		// Try to consume one more character
+		if pos >= len(str) {
+			break
+		}
+		if !matchSingleChar(str[pos], item) {
+			break
+		}
+		pos++
+	}
+
+	return matchResult{matched: false}
+}
+
+// ============================================================================
+// End of Pattern Matching Implementation
+// ============================================================================
+
 // stdStringFind implements string.find(s, pattern [, init [, plain]])
 // Returns start and end indices of first match, or nil if not found.
-// Note: Simple string matching only (no full Lua patterns).
 func stdStringFind(L *State) int {
 	str, ok := L.ToString(1)
 	if !ok {
@@ -163,31 +646,80 @@ func stdStringFind(L *State) int {
 		init = 1
 	}
 
-	// Get plain flag (default false for patterns, but we do simple matching)
+	// Get plain flag
 	plain := false
 	if L.GetTop() >= 4 {
 		plain = L.IsTruthy(4)
 	}
-	_ = plain // We always do simple string matching per constraints
 
-	// Simple string find (no pattern matching)
-	if init > len(str) {
+	// Plain mode: simple string search
+	if plain {
+		if init > len(str)+1 {
+			L.PushNil()
+			return 1
+		}
+		if init > len(str) {
+			if pattern == "" {
+				L.PushInteger(int64(init))
+				L.PushInteger(int64(init - 1))
+				return 2
+			}
+			L.PushNil()
+			return 1
+		}
+
+		idx := strings.Index(str[init-1:], pattern)
+		if idx == -1 {
+			L.PushNil()
+			return 1
+		}
+
+		start := init + idx
+		end := start + len(pattern) - 1
+		L.PushInteger(int64(start))
+		L.PushInteger(int64(end))
+		return 2
+	}
+
+	// Pattern matching mode
+	if init > len(str)+1 {
 		L.PushNil()
 		return 1
 	}
 
-	idx := strings.Index(str[init-1:], pattern)
-	if idx == -1 {
+	// Parse pattern
+	items := parsePattern(pattern)
+	if len(items) == 0 {
+		// Empty pattern matches at init
+		L.PushInteger(int64(init))
+		L.PushInteger(int64(init - 1))
+		return 2
+	}
+
+	// Check for anchor
+	anchored := len(items) > 0 && items[0].itemType == itemAnchorStart
+
+	// Try to match
+	result := matchPattern(str, init-1, items, anchored)
+	if !result.matched {
 		L.PushNil()
 		return 1
 	}
 
-	// Return 1-based indices
-	start := init + idx
-	end := start + len(pattern) - 1
-	L.PushNumber(float64(start))
-	L.PushNumber(float64(end))
-	return 2
+	// Return start and end positions (1-based)
+	L.PushInteger(int64(result.start + 1))
+	L.PushInteger(int64(result.end))
+
+	// Return captures (if any)
+	for _, c := range result.captures {
+		if c.start >= 0 && c.end >= 0 && c.start <= c.end {
+			L.PushString(str[c.start:c.end])
+		} else {
+			L.PushInteger(int64(c.start))
+		}
+	}
+
+	return 2 + len(result.captures)
 }
 
 // stdStringFormat implements string.format(formatstring, ...)
@@ -396,7 +928,7 @@ func stdStringByte(L *State) int {
 	count := 0
 	for k := i; k <= j; k++ {
 		if k >= 1 && k <= n {
-			L.PushNumber(float64(str[k-1]))
+			L.PushInteger(int64(str[k-1]))
 			count++
 		}
 	}
@@ -421,7 +953,6 @@ func stdStringChar(L *State) int {
 
 // stdStringGsub implements string.gsub(s, pattern, repl [, n])
 // Returns copy of s with occurrences replaced, plus count.
-// Note: Simple string matching only (no full Lua patterns).
 func stdStringGsub(L *State) int {
 	str, ok := L.ToString(1)
 	if !ok {
@@ -449,28 +980,49 @@ func stdStringGsub(L *State) int {
 		}
 	}
 
-	// Simple string replace
-	result := str
+	// Parse pattern
+	items := parsePattern(pattern)
+
+	// Perform replacements
+	var result strings.Builder
+	pos := 0
 	count := 0
-	if maxRepl < 0 {
-		result = strings.ReplaceAll(str, pattern, repl)
-		count = strings.Count(str, pattern)
-	} else {
-		result = strings.Replace(str, pattern, repl, maxRepl)
-		count = strings.Count(str, pattern)
-		if count > maxRepl {
-			count = maxRepl
+
+	for pos <= len(str) {
+		if maxRepl >= 0 && count >= maxRepl {
+			break
+		}
+
+		// Try to match at current position only (anchored search)
+		matchRes := matchAtPosition(str, pos, items, 0)
+		if matchRes.matched && matchRes.end > pos {
+			// Replace
+			result.WriteString(repl)
+			pos = matchRes.end
+			count++
+		} else {
+			// Copy character and advance
+			if pos < len(str) {
+				result.WriteByte(str[pos])
+				pos++
+			} else {
+				break
+			}
 		}
 	}
 
-	L.PushString(result)
-	L.PushNumber(float64(count))
+	// Copy remaining
+	if pos < len(str) {
+		result.WriteString(str[pos:])
+	}
+
+	L.PushString(result.String())
+	L.PushInteger(int64(count))
 	return 2
 }
 
 // stdStringMatch implements string.match(s, pattern [, init])
 // Returns first match of pattern in s.
-// Note: Simple string matching only (no full Lua patterns).
 func stdStringMatch(L *State) int {
 	str, ok := L.ToString(1)
 	if !ok {
@@ -499,26 +1051,46 @@ func stdStringMatch(L *State) int {
 		init = 1
 	}
 
-	// Simple string match
 	if init > len(str) {
 		L.PushNil()
 		return 1
 	}
 
-	idx := strings.Index(str[init-1:], pattern)
-	if idx == -1 {
+	// Parse pattern
+	items := parsePattern(pattern)
+	anchored := len(items) > 0 && items[0].itemType == itemAnchorStart
+
+	// Try to match
+	result := matchPattern(str, init-1, items, anchored)
+	if !result.matched {
 		L.PushNil()
 		return 1
 	}
 
-	// Return the matched string
-	L.PushString(pattern)
+	// Return captures or full match
+	if len(result.captures) > 0 {
+		// Return captures
+		for _, c := range result.captures {
+			if c.start >= 0 && c.end <= len(str) {
+				L.PushString(str[c.start:c.end])
+			} else {
+				L.PushInteger(int64(c.start))
+			}
+		}
+		return len(result.captures)
+	}
+
+	// Return full match
+	if result.start >= 0 && result.end <= len(str) {
+		L.PushString(str[result.start:result.end])
+	} else {
+		L.PushNil()
+	}
 	return 1
 }
 
 // stdStringGmatch implements string.gmatch(s, pattern)
 // Returns an iterator function for matches.
-// Note: Simple string matching only (no full Lua patterns).
 func stdStringGmatch(L *State) int {
 	str, ok := L.ToString(1)
 	if !ok {
@@ -532,24 +1104,52 @@ func stdStringGmatch(L *State) int {
 		return 1
 	}
 
-	// Create iterator function
-	// We need to capture the current position
+	// Parse pattern once
+	items := parsePattern(pattern)
+
+	// Create iterator with captured position
 	pos := 0
 
 	L.PushFunction(func(L *State) int {
-		if pos > len(str) {
-			return 0
+		for pos <= len(str) {
+			// Try to match at current position only (anchored)
+			result := matchAtPosition(str, pos, items, 0)
+			if result.matched && result.end > pos {
+				// Store match start/end before updating pos
+				matchStart := pos
+				matchEnd := result.end
+
+				// Update position for next iteration
+				pos = result.end
+				if pos == matchStart && pos < len(str) {
+					pos++
+				}
+
+				// Return captures or full match
+				if len(result.captures) > 0 {
+					for _, c := range result.captures {
+						if c.start >= 0 && c.end <= len(str) {
+							L.PushString(str[c.start:c.end])
+						} else {
+							L.PushInteger(int64(c.start))
+						}
+					}
+					return len(result.captures)
+				}
+
+				// Return full match
+				if matchEnd <= len(str) {
+					L.PushString(str[matchStart:matchEnd])
+					return 1
+				}
+				return 0
+			}
+
+			// Move to next position
+			pos++
 		}
 
-		idx := strings.Index(str[pos:], pattern)
-		if idx == -1 {
-			return 0
-		}
-
-		// Return the match
-		L.PushString(pattern)
-		pos = pos + idx + len(pattern)
-		return 1
+		return 0
 	})
 
 	return 1
