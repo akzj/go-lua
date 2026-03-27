@@ -949,9 +949,21 @@ func stdStringChar(L *State) int {
 	bytes := make([]byte, 0, top)
 
 	for i := 1; i <= top; i++ {
-		if num, ok := L.ToNumber(i); ok {
-			bytes = append(bytes, byte(int(num)))
+		num, ok := L.ToNumber(i)
+		if !ok {
+			L.PushString(fmt.Sprintf("bad argument #%d to 'char' (number expected, got %s)", i, L.TypeName(i)))
+			L.Error()
+			return 0
 		}
+
+		// Validate range [0, 255]
+		if num < 0 || num > 255 {
+			L.PushString(fmt.Sprintf("bad argument #%d to 'char' (value out of range)", i))
+			L.Error()
+			return 0
+		}
+
+		bytes = append(bytes, byte(int(num)))
 	}
 
 	L.PushString(string(bytes))
