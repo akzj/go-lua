@@ -319,8 +319,117 @@ func (v *TValue) ToNumber() (float64, bool) {
 	}
 	return 0, false
 }
+// ToInteger returns the integer value if the TValue represents an integer.
+// For integer values (IsInt flag set), returns the exact integer.
+// For float values that are whole numbers within int64 range, converts to int64.
+// Returns (value, success).
+func (v *TValue) ToInteger() (int64, bool) {
+	if v.Type != TypeNumber {
+		return 0, false
+	}
+	// Check IsInt flag first for exact integer representation
+	if v.IsInt {
+		return v.Value.Int, true
+	}
+	// For float values, check if it's a whole number within int64 range
+	if v.Value.Num == float64(int64(v.Value.Num)) {
+		return int64(v.Value.Num), true
+	}
+	return 0, false
+}
+// parseHexFloat parses a hex float string like "0x1.999999999999ap-04".
+// Returns (value, ok).
+func parseHexFloat(s string) (float64, bool) {
+	// Find the exponent marker (p or P)
+	expIdx := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == 'p' || s[i] == 'P' {
+			expIdx = i
+			break
+		}
+	}
+	if expIdx == -1 {
+		return 0, false
+	}
 
-// LuaStringToNumber converts a Lua string to a number.
+	// Parse the mantissa (hex digits before p/P)
+	mantissaStr := s[:expIdx]
+	expStr := s[expIdx+1:]
+
+	// Parse mantissa as hex float
+	mantissa, ok := parseHexMantissa(mantissaStr)
+	if !ok {
+		return 0, false
+	}
+
+	// Parse exponent (decimal, can be signed)
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+
+	// Result = mantissa * 2^exp
+	return mantissa * math.Pow(2, float64(exp)), true
+}
+
+// parseHexMantissa parses hex mantissa like "1.999999999999a" or "1" or "1.5".
+// The input should NOT include the "0x" prefix.
+// Returns (value, ok).
+func parseHexMantissa(s string) (float64, bool) {
+	// Strip "0x" or "0X" prefix if present
+	if len(s) >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		s = s[2:]
+	}
+	if len(s) == 0 {
+		return 0, false
+	}
+	
+	// Find decimal point
+	dotIdx := strings.Index(s, ".")
+
+	var intPart, fracPart string
+	if dotIdx == -1 {
+		intPart = s
+		fracPart = ""
+	} else {
+		intPart = s[:dotIdx]
+		fracPart = s[dotIdx+1:]
+	}
+
+	// Parse integer part
+	var intVal int64
+	if intPart != "" {
+		var err error
+		intVal, err = strconv.ParseInt(intPart, 16, 64)
+		if err != nil {
+			return 0, false
+		}
+	}
+
+	result := float64(intVal)
+
+	// Parse fractional part
+	if fracPart != "" {
+		fracVal := 0.0
+		for i := 0; i < len(fracPart); i++ {
+			digit := fracPart[i]
+			var d int64
+			if digit >= '0' && digit <= '9' {
+				d = int64(digit - '0')
+			} else if digit >= 'a' && digit <= 'f' {
+				d = int64(digit - 'a' + 10)
+			} else if digit >= 'A' && digit <= 'F' {
+				d = int64(digit - 'A' + 10)
+			} else {
+				return 0, false
+			}
+			fracVal += float64(d) * math.Pow(16, float64(-(i+1)))
+		}
+		result += fracVal
+	}
+
+	return result, true
+}// LuaStringToNumber converts a Lua string to a number.
 // It handles whitespace trimming, hex prefixes (0x/0X), and optional base.
 // When base is 0, it auto-detects: 0x/0X prefix for hex, otherwise decimal.
 // When base is provided (2-36), it parses the string in that base.
@@ -346,8 +455,30 @@ func LuaStringToNumber(s string, base int) (num float64, isInt bool, ok bool) {
 	if len(s) > 0 && s[0] == '-' {
 		neg = true
 		hexStr = s[1:]
+	} else if len(s) > 0 && s[0] == '+' {
+		hexStr = s[1:]
 	}
 	if len(hexStr) >= 2 && (hexStr[0] == '0' && (hexStr[1] == 'x' || hexStr[1] == 'X')) {
+		// Check if it's a hex float (contains 'p' or 'P' for exponent)
+		hasExp := false
+		for i := 2; i < len(hexStr); i++ {
+			if hexStr[i] == 'p' || hexStr[i] == 'P' {
+				hasExp = true
+				break
+			}
+		}
+		if hasExp {
+			// Parse as hex float
+			val, ok := parseHexFloat(hexStr)
+			if !ok {
+				return 0, false, false
+			}
+			if neg {
+				val = -val
+			}
+			return val, false, true
+		}
+		// Parse as hex integer
 		val, err := strconv.ParseInt(hexStr[2:], 16, 64)
 		if err != nil {
 			return 0, false, false

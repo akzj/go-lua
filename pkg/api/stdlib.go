@@ -187,10 +187,15 @@ func stdTostring(L *State) int {
 		if mm != nil && mm.IsFunction() {
 			// Call the metamethod
 			result := L.vm.CallMetamethod(mm, []object.TValue{*v})
-			if result != nil {
+			if result != nil && result.IsString() {
 				L.vm.Stack[L.vm.StackTop].CopyFrom(result)
 				L.vm.StackTop++
 				return 1
+			} else {
+				// __tostring must return a string
+				L.PushString("'__tostring' must return a string")
+				L.Error()
+				return 0
 			}
 		}
 		
