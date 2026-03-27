@@ -1134,9 +1134,8 @@ func luaQuote(s string) string {
 		case '\f':
 			result.WriteString("\\f")
 		case '\n':
-			// Lua 5.5 outputs backslash followed by actual newline byte
-			result.WriteByte('\\')
-			result.WriteByte('\n')
+			// Lua 5.1/5.4 outputs \n escape (backslash + letter n)
+			result.WriteString("\\n")
 		case '\r':
 			result.WriteString("\\r")
 		case '\t':
@@ -1156,11 +1155,12 @@ func luaQuote(s string) string {
 				result.WriteString("\\0")
 			}
 		default:
-			if c >= 32 {
-				// Printable ASCII and non-ASCII bytes (preserve as-is)
+			if c >= 32 && c < 128 {
+				// Printable ASCII: output as-is
 				result.WriteByte(c)
 			} else {
-				// Non-printable: use \ddd decimal escape
+				// Non-printable or non-ASCII (>=128): use \ddd decimal escape
+				// Lua %q escapes ALL bytes outside printable ASCII range
 				result.WriteString(fmt.Sprintf("\\%03d", c))
 			}
 		}
