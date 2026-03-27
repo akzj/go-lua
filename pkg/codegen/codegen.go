@@ -19,10 +19,12 @@ func (e *CompileError) Error() string {
 
 // LabelInfo stores information about a label.
 type LabelInfo struct {
-	PC         int  // Program counter where the label is defined
-	BlockDepth int  // Block depth where the label is defined
-	Line       int  // Source line number
-	ScopeLevel int  // Scope level (len(cg.Locals)) when label was defined
+	PC            int  // Program counter where the label is defined
+	BlockDepth    int  // Block depth where the label is defined
+	Line          int  // Source line number
+	ScopeLevel    int  // Scope level (len(cg.Locals)) when label was defined
+	AtBlockEnd    bool // True if this label is at the end of its containing block
+	PCAfterLabel  int  // PC right after the label (to detect if code follows)
 }
 
 // GotoInfo stores information about a forward goto.
@@ -33,6 +35,15 @@ type GotoInfo struct {
 	Line          int    // Source line number
 	NumLocals     int    // Total number of locals at goto time
 	NumGlobalAlls int    // Number of `global *` declarations at goto time
+	ActiveLocals  []string // Names of locals in scope at goto time (for proper scope checking)
+}
+
+// PendingScopeCheck stores info for deferred scope checking at block end.
+type PendingScopeCheck struct {
+	LabelName    string   // Label that needs checking
+	GotoInfo     GotoInfo // Goto that jumps to this label
+	LocalName    string   // Local that might be jumped over
+	LocalBlockDepth int   // Block depth where the local was declared
 }
 
 // CodeGenerator generates bytecode from AST.
@@ -56,15 +67,20 @@ type CodeGenerator struct {
 	forwardGotos map[string][]GotoInfo   // label name -> list of pending forward gotos
 	globalAlls   []int                   // Line numbers where `global *` was declared
 	blockDepth   int                      // Current block nesting depth
+	
+	// Deferred scope checking for same-block gotos
+	pendingScopeChecks []PendingScopeCheck // Checks to perform at block end
+	lastLabelPC        int                 // PC of the most recent label in current block (0 if none)
 }
 
 // LocalVar represents a local variable during compilation.
 type LocalVar struct {
-	Name     string
-	Index    int
-	Active   bool
-	IsParam  bool
-	StartPC  int // PC where variable becomes active
+	Name       string
+	Index      int
+	Active     bool
+	IsParam    bool
+	StartPC    int // PC where variable becomes active
+	BlockDepth int // Block depth where this local was declared
 }
 
 // countLocals returns the total number of local variables across all scope levels.
@@ -74,6 +90,57 @@ func (cg *CodeGenerator) countLocals() int {
 		count += len(scope)
 	}
 	return count
+}
+
+// getActiveLocals returns the names of all currently active local variables.
+func (cg *CodeGenerator) getActiveLocals() []string {
+	var names []string
+	for _, scope := range cg.Locals {
+		for _, local := range scope {
+			if local.Active {
+				names = append(names, local.Name)
+			}
+		}
+	}
+	return names
+}
+
+// isLocalInScope checks if a local with the given name is currently in scope.
+func (cg *CodeGenerator) isLocalInScope(name string) bool {
+	for i := len(cg.Locals) - 1; i >= 0; i-- {
+		for _, local := range cg.Locals[i] {
+			if local.Name == name && local.Active {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getLocalScopeLevel returns the scope level (index in cg.Locals) where a local is declared.
+// Returns -1 if the local is not found.
+func (cg *CodeGenerator) getLocalScopeLevel(name string) int {
+	for i, scope := range cg.Locals {
+		for _, local := range scope {
+			if local.Name == name && local.Active {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// getLocalBlockDepth returns the block depth where a local was declared.
+// Returns -1 if the local is not found.
+func (cg *CodeGenerator) getLocalBlockDepth(name string) int {
+	for _, scope := range cg.Locals {
+		for _, local := range scope {
+			if local.Name == name && local.Active {
+				return local.BlockDepth
+			}
+		}
+	}
+	return -1
 }
 
 // getLocalsSince returns the names of locals added after the given count.
@@ -106,15 +173,17 @@ func NewCodeGenerator() *CodeGenerator {
 			Upvalues:   make([]object.UpvalueDesc, 0),
 			Prototypes: make([]*object.Prototype, 0),
 		},
-		Upvalues:        make(map[string]int),
-		Constants:       make(map[string]int),
-		Locals:          make([][]LocalVar, 0),
-		JumpList:        make([]JumpEntry, 0),
-		ExpectedResults: -1, // Default: 1 result
-		labels:          make(map[string]LabelInfo),
-		forwardGotos:    make(map[string][]GotoInfo),
-		globalAlls:      make([]int, 0),
-		blockDepth:      0,
+		Upvalues:           make(map[string]int),
+		Constants:          make(map[string]int),
+		Locals:             make([][]LocalVar, 0),
+		JumpList:           make([]JumpEntry, 0),
+		ExpectedResults:    -1, // Default: 1 result
+		labels:             make(map[string]LabelInfo),
+		forwardGotos:       make(map[string][]GotoInfo),
+		globalAlls:         make([]int, 0),
+		blockDepth:         0,
+		pendingScopeChecks: make([]PendingScopeCheck, 0),
+		lastLabelPC:        0,
 	}
 }
 
@@ -187,6 +256,40 @@ func (cg *CodeGenerator) beginScope() {
 
 // endScope ends the current local variable scope.
 func (cg *CodeGenerator) endScope() {
+	// DEBUG
+	if len(cg.pendingScopeChecks) > 0 {
+		fmt.Printf("DEBUG endScope: blockDepth=%d, pendingChecks=%d\n", cg.blockDepth, len(cg.pendingScopeChecks))
+	}
+	
+	// Validate pending scope checks for this block depth
+	// A goto can jump over a local if the label is at block end
+	var remainingChecks []PendingScopeCheck
+	for _, check := range cg.pendingScopeChecks {
+		// Only process checks for labels in this block
+		labelInfo, exists := cg.labels[check.LabelName]
+		if !exists {
+			// Label not found - this will be caught elsewhere
+			remainingChecks = append(remainingChecks, check)
+			continue
+		}
+		
+		// Only validate checks for labels at this block depth
+		if labelInfo.BlockDepth != cg.blockDepth {
+			remainingChecks = append(remainingChecks, check)
+			continue
+		}
+		
+		// If the label is at block end, the jump is valid
+		if labelInfo.AtBlockEnd {
+			continue
+		}
+		
+		// The label is NOT at block end - this is an error
+		cg.setError("jump into the scope of '%s'", check.LocalName)
+		return
+	}
+	cg.pendingScopeChecks = remainingChecks
+	
 	if len(cg.Locals) > 0 {
 		scope := &cg.Locals[len(cg.Locals)-1]
 		// Record debug info for each variable going out of scope
@@ -214,6 +317,7 @@ func (cg *CodeGenerator) endScope() {
 	}
 	
 	cg.blockDepth--
+	cg.lastLabelPC = 0 // Reset for parent block
 }
 
 // addLocal adds a local variable to the current scope.
@@ -222,11 +326,12 @@ func (cg *CodeGenerator) addLocal(name string, index int, isParam bool) {
 		cg.Locals = append(cg.Locals, make([]LocalVar, 0))
 	}
 	cg.Locals[len(cg.Locals)-1] = append(cg.Locals[len(cg.Locals)-1], LocalVar{
-		Name:    name,
-		Index:   index,
-		Active:  true,
-		IsParam: isParam,
-		StartPC: cg.PC, // Capture when variable becomes active
+		Name:       name,
+		Index:      index,
+		Active:     true,
+		IsParam:    isParam,
+		StartPC:    cg.PC, // Capture when variable becomes active
+		BlockDepth: cg.blockDepth,
 	})
 }
 
@@ -423,6 +528,22 @@ func (cg *CodeGenerator) emitReturn(a int, b int) {
 func (cg *CodeGenerator) genBlock(block *parser.BlockStmt) {
 	for _, stmt := range block.Stmts {
 		cg.genStmt(stmt)
+	}
+	// After all statements, mark labels at block end
+	// A label is at block end if no code was generated after it
+	currentPC := cg.GetCurrentPC()
+	for name, labelInfo := range cg.labels {
+		if labelInfo.BlockDepth == cg.blockDepth && labelInfo.PCAfterLabel == currentPC {
+			labelInfo.AtBlockEnd = true
+			cg.labels[name] = labelInfo
+		}
+	}
+	// DEBUG: Print label info
+	if len(cg.pendingScopeChecks) > 0 {
+		fmt.Printf("DEBUG genBlock: blockDepth=%d, currentPC=%d\n", cg.blockDepth, currentPC)
+		for name, li := range cg.labels {
+			fmt.Printf("  Label %s: BlockDepth=%d, PCAfterLabel=%d, AtBlockEnd=%v\n", name, li.BlockDepth, li.PCAfterLabel, li.AtBlockEnd)
+		}
 	}
 }
 

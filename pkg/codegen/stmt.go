@@ -827,6 +827,7 @@ func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
 			Line:          stmt.Line(),
 			NumLocals:     cg.countLocals(),
 			NumGlobalAlls: len(cg.globalAlls),
+			ActiveLocals:  cg.getActiveLocals(),
 		})
 	}
 }
@@ -840,6 +841,7 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 	
 	labelName := stmt.Name
 	currentPC := cg.GetCurrentPC()
+	labelBlockDepth := cg.blockDepth
 	
 	// Check for duplicate labels
 	// A label is visible if it's in the same or outer block (blockDepth <= current)
@@ -866,19 +868,55 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 			// Check that the label is not in a deeper block than the goto
 			// A goto can only jump to a label in the same or outer scope
 			// If label's blockDepth > goto's blockDepth, the label is inside an inner block (invisible)
-			if cg.blockDepth > gotoInfo.BlockDepth {
+			if labelBlockDepth > gotoInfo.BlockDepth {
 				cg.setError("label '%s' is inside an inner block", labelName)
 				return
 			}
 			
 			// Check if the goto jumps into the scope of a local variable
-			// If there are more locals now than at goto time, the goto jumps over a local
-			currentLocals := cg.countLocals()
-			if currentLocals > gotoInfo.NumLocals {
-				// Find the first local that was declared after the goto
-				newLocals := cg.getLocalsSince(gotoInfo.NumLocals)
-				if len(newLocals) > 0 {
-					cg.setError("jump into the scope of '%s'", newLocals[0])
+			// A goto may jump over a local declaration IF the label is at or past the end of the local's scope.
+			// 
+			// Get locals that are active at the label but were NOT active at the goto
+			currentActiveLocals := cg.getActiveLocals()
+			gotoActiveLocals := gotoInfo.ActiveLocals
+			
+			// Find new active locals (in scope at label but not at goto)
+			for _, localName := range currentActiveLocals {
+				wasActiveAtGoto := false
+				for _, oldLocal := range gotoActiveLocals {
+					if oldLocal == localName {
+						wasActiveAtGoto = true
+						break
+					}
+				}
+				
+				if !wasActiveAtGoto {
+					// This local is new - check if the label is at the end of its scope
+					// The label is at the end of the local's scope if:
+					// The local was declared in a block depth > label's block depth
+					// (meaning the local's block has ended by the time we reach this label)
+					localBlockDepth := cg.getLocalBlockDepth(localName)
+					
+					// If local's block depth > label's block depth, the local was in a deeper block
+					// that has since closed - the label is past the end of the local's scope
+					if localBlockDepth > labelBlockDepth {
+						// Local was in a deeper block that has closed - label is past its scope
+						// This is allowed
+						continue
+					}
+					
+					// If local's block depth == label's block depth, check if goto was in same block
+					// If goto was in same block (gotoInfo.BlockDepth == localBlockDepth), 
+					// then label is at end of local's scope (valid)
+					// If goto was in deeper block (gotoInfo.BlockDepth > localBlockDepth),
+					// then goto jumped out over the local's declaration (invalid)
+					if localBlockDepth == labelBlockDepth && gotoInfo.BlockDepth <= localBlockDepth {
+						// All in same block - label is at end of local's scope
+						continue
+					}
+					
+					// The local is in the same or outer block, and the goto jumped over it
+					cg.setError("jump into the scope of '%s'", localName)
 					return
 				}
 			}
