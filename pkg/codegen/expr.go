@@ -214,11 +214,15 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 
 	// Check if the last argument is a call expression (for multi-return propagation)
 	lastArgIsCall := false
+	lastArgIsDots := false
 	if len(expr.Args) > 0 {
 		lastArg := expr.Args[len(expr.Args)-1]
 		_, lastArgIsCall = lastArg.(*parser.CallExpr)
 		if !lastArgIsCall {
 			_, lastArgIsCall = lastArg.(*parser.MethodCallExpr)
+		}
+		if !lastArgIsCall {
+			_, lastArgIsDots = lastArg.(*parser.DotsExpr)
 		}
 	}
 
@@ -285,6 +289,10 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 				cg.EmitABC(vm.OP_CALL, argFuncReg, len(methodExpr.Args)+2, 0)
 			}
 			// For C=0, the VM sets StackTop; don't adjust here
+		} else if isLast && lastArgIsDots {
+			// Last argument is ... (vararg) - emit VARARG with C=0 (all varargs)
+			targetReg := funcReg + 1 + i
+			cg.EmitABC(vm.OP_VARARG, targetReg, 1, 0) // C=0 means all varargs
 		} else {
 			argReg := cg.genExpr(arg)
 			targetReg := funcReg + 1 + i
@@ -315,7 +323,7 @@ func (cg *CodeGenerator) genCall(expr *parser.CallExpr) int {
 	// ExpectedResults == -1 means "default" (1 result, cField = 2)
 	
 	bField := argCount + 1
-	if lastArgIsCall {
+	if lastArgIsCall || lastArgIsDots {
 		bField = 0 // Variable number of args from stack top
 	}
 	cg.EmitABC(vm.OP_CALL, resultReg, bField, cField)
@@ -367,11 +375,15 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 
 	// Check if the last argument is a call expression (for multi-return propagation)
 	lastArgIsCall := false
+	lastArgIsDots := false
 	if len(expr.Args) > 0 {
 		lastArg := expr.Args[len(expr.Args)-1]
 		_, lastArgIsCall = lastArg.(*parser.CallExpr)
 		if !lastArgIsCall {
 			_, lastArgIsCall = lastArg.(*parser.MethodCallExpr)
+		}
+		if !lastArgIsCall {
+			_, lastArgIsDots = lastArg.(*parser.DotsExpr)
 		}
 	}
 
@@ -437,6 +449,10 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 				cg.EmitABC(vm.OP_CALL, argFuncReg, len(methodExpr.Args)+2, 0)
 			}
 			// For C=0, the VM sets StackTop; don't adjust here
+		} else if isLast && lastArgIsDots {
+			// Last argument is ... (vararg) - emit VARARG with C=0 (all varargs)
+			targetReg := funcReg + 2 + i
+			cg.EmitABC(vm.OP_VARARG, targetReg, 1, 0) // C=0 means all varargs
 		} else {
 			argReg := cg.genExpr(arg)
 			targetReg := funcReg + 2 + i
@@ -458,7 +474,7 @@ func (cg *CodeGenerator) genMethodCall(expr *parser.MethodCallExpr) int {
 	// ExpectedResults == -1 means "default" (1 result, cField = 2)
 	
 	bField := argCount + 2 // +2 for self
-	if lastArgIsCall {
+	if lastArgIsCall || lastArgIsDots {
 		bField = 0 // Variable number of args from stack top
 	}
 	cg.EmitABC(vm.OP_CALL, funcReg, bField, cField)
@@ -905,7 +921,18 @@ func (cg *CodeGenerator) genFunc(expr *parser.FuncExpr) int {
 func (cg *CodeGenerator) genDots() int {
 	reg := cg.allocRegister()
 	// VARARG R(A) := R(A+1), ..., R(A+C-1)
-	cg.EmitABC(vm.OP_VARARG, reg, 1, 2)
+	// C = numResults + 1, or C=0 for all results
+	
+	cField := 2 // default: 1 result (c = nresults + 1)
+	if cg.ExpectedResults > 0 {
+		cField = cg.ExpectedResults + 1
+	} else if cg.ExpectedResults == 0 {
+		// ExpectedResults == 0 means "all results"
+		cField = 0
+	}
+	// ExpectedResults == -1 means "default" (1 result, cField = 2)
+	
+	cg.EmitABC(vm.OP_VARARG, reg, 1, cField)
 	return reg
 }
 

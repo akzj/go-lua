@@ -143,6 +143,12 @@ func (cg *CodeGenerator) Generate(funcDef *parser.FuncDefStmt) *object.Prototype
 	}
 	cg.Prototype.NumParams = len(funcDef.Params)
 	cg.Prototype.IsVarArg = funcDef.IsVarArg
+	
+	// Emit VARARGPREP for vararg functions
+	if funcDef.IsVarArg {
+		cg.EmitABC(vm.OP_VARARGPREP, len(funcDef.Params), 0, 0)
+	}
+	
 	cg.genBlock(funcDef.Body)
 	cg.emitReturn(0, 1)
 	cg.endScope()
@@ -160,6 +166,12 @@ func (cg *CodeGenerator) GenerateFunc(funcExpr *parser.FuncExpr) *object.Prototy
 	cg.StackTop = len(funcExpr.Params)
 	cg.Prototype.NumParams = len(funcExpr.Params)
 	cg.Prototype.IsVarArg = funcExpr.IsVarArg
+	
+	// Emit VARARGPREP for vararg functions
+	if funcExpr.IsVarArg {
+		cg.EmitABC(vm.OP_VARARGPREP, len(funcExpr.Params), 0, 0)
+	}
+	
 	cg.genBlock(funcExpr.Body)
 	cg.emitReturn(0, 1)
 	cg.endScope()

@@ -845,8 +845,14 @@ func stdStringRep(L *State) int {
 		return 1
 	}
 
-	n := 0
+	var n int
 	if num, ok := L.ToNumber(2); ok {
+		// Check if the number is too large for int
+		if num > float64(1<<31-1) || num < 0 {
+			L.PushString("bad argument #2 to 'rep' (resulting string too large)")
+			L.Error()
+			return 0
+		}
 		n = int(num)
 	}
 
@@ -858,6 +864,25 @@ func stdStringRep(L *State) int {
 	if n <= 0 {
 		L.PushString("")
 		return 1
+	}
+
+	// Check for overflow: resulting string would be too large
+	// Max reasonable size is around 1GB
+	strLen := len(str)
+	sepLen := len(sep)
+	// Total size = n * strLen + (n-1) * sepLen
+	// Check if this would overflow or be too large
+	totalSize := int64(n) * int64(strLen)
+	if sepLen > 0 && n > 1 {
+		totalSize += int64(n-1) * int64(sepLen)
+	}
+	
+	// Limit to ~1GB to prevent memory exhaustion
+	maxSize := int64(1 << 30)
+	if totalSize > maxSize || totalSize < 0 {
+		L.PushString("bad argument #2 to 'rep' (resulting string too large)")
+		L.Error()
+		return 0
 	}
 
 	parts := make([]string, n)
