@@ -1103,7 +1103,9 @@ func luaQuote(s string) string {
 		case '\f':
 			result.WriteString("\\f")
 		case '\n':
-			result.WriteString("\\n")
+			// Lua outputs backslash followed by ACTUAL newline, not \n
+			result.WriteByte('\\')
+			result.WriteByte('\n')
 		case '\r':
 			result.WriteString("\\r")
 		case '\t':
