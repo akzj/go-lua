@@ -4,6 +4,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -845,8 +846,54 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					str, _ := v.ToString()
-					quoted := luaQuote(str)
+					
+					var quoted string
+					switch {
+					case v.IsNil():
+						quoted = "nil"
+					case v.IsBoolean():
+						if v.Value.Bool {
+							quoted = "true"
+						} else {
+							quoted = "false"
+						}
+					case v.IsNumber():
+						num := v.Value.Num
+						if math.IsNaN(num) {
+							quoted = "(0/0)"
+						} else if math.IsInf(num, 1) {
+							quoted = "math.huge"
+						} else if math.IsInf(num, -1) {
+							quoted = "-math.huge"
+						} else {
+							// Format number as literal
+							if v.IsInt {
+								// Integer value - format as integer literal
+								intVal := v.Value.Int
+								// Special case: math.mininteger (-2^63) cannot be formatted
+								// as a decimal literal because the lexer parses '-' as unary
+								// minus, then the positive value overflows int64.
+								// Use math.tointeger with hex format as workaround.
+								if intVal == math.MinInt64 {
+									quoted = "math.tointeger(-0x8000000000000000)"
+								} else {
+									quoted = strconv.FormatInt(intVal, 10)
+								}
+							} else {
+								// Float value
+								quoted = strconv.FormatFloat(num, 'g', -1, 64)
+							}
+						}
+					case v.IsString():
+						str := v.Value.Str
+						quoted = luaQuote(str)
+					default:
+						// For other types (table, function, etc.), raise error
+						L.PushString(fmt.Sprintf("bad argument #%d to 'format' (no literal for %s)", argIdx, v.Type))
+						L.Error()
+						return 0
+					}
+					
 					if formatSpec == "" {
 						result.WriteString(quoted)
 					} else {
