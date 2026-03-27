@@ -27,11 +27,12 @@ type LabelInfo struct {
 
 // GotoInfo stores information about a forward goto.
 type GotoInfo struct {
-	PC         int    // Program counter where the goto JMP instruction is emitted
-	Label      string // Label name
-	BlockDepth int    // Block depth where the goto is emitted
-	Line       int    // Source line number
-	NumLocals  int    // Total number of locals at goto time
+	PC            int    // Program counter where the goto JMP instruction is emitted
+	Label         string // Label name
+	BlockDepth    int    // Block depth where the goto is emitted
+	Line          int    // Source line number
+	NumLocals     int    // Total number of locals at goto time
+	NumGlobalAlls int    // Number of `global *` declarations at goto time
 }
 
 // CodeGenerator generates bytecode from AST.
@@ -53,6 +54,7 @@ type CodeGenerator struct {
 	// Label tracking for goto support
 	labels       map[string]LabelInfo    // label name -> label info
 	forwardGotos map[string][]GotoInfo   // label name -> list of pending forward gotos
+	globalAlls   []int                   // Line numbers where `global *` was declared
 	blockDepth   int                      // Current block nesting depth
 }
 
@@ -111,6 +113,7 @@ func NewCodeGenerator() *CodeGenerator {
 		ExpectedResults: -1, // Default: 1 result
 		labels:          make(map[string]LabelInfo),
 		forwardGotos:    make(map[string][]GotoInfo),
+		globalAlls:      make([]int, 0),
 		blockDepth:      0,
 	}
 }

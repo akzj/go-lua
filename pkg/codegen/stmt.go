@@ -71,6 +71,9 @@ func (cg *CodeGenerator) genStmt(stmt parser.Stmt) {
 			cg.genLabel(s)
 		}
 
+	case *parser.GlobalStmt:
+		cg.genGlobal(s)
+
 	default:
 		// Unknown statement type, ignore
 	}
@@ -771,6 +774,19 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 	}
 }
 
+// genGlobal generates code for a global declaration statement.
+// global [attr] ('*' | namelist) [= exprlist]
+func (cg *CodeGenerator) genGlobal(stmt *parser.GlobalStmt) {
+	// Track `global *` (wildcard) declarations for goto scope checking
+	// When Names is nil or empty, it's the `global *` form
+	if len(stmt.Names) == 0 {
+		// Record the source line number as a `global *` declaration point
+		cg.globalAlls = append(cg.globalAlls, stmt.Line())
+	}
+	// Note: `global *` doesn't generate bytecode, it's a declaration marker
+	// The actual global variable assignments are handled separately
+}
+
 // genGoto generates code for a goto statement.
 // goto label
 func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
@@ -860,6 +876,14 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 					cg.setError("jump into the scope of '%s'", newLocals[0])
 					return
 				}
+			}
+			
+			// Check if the goto jumps over a `global *` declaration
+			// Compare the count of `global *` declarations at goto time vs now
+			currentGlobalAlls := len(cg.globalAlls)
+			if currentGlobalAlls > gotoInfo.NumGlobalAlls {
+				cg.setError("scope of '*'")
+				return
 			}
 			
 			// Patch the jump: sBx = targetPC - (jumpPC + 1)
