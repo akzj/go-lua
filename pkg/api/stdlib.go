@@ -61,6 +61,7 @@ func (s *State) OpenLibs() {
 	s.openDebugLib()
 	s.openOSLib()
 	s.openCoroutineLib()
+	s.openTracegcLib()
 
 	// Set standard global variables
 	// _G is a reference to the global table (same as _ENV)
@@ -117,6 +118,7 @@ func (s *State) OpenLibs() {
 	registerModule("os")
 	registerModule("debug")
 	registerModule("coroutine")
+	registerModule("tracegc")
 
 	s.Pop(2) // Pop loaded and package
 }

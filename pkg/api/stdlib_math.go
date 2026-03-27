@@ -73,6 +73,16 @@ func (s *State) openMathLib() {
 // stdMathAbs implements math.abs(x)
 // Returns absolute value of x.
 func stdMathAbs(L *State) int {
+	v := L.vm.GetStack(1)
+	if v.Type == object.TypeNumber && v.IsInt {
+		// Input is integer: return absolute value as integer
+		val := v.Value.Int
+		if val < 0 {
+			val = -val
+		}
+		L.PushInteger(val)
+		return 1
+	}
 	x, ok := L.ToNumber(1)
 	if !ok {
 		L.PushNumber(0)
@@ -85,24 +95,40 @@ func stdMathAbs(L *State) int {
 // stdMathCeil implements math.ceil(x)
 // Returns smallest integer >= x.
 func stdMathCeil(L *State) int {
+	v := L.vm.GetStack(1)
+	if v.Type == object.TypeNumber && v.IsInt {
+		// Input is integer: ceil of integer is itself
+		L.PushInteger(v.Value.Int)
+		return 1
+	}
 	x, ok := L.ToNumber(1)
 	if !ok {
 		L.PushNumber(0)
 		return 1
 	}
-	L.PushNumber(math.Ceil(x))
+	result := math.Ceil(x)
+	// Ceil always returns an integer value
+	L.PushInteger(int64(result))
 	return 1
 }
 
 // stdMathFloor implements math.floor(x)
 // Returns largest integer <= x.
 func stdMathFloor(L *State) int {
+	v := L.vm.GetStack(1)
+	if v.Type == object.TypeNumber && v.IsInt {
+		// Input is integer: floor of integer is itself
+		L.PushInteger(v.Value.Int)
+		return 1
+	}
 	x, ok := L.ToNumber(1)
 	if !ok {
 		L.PushNumber(0)
 		return 1
 	}
-	L.PushNumber(math.Floor(x))
+	result := math.Floor(x)
+	// Floor always returns an integer value
+	L.PushInteger(int64(result))
 	return 1
 }
 
@@ -113,6 +139,16 @@ func stdMathMax(L *State) int {
 	if top == 0 {
 		L.PushNumber(0)
 		return 1
+	}
+
+	// Check if all inputs are integers
+	allInt := true
+	for i := 1; i <= top; i++ {
+		v := L.vm.GetStack(i)
+		if v.Type != object.TypeNumber || !v.IsInt {
+			allInt = false
+			break
+		}
 	}
 
 	max, ok := L.ToNumber(1)
@@ -128,7 +164,11 @@ func stdMathMax(L *State) int {
 		}
 	}
 
-	L.PushNumber(max)
+	if allInt {
+		L.PushInteger(int64(max))
+	} else {
+		L.PushNumber(max)
+	}
 	return 1
 }
 
@@ -139,6 +179,16 @@ func stdMathMin(L *State) int {
 	if top == 0 {
 		L.PushNumber(0)
 		return 1
+	}
+
+	// Check if all inputs are integers
+	allInt := true
+	for i := 1; i <= top; i++ {
+		v := L.vm.GetStack(i)
+		if v.Type != object.TypeNumber || !v.IsInt {
+			allInt = false
+			break
+		}
 	}
 
 	min, ok := L.ToNumber(1)
@@ -154,7 +204,11 @@ func stdMathMin(L *State) int {
 		}
 	}
 
-	L.PushNumber(min)
+	if allInt {
+		L.PushInteger(int64(min))
+	} else {
+		L.PushNumber(min)
+	}
 	return 1
 }
 
@@ -372,6 +426,13 @@ func stdMathRad(L *State) int {
 // stdMathModf implements math.modf(x)
 // Returns integer and fractional parts of x.
 func stdMathModf(L *State) int {
+	v := L.vm.GetStack(1)
+	if v.Type == object.TypeNumber && v.IsInt {
+		// Input is integer: return (integer, 0.0 float)
+		L.PushInteger(v.Value.Int)
+		L.PushNumber(0.0)
+		return 2
+	}
 	x, ok := L.ToNumber(1)
 	if !ok {
 		L.PushNumber(0)
@@ -424,6 +485,12 @@ func stdMathUlt(L *State) int {
 // has no fractional part.
 // Returns nil for NaN and infinity values as they cannot be represented as integers.
 func stdMathToInteger(L *State) int {
+	v := L.vm.GetStack(1)
+	if v.Type == object.TypeNumber && v.IsInt {
+		// Already an integer
+		L.PushInteger(v.Value.Int)
+		return 1
+	}
 	x, ok := L.ToNumber(1)
 	if !ok {
 		// Not a number
@@ -439,7 +506,7 @@ func stdMathToInteger(L *State) int {
 	
 	// Check if x is an integer value (no fractional part)
 	if x == math.Trunc(x) {
-		L.PushNumber(x)
+		L.PushInteger(int64(x))
 		return 1
 	}
 	
