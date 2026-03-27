@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
+	"unsafe"
 
 	"github.com/akzj/go-lua/pkg/object"
 )
+
+// shortStringPtrs caches stable pointers for short strings (≤40 bytes)
+// In Lua 5.4, short strings are interned and share the same pointer
+var shortStringPtrs sync.Map // map[string]uintptr
 
 // openStringLib registers the string module
 func (s *State) openStringLib() {
@@ -731,6 +737,32 @@ func stdStringFind(L *State) int {
 
 // stdStringFormat implements string.format(formatstring, ...)
 // Returns formatted string (sprintf-like).
+// stdStringFormat implements string.format(formatstring, ...)
+// Returns formatted string (sprintf-like).
+//
+// CONTRACT:
+//   - Format spec: %[flags][width][.precision]conversion
+//   - Conversion chars: %, p, s, q, d, i, f, c, x, X, o, u, a, A, e, E, g, G
+//   - %% NEVER consumes an argument (invariant: argIdx only incremented for non-%% conversions)
+//   - %q uses Lua escaping (\0 not \x00, \n not literal newline)
+//   - %p: pointer types (table/function/thread/userdata) → GC address
+//         strings ≤40 bytes → cached stable pointer (interned)
+//         strings >40 bytes → unique pointer (not interned)
+//         non-pointers → "(null)"
+//   - %f default precision: 6 decimal places (matches C printf)
+//   - Bare specs (%s) and modified specs (%10s) both supported
+//
+// PARSER INVARIANT:
+//   - Outer `for i` loop owns `i`
+//   - Inner scan advances `i` past flags/width/precision to the conversion char
+//   - After inner scan, `i` points AT the conversion character
+//   - Outer loop's `i++` is suppressed — inner scan already positioned correctly
+//   - This prevents off-by-one bugs in format strings with multiple specs
+//
+// WHY NOT use fmt.Sprintf directly for %p?
+//   - Go's %p expects a pointer, but we format pointer ADDRESS as a string
+//   - Lua's %p has special semantics for short strings (interned) vs long strings
+//   - We need manual control over the pointer representation
 func stdStringFormat(L *State) int {
 	format, ok := L.ToString(1)
 	if !ok {
@@ -738,130 +770,199 @@ func stdStringFormat(L *State) int {
 		return 1
 	}
 
-	// Check for %p format which needs special handling
-	// %p formats pointer values (tables, functions, threads, userdata)
-	// For non-pointer values (numbers, strings, booleans, nil), returns "(null)"
 	top := L.GetTop()
 	argIdx := 2
 	
 	var result strings.Builder
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
-			spec := format[i+1]
-			switch spec {
+			// Scan format spec: %[flags][width][.precision]conversion
+			i++ // skip '%'
+			start := i
+			
+			// Skip flags: - + # 0 space
+			for i < len(format) && (format[i] == '-' || format[i] == '+' || format[i] == '#' || format[i] == '0' || format[i] == ' ') {
+				i++
+			}
+			
+			// Skip width (digits)
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				i++
+			}
+			
+			// Skip precision (.digits)
+			if i < len(format) && format[i] == '.' {
+				i++
+				for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+					i++
+				}
+			}
+			
+			// Now format[i] should be the conversion character
+			if i >= len(format) {
+				result.WriteByte('%')
+				break
+			}
+			
+			conversion := format[i]
+			formatSpec := format[start:i] // everything between % and conversion (flags, width, precision)
+			
+			// Handle based on conversion type
+			switch conversion {
 			case '%':
 				result.WriteByte('%')
-				i++
 			case 'p':
-				// %p format: pointer or "(null)"
+				// Get the argument value
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					// Check if it's a pointer type (table, function, thread, userdata)
-					if v.IsTable() || v.IsFunction() || v.IsThread() || v.IsUserData() {
-						result.WriteString(fmt.Sprintf("%p", v.Value.GC))
+					ptrStr := getPointerString(*v)
+					if formatSpec == "" {
+						result.WriteString(ptrStr)
 					} else {
-						result.WriteString("(null)")
+						result.WriteString(applyFormatSpec(formatSpec, ptrStr))
 					}
 				} else {
-					result.WriteString("(null)")
+					ptrStr := "(null)"
+					if formatSpec == "" {
+						result.WriteString(ptrStr)
+					} else {
+						result.WriteString(applyFormatSpec(formatSpec, ptrStr))
+					}
 				}
-				i++
-			case 's', 'q':
+			case 's':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					str, _ := v.ToString()
-					if spec == 'q' {
-						result.WriteString(fmt.Sprintf("%q", str))
-					} else {
+					if formatSpec == "" {
 						result.WriteString(str)
+					} else {
+						result.WriteString(fmt.Sprintf("%"+formatSpec+"s", str))
 					}
 				}
-				i++
+			case 'q':
+				if argIdx <= top {
+					v := L.vm.GetStack(argIdx)
+					argIdx++
+					str, _ := v.ToString()
+					quoted := luaQuote(str)
+					if formatSpec == "" {
+						result.WriteString(quoted)
+					} else {
+						result.WriteString(fmt.Sprintf("%"+formatSpec+"s", quoted))
+					}
+				}
 			case 'd', 'i':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						result.WriteString(strconv.Itoa(int(num)))
+						if formatSpec == "" {
+							result.WriteString(strconv.Itoa(int(num)))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"d", int(num)))
+						}
 					}
 				}
-				i++
 			case 'f':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						result.WriteString(strconv.FormatFloat(num, 'f', -1, 64))
+						if formatSpec == "" {
+							// Default %f uses 6 decimal places (like C)
+							result.WriteString(strconv.FormatFloat(num, 'f', 6, 64))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"f", num))
+						}
 					}
 				}
-				i++
 			case 'c':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						result.WriteByte(byte(int(num)))
+						if formatSpec == "" {
+							result.WriteByte(byte(int(num)))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"c", byte(int(num))))
+						}
 					}
 				}
-				i++
 			case 'x', 'X':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						if spec == 'x' {
-							result.WriteString(strconv.FormatInt(int64(num), 16))
+						if formatSpec == "" {
+							if conversion == 'x' {
+								result.WriteString(strconv.FormatInt(int64(num), 16))
+							} else {
+								result.WriteString(strings.ToUpper(strconv.FormatInt(int64(num), 16)))
+							}
 						} else {
-							result.WriteString(strings.ToUpper(strconv.FormatInt(int64(num), 16)))
+							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), int(num)))
 						}
 					}
 				}
-				i++
 			case 'o':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						result.WriteString(strconv.FormatInt(int64(num), 8))
+						if formatSpec == "" {
+							result.WriteString(strconv.FormatInt(int64(num), 8))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"o", int(num)))
+						}
 					}
 				}
-				i++
 			case 'u':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						result.WriteString(strconv.FormatUint(uint64(num), 10))
+						if formatSpec == "" {
+							result.WriteString(strconv.FormatUint(uint64(num), 10))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"d", int(num)))
+						}
 					}
 				}
-				i++
 			case 'a', 'A':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						// Go uses 'x' for hex float format (like 0x1.fp+3)
-						if spec == 'a' {
-							result.WriteString(strconv.FormatFloat(num, 'x', -1, 64))
+						if formatSpec == "" {
+							if conversion == 'a' {
+								result.WriteString(strconv.FormatFloat(num, 'x', -1, 64))
+							} else {
+								result.WriteString(strings.ToUpper(strconv.FormatFloat(num, 'x', -1, 64)))
+							}
 						} else {
-							result.WriteString(strings.ToUpper(strconv.FormatFloat(num, 'x', -1, 64)))
+							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), num))
 						}
 					}
 				}
-				i++
 			case 'e', 'E', 'g', 'G':
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						result.WriteString(strconv.FormatFloat(num, byte(spec), -1, 64))
+						if formatSpec == "" {
+							result.WriteString(strconv.FormatFloat(num, byte(conversion), -1, 64))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), num))
+						}
 					}
 				}
-				i++
 			default:
-				result.WriteByte(format[i])
+				// Unknown conversion, output as-is
+				result.WriteByte('%')
+				result.WriteString(formatSpec)
+				result.WriteByte(conversion)
 			}
 		} else {
 			result.WriteByte(format[i])
@@ -870,6 +971,122 @@ func stdStringFormat(L *State) int {
 
 	L.PushString(result.String())
 	return 1
+}
+
+// applyFormatSpec applies width and justification to a string
+// formatSpec contains flags and width (e.g., "90", "-60", "08")
+func applyFormatSpec(formatSpec, value string) string {
+	if formatSpec == "" {
+		return value
+	}
+	
+	// Parse format spec
+	leftJustify := false
+	width := 0
+	
+	i := 0
+	// Check for '-' flag (left justify)
+	if i < len(formatSpec) && formatSpec[i] == '-' {
+		leftJustify = true
+		i++
+	}
+	
+	// Skip other flags (+, #, 0, space) - not relevant for strings
+	for i < len(formatSpec) && (formatSpec[i] == '+' || formatSpec[i] == '#' || formatSpec[i] == '0' || formatSpec[i] == ' ') {
+		i++
+	}
+	
+	// Parse width
+	for i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+		width = width*10 + int(formatSpec[i]-'0')
+		i++
+	}
+	
+	if width <= len(value) {
+		return value
+	}
+	
+	padding := strings.Repeat(" ", width-len(value))
+	if leftJustify {
+		return value + padding
+	}
+	return padding + value
+}
+
+// getPointerString returns the pointer representation for a value
+// For pointer types (table, function, thread, userdata, string): returns hex address
+// For non-pointer types: returns "(null)"
+func getPointerString(v object.TValue) string {
+	if v.IsTable() || v.IsFunction() || v.IsThread() || v.IsUserData() {
+		return fmt.Sprintf("%p", v.Value.GC)
+	} else if v.IsString() {
+		// Strings: Lua 5.4 semantics
+		// Short strings (≤40 bytes) are interned - use cached stable pointer
+		// Long strings (>40 bytes) are not interned - use unique pointer
+		str, _ := v.ToString()
+		if len(str) <= 40 {
+			// Short string: use cached stable pointer
+			if ptr, ok := shortStringPtrs.Load(str); ok {
+				return fmt.Sprintf("0x%x", ptr.(uintptr))
+			}
+			// Create new stable pointer for this short string
+			ptrVal := uintptr(unsafe.Pointer(unsafe.StringData(str)))
+			shortStringPtrs.Store(str, ptrVal)
+			return fmt.Sprintf("0x%x", ptrVal)
+		}
+		// Long string: use unique pointer (not interned)
+		return fmt.Sprintf("%p", unsafe.StringData(str))
+	}
+	return "(null)"
+}
+
+// luaQuote returns a Lua-quoted string literal.
+// Uses Lua escaping conventions: \0, \n, \t, \\, \" etc.
+// WHY NOT fmt.Sprintf("%q")? Go uses \x00 for null, Lua uses \0.
+func luaQuote(s string) string {
+	var result strings.Builder
+	result.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '\a':
+			result.WriteString("\\a")
+		case '\b':
+			result.WriteString("\\b")
+		case '\f':
+			result.WriteString("\\f")
+		case '\n':
+			result.WriteString("\\n")
+		case '\r':
+			result.WriteString("\\r")
+		case '\t':
+			result.WriteString("\\t")
+		case '\v':
+			result.WriteString("\\v")
+		case '\\':
+			result.WriteString("\\\\")
+		case '"':
+			result.WriteString("\\\"")
+		case 0:
+			// Lua uses \0 for null, not \x00
+			// Check if next char is a digit - need to use \000 form
+			if i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9' {
+				result.WriteString("\\000")
+			} else {
+				result.WriteString("\\0")
+			}
+		default:
+			if c >= 32 && c < 127 {
+				// Printable ASCII
+				result.WriteByte(c)
+			} else {
+				// Non-printable: use \ddd decimal escape
+				result.WriteString(fmt.Sprintf("\\%03d", c))
+			}
+		}
+	}
+	result.WriteByte('"')
+	return result.String()
 }
 
 // formatString performs simple string formatting
