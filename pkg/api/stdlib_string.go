@@ -76,50 +76,67 @@ func stdStringSub(L *State) int {
 	}
 
 	n := len(str)
+	nInt := int64(n)
 
-	// Get start index (required)
-	i := 1.0
+	// Get start index (required) - matches Lua posrelatI
+	iInt := int64(1)
 	if L.GetTop() >= 2 {
-		if num, ok := L.ToNumber(2); ok {
-			i = num
+		v := L.vm.GetStack(2)
+		if v.IsNumber() {
+			var num int64
+			if v.IsInt {
+				num = v.Value.Int
+			} else {
+				num = int64(v.Value.Num)
+			}
+			if num > 0 {
+				iInt = num
+			} else if num == 0 {
+				iInt = 1
+			} else if num < -nInt {
+				iInt = 1
+			} else {
+				iInt = nInt + num + 1
+			}
 		}
 	}
 
-	// Get end index (optional, defaults to end of string)
-	j := float64(n)
+	// Get end index (optional, defaults to -1) - matches Lua getendpos
+	jInt := int64(-1)
 	if L.GetTop() >= 3 {
-		if num, ok := L.ToNumber(3); ok {
-			j = num
+		v := L.vm.GetStack(3)
+		if v.IsNumber() {
+			if v.IsInt {
+				jInt = v.Value.Int
+			} else {
+				jInt = int64(v.Value.Num)
+			}
 		}
 	}
-
-	// Handle negative indices (count from end)
-	if i < 0 {
-		i = float64(n) + i + 1
+	
+	// Apply getendpos logic
+	if jInt > nInt {
+		jInt = nInt
+	} else if jInt >= 0 {
+		// jInt stays as is
+	} else if jInt < -nInt {
+		jInt = 0
+	} else {
+		jInt = nInt + jInt + 1
 	}
-	if j < 0 {
-		j = float64(n) + j + 1
-	}
-
-	// Clamp to valid range [1, n] BEFORE converting to int to prevent overflow
-	// Only clamp lower bound for i, upper bound for j
-	// This ensures out-of-bounds start (i > n) results in i > j → empty string
-	if i < 1 {
-		i = 1
-	}
-	if j > float64(n) {
-		j = float64(n)
-	}
-
-	// Now safe to convert to int
-	iInt := int(i)
-	jInt := int(j)
 
 	// Return substring
 	if iInt > jInt {
 		L.PushString("")
 	} else {
-		L.PushString(str[iInt-1 : jInt])
+		// Clamp iInt and jInt to valid range for slicing
+		if iInt < 1 { iInt = 1 }
+		if jInt > nInt { jInt = nInt }
+		if iInt > nInt {
+			L.PushString("")
+		} else {
+			L.PushString(str[iInt-1 : jInt])
+		}
 	}
 	return 1
 }
@@ -920,7 +937,7 @@ func stdStringFormat(L *State) int {
 						quoted = luaQuote(str)
 					default:
 						// For other types (table, function, etc.), raise error
-						L.PushString(fmt.Sprintf("bad argument #%d to 'format' (no literal for %s)", argIdx, v.Type))
+						L.PushString(fmt.Sprintf("bad argument #%d to '?' (no literal for %s)", argIdx, v.Type))
 						L.Error()
 						return 0
 					}
@@ -935,12 +952,37 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					if num, ok := v.ToNumber(); ok {
-						if formatSpec == "" {
-							result.WriteString(strconv.Itoa(int(num)))
-						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+"u", uint(num)))
+					// %d requires integer - check if value is actually an integer
+					var num int64
+					var ok bool
+					if v.IsInt {
+						num = v.Value.Int
+						ok = true
+					} else if v.IsNumber() && !v.IsString() {
+						// Float numbers are accepted but truncated
+						num = int64(v.Value.Num)
+						ok = true
+					} else if v.IsString() {
+						// Try to parse string as integer (Lua 5.3+ behavior)
+						str := v.Value.Str
+						var n int64
+						_, isInt, strOk := object.LuaStringToNumber(str, 0)
+						if strOk && isInt {
+							num = n
+							ok = true
 						}
+					}
+					if ok {
+						if formatSpec == "" {
+							result.WriteString(strconv.FormatInt(num, 10))
+						} else {
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"d", num))
+						}
+					} else {
+						// Error: expected number
+						L.PushString(fmt.Sprintf("bad argument #%d to '?' (number expected, got %s)", argIdx-1, v.Type))
+						L.Error()
+						return 0
 					}
 				}
 			case 'f':
@@ -1378,7 +1420,7 @@ func stdStringChar(L *State) int {
 
 		// Validate range [0, 255]
 		if num < 0 || num > 255 {
-			L.PushString(fmt.Sprintf("bad argument #%d to 'char' (value out of range)", i))
+			L.PushString(fmt.Sprintf("bad argument #%d to 'char' (invalid value)", i))
 			L.Error()
 			return 0
 		}
