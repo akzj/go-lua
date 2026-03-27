@@ -193,6 +193,14 @@ func stdTostring(L *State) int {
 				return 1
 			}
 		}
+		
+		// If no __tostring, check for __name (Lua 5.4+ behavior)
+		nameMM := L.vm.GetMetamethod(t, "__name")
+		if nameMM != nil && nameMM.IsString() {
+			name, _ := nameMM.ToString()
+			L.PushString(fmt.Sprintf("%s: %p", name, v.Value.GC))
+			return 1
+		}
 	}
 	
 	switch v.Type {
