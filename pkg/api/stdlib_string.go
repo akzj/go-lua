@@ -975,12 +975,12 @@ func stdStringFormat(L *State) int {
 					if num, ok := v.ToNumber(); ok {
 						if formatSpec == "" {
 							if conversion == 'x' {
-								result.WriteString(strconv.FormatInt(int64(num), 16))
+								result.WriteString(strconv.FormatUint(uint64(num), 16))
 							} else {
-								result.WriteString(strings.ToUpper(strconv.FormatInt(int64(num), 16)))
+								result.WriteString(strings.ToUpper(strconv.FormatUint(uint64(num), 16)))
 							}
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), int(num)))
+							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), uint(num)))
 						}
 					}
 				}
@@ -990,9 +990,9 @@ func stdStringFormat(L *State) int {
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
 						if formatSpec == "" {
-							result.WriteString(strconv.FormatInt(int64(num), 8))
+							result.WriteString(strconv.FormatUint(uint64(num), 8))
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+"o", int(num)))
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"o", uint(num)))
 						}
 					}
 				}
@@ -1004,7 +1004,7 @@ func stdStringFormat(L *State) int {
 						if formatSpec == "" {
 							result.WriteString(strconv.FormatUint(uint64(num), 10))
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+"d", int(num)))
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"u", uint(num)))
 						}
 					}
 				}
@@ -1155,7 +1155,7 @@ func luaQuote(s string) string {
 				result.WriteString("\\0")
 			}
 		default:
-			if c >= 32 && c < 128 {
+			if c >= 32 {
 				// Printable ASCII: output as-is
 				result.WriteByte(c)
 			} else {
