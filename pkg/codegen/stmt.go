@@ -817,11 +817,12 @@ func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
 		
 		// Record this jump for later patching
 		cg.forwardGotos[labelName] = append(cg.forwardGotos[labelName], GotoInfo{
-			PC:         jumpPC,
-			Label:      labelName,
-			BlockDepth: cg.blockDepth,
-			Line:       stmt.Line(),
-			NumLocals:  cg.countLocals(),
+			PC:            jumpPC,
+			Label:         labelName,
+			BlockDepth:    cg.blockDepth,
+			Line:          stmt.Line(),
+			NumLocals:     cg.countLocals(),
+			NumGlobalAlls: len(cg.globalAlls),
 		})
 	}
 }

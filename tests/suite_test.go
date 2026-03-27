@@ -284,7 +284,7 @@ func convertNamedVararg(line string) string {
 
 // convertGlobalDecl converts a global declaration to a plain assignment.
 // "global fact = false" -> "fact = false"
-// "global <const> *" -> "" (skip)
+// "global <const> *" -> "global *" (preserve for codegen scope checking)
 // "global<const> print, assert" -> "" (skip, just declarations)
 // "global none" -> "" (skip, just declaration)
 // "global a; a = nil" -> "a = nil" (split on semicolon, keep rest)
@@ -304,8 +304,11 @@ func convertGlobalDecl(line string) string {
 			break
 		}
 	}
-	// Skip wildcard declarations
-	if rest == "*" || rest == "" {
+	// Preserve wildcard declarations for codegen scope checking
+	if rest == "*" {
+		return "global *"
+	}
+	if rest == "" {
 		return ""
 	}
 	// Handle semicolon: split on first ';', discard declaration part, keep rest
