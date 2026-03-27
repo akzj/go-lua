@@ -1123,8 +1123,8 @@ func luaQuote(s string) string {
 				result.WriteString("\\0")
 			}
 		default:
-			if c >= 32 && c < 127 {
-				// Printable ASCII
+			if c >= 32 {
+				// Printable ASCII and non-ASCII bytes (preserve as-is)
 				result.WriteByte(c)
 			} else {
 				// Non-printable: use \ddd decimal escape
