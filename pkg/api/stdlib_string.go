@@ -939,7 +939,7 @@ func stdStringFormat(L *State) int {
 						if formatSpec == "" {
 							result.WriteString(strconv.Itoa(int(num)))
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+"d", int(num)))
+							result.WriteString(fmt.Sprintf("%"+formatSpec+"u", uint(num)))
 						}
 					}
 				}
@@ -1134,8 +1134,9 @@ func luaQuote(s string) string {
 		case '\f':
 			result.WriteString("\\f")
 		case '\n':
-			// Lua 5.1/5.4 outputs \n escape (backslash + letter n)
-			result.WriteString("\\n")
+			// Lua outputs backslash followed by actual newline byte
+			result.WriteByte('\\')
+			result.WriteByte('\n')
 		case '\r':
 			result.WriteString("\\r")
 		case '\t':
