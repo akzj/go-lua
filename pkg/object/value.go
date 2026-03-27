@@ -1066,6 +1066,13 @@ func (t *Table) GetI(idx int) *TValue {
 	if idx >= 1 && idx <= len(t.Array) {
 		return &t.Array[idx-1]
 	}
+	// Check map part for integer keys outside array range
+	// Map uses Value as key. When Set stores an integer key, both Num and Int fields are set.
+	// We need to match both for the lookup to succeed.
+	lookupKey := Value{Num: float64(idx), Int: int64(idx)}
+	if v, ok := t.Map[lookupKey]; ok {
+		return v
+	}
 	return nil
 }
 

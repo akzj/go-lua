@@ -238,6 +238,12 @@ func (t *Table) GetI(idx int) *object.TValue {
 	if idx >= 1 && idx <= len(t.Array) {
 		return &t.Array[idx-1]
 	}
+	// Check map part for integer keys outside array range
+	key := object.NewInteger(int64(idx))
+	vk := newValueKey(*key)
+	if v, ok := t.Map[vk]; ok {
+		return v
+	}
 	return nil
 }
 
