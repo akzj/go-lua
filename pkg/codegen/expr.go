@@ -887,12 +887,18 @@ func (cg *CodeGenerator) genFunc(expr *parser.FuncExpr) int {
 	nestedGen.Parent = cg
 
 	// Set up _ENV as upvalue[0] for the nested function
-	// It inherits _ENV from the parent closure (IsLocal=false means from parent's upvalues)
-	nestedGen.Upvalues["_ENV"] = 0
-	nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
-		Index:   0,         // Parent's upvalue[0] (_ENV)
-		IsLocal: false,     // Inherited from parent's upvalues
-	})
+	// Use resolveUpvalue to correctly handle local _ENV in parent scope
+	if idx, ok := nestedGen.resolveUpvalue("_ENV"); ok {
+		// _ENV resolved from parent scope (could be local or upvalue)
+		nestedGen.Upvalues["_ENV"] = idx
+	} else {
+		// Fallback: inherit from parent's upvalue[0]
+		nestedGen.Upvalues["_ENV"] = 0
+		nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
+			Index:   0,     // Parent's upvalue[0] (_ENV)
+			IsLocal: false, // Inherited from parent's upvalues
+		})
+	}
 
 	// Generate nested function
 	nestedProto := nestedGen.GenerateFunc(&parser.FuncExpr{

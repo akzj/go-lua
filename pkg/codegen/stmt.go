@@ -712,12 +712,15 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 		nestedGen.Parent = cg
 
 		// Set up _ENV as upvalue[0] for the nested function
-		// It inherits _ENV from the parent closure (IsLocal=false means from parent's upvalues)
-		nestedGen.Upvalues["_ENV"] = 0
-		nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
-			Index:   0,     // Parent's upvalue[0] (_ENV)
-			IsLocal: false, // Inherited from parent's upvalues
-		})
+		// Use resolveUpvalue to correctly handle local _ENV in parent scope
+		if _, ok := nestedGen.resolveUpvalue("_ENV"); !ok {
+			// Fallback: inherit from parent's upvalue[0]
+			nestedGen.Upvalues["_ENV"] = 0
+			nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
+				Index:   0,     // Parent's upvalue[0] (_ENV)
+				IsLocal: false, // Inherited from parent's upvalues
+			})
+		}
 
 		if stmt.Func != nil {
 			nestedGen.GenerateFunc(stmt.Func)
@@ -743,11 +746,15 @@ func (cg *CodeGenerator) genFuncDef(stmt *parser.FuncDefStmt) {
 		nestedGen.Parent = cg
 
 		// Set up _ENV as upvalue[0] for the nested function
-		nestedGen.Upvalues["_ENV"] = 0
-		nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
-			Index:   0,
-			IsLocal: false,
-		})
+		// Use resolveUpvalue to correctly handle local _ENV in parent scope
+		if _, ok := nestedGen.resolveUpvalue("_ENV"); !ok {
+			// Fallback: inherit from parent's upvalue[0]
+			nestedGen.Upvalues["_ENV"] = 0
+			nestedGen.Prototype.Upvalues = append(nestedGen.Prototype.Upvalues, object.UpvalueDesc{
+				Index:   0,
+				IsLocal: false,
+			})
+		}
 
 		if stmt.Func != nil {
 			nestedGen.GenerateFunc(stmt.Func)
@@ -801,9 +808,6 @@ func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
 	labelName := stmt.Label
 	currentPC := cg.GetCurrentPC()
 	
-	// DEBUG
-	println("DEBUG genGoto: label=", labelName, " blockDepth=", cg.blockDepth, " activeLocals=", len(cg.getActiveLocals()))
-	
 	// Check if label is already defined (backward jump)
 	if labelInfo, exists := cg.labels[labelName]; exists {
 		// Backward jump: check that we're not jumping into an inner block
@@ -846,9 +850,6 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 	currentPC := cg.GetCurrentPC()
 	labelBlockDepth := cg.blockDepth
 	
-	// DEBUG
-	println("DEBUG genLabel: label=", labelName, " blockDepth=", labelBlockDepth, " hasForwardGotos=", cg.forwardGotos[labelName] != nil)
-	
 	// Check for duplicate labels
 	// A label is visible if it's in the same or outer block (blockDepth <= current)
 	// Labels in outer blocks are visible in inner blocks, so same-name labels in inner blocks are duplicates
@@ -862,10 +863,12 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 	
 	// Record the label position with current scope info
 	cg.labels[labelName] = LabelInfo{
-		PC:         currentPC,
-		BlockDepth: cg.blockDepth,
-		Line:       stmt.Line(),
-		ScopeLevel: len(cg.Locals),
+		PC:           currentPC,
+		BlockDepth:   cg.blockDepth,
+		Line:         stmt.Line(),
+		ScopeLevel:   len(cg.Locals),
+		AtBlockEnd:   false, // Will be set to true at genBlock end if this is the last statement
+		PCAfterLabel: cg.GetCurrentPC(), // PC right after the label
 	}
 	
 	// Patch any forward jumps to this label
@@ -898,9 +901,6 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 				
 				if !wasActiveAtGoto {
 					// This local is new - check if the label is at the end of its scope
-					// The label is at the end of the local's scope if:
-					// The local was declared in a block depth > label's block depth
-					// (meaning the local's block has ended by the time we reach this label)
 					localBlockDepth := cg.getLocalBlockDepth(localName)
 					
 					// If local's block depth > label's block depth, the local was in a deeper block
@@ -911,17 +911,20 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 						continue
 					}
 					
-					// If local's block depth == label's block depth, check if goto was in same block
-					// If goto was in same block (gotoInfo.BlockDepth == localBlockDepth), 
-					// then label is at end of local's scope (valid)
-					// If goto was in deeper block (gotoInfo.BlockDepth > localBlockDepth),
-					// then goto jumped out over the local's declaration (invalid)
-					if localBlockDepth == labelBlockDepth && gotoInfo.BlockDepth <= localBlockDepth {
-						// All in same block - label is at end of local's scope
+					// If local's block depth == label's block depth, need to check if label is at block end
+					// This is determined at endScope time, so defer the check
+					if localBlockDepth == labelBlockDepth {
+						// Same block - defer check until endScope
+						cg.pendingScopeChecks = append(cg.pendingScopeChecks, PendingScopeCheck{
+							LabelName:        labelName,
+							GotoInfo:         gotoInfo,
+							LocalName:        localName,
+							LocalBlockDepth:  localBlockDepth,
+						})
 						continue
 					}
 					
-					// The local is in the same or outer block, and the goto jumped over it
+					// The local is in an outer block that's still open - jumping into its scope
 					cg.setError("jump into the scope of '%s'", localName)
 					return
 				}

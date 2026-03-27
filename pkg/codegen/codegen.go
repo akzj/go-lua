@@ -221,6 +221,12 @@ func (cg *CodeGenerator) Generate(funcDef *parser.FuncDefStmt) *object.Prototype
 	cg.genBlock(funcDef.Body)
 	cg.emitReturn(0, 1)
 	cg.endScope()
+	
+	// Check for errors after endScope (scope violations detected there)
+	if cg.hasError() {
+		return nil
+	}
+	
 	cg.Prototype.MaxStackSize = cg.MaxStackSize
 	return cg.Prototype
 }
@@ -244,6 +250,13 @@ func (cg *CodeGenerator) GenerateFunc(funcExpr *parser.FuncExpr) *object.Prototy
 	cg.genBlock(funcExpr.Body)
 	cg.emitReturn(0, 1)
 	cg.endScope()
+	
+	// Check for errors after endScope (scope violations detected there)
+	if cg.hasError() {
+		// Return nil prototype on error - caller must check cg.getError()
+		return nil
+	}
+	
 	cg.Prototype.MaxStackSize = cg.MaxStackSize
 	return cg.Prototype
 }
@@ -256,11 +269,6 @@ func (cg *CodeGenerator) beginScope() {
 
 // endScope ends the current local variable scope.
 func (cg *CodeGenerator) endScope() {
-	// DEBUG
-	if len(cg.pendingScopeChecks) > 0 {
-		fmt.Printf("DEBUG endScope: blockDepth=%d, pendingChecks=%d\n", cg.blockDepth, len(cg.pendingScopeChecks))
-	}
-	
 	// Validate pending scope checks for this block depth
 	// A goto can jump over a local if the label is at block end
 	var remainingChecks []PendingScopeCheck
@@ -536,13 +544,6 @@ func (cg *CodeGenerator) genBlock(block *parser.BlockStmt) {
 		if labelInfo.BlockDepth == cg.blockDepth && labelInfo.PCAfterLabel == currentPC {
 			labelInfo.AtBlockEnd = true
 			cg.labels[name] = labelInfo
-		}
-	}
-	// DEBUG: Print label info
-	if len(cg.pendingScopeChecks) > 0 {
-		fmt.Printf("DEBUG genBlock: blockDepth=%d, currentPC=%d\n", cg.blockDepth, currentPC)
-		for name, li := range cg.labels {
-			fmt.Printf("  Label %s: BlockDepth=%d, PCAfterLabel=%d, AtBlockEnd=%v\n", name, li.BlockDepth, li.PCAfterLabel, li.AtBlockEnd)
 		}
 	}
 }

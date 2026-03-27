@@ -57,6 +57,11 @@ func CompileChunk(block *parser.BlockStmt, source string) (*object.Prototype, er
 	// Emit trailing RETURN 0, 1 (return no values) if not already returned
 	cg.emitReturn(0, 1)
 	cg.endScope()
+	
+	// Check for errors again (endScope may have detected scope violations)
+	if cg.hasError() {
+		return nil, cg.getError()
+	}
 
 	// Finalize
 	if cg.MaxStackSize < 2 {
