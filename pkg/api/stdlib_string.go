@@ -1420,7 +1420,7 @@ func stdStringChar(L *State) int {
 
 		// Validate range [0, 255]
 		if num < 0 || num > 255 {
-			L.PushString(fmt.Sprintf("bad argument #%d to 'char' (invalid value)", i))
+			L.PushString(fmt.Sprintf("bad argument #%d to 'char' (out of range)", i))
 			L.Error()
 			return 0
 		}
