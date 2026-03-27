@@ -347,8 +347,8 @@ func TestStringFormat_Integer(t *testing.T) {
 
 func TestStringFormat_Float(t *testing.T) {
 	result := doStringString(t, `return string.format("Pi: %f", 3.14159)`)
-	if result != "Pi: 3.14159" {
-		t.Errorf("Expected 'Pi: 3.14159', got %q", result)
+	if result != "Pi: 3.141590" {
+		t.Errorf("Expected 'Pi: 3.141590', got %q", result)
 	}
 }
 

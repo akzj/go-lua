@@ -781,6 +781,177 @@ func stdStringFind(L *State) int {
 //   - Go's %p expects a pointer, but we format pointer ADDRESS as a string
 //   - Lua's %p has special semantics for short strings (interned) vs long strings
 //   - We need manual control over the pointer representation
+// formatHexFloat formats a float as a hexadecimal float string.
+// upper=true produces uppercase (0X, A-F, P), lower produces lowercase.
+// precision=-1 means auto precision, >=0 means exact number of hex digits after decimal.
+// showPlus=true means always show sign (+ for positive, - for negative).
+func formatHexFloat(num float64, upper bool, precision int, showPlus bool) string {
+	if num == 0 {
+		prefix := "0x"
+		pSign := "p"
+		if upper {
+			prefix = "0X"
+			pSign = "P"
+		}
+		// Check for negative zero
+		neg := math.Signbit(num)
+		result := prefix + "0" + pSign + "+0"
+		if neg {
+			result = "-" + result
+		} else if showPlus {
+			result = "+" + result
+		}
+		return result
+	}
+
+	neg := num < 0
+	if neg {
+		num = -num
+	}
+
+	// Handle special values
+	if math.IsInf(num, 1) {
+		if upper {
+			if neg {
+				return "-INF"
+			}
+			if showPlus {
+				return "+INF"
+			}
+			return "INF"
+		}
+		if neg {
+			return "-inf"
+		}
+		if showPlus {
+			return "+inf"
+		}
+		return "inf"
+	}
+	if math.IsNaN(num) {
+		if upper {
+			return "NAN"
+		}
+		return "nan"
+	}
+
+	// Get the exponent (power of 2)
+	exp := 0
+	for num >= 2 {
+		num /= 2
+		exp++
+	}
+	for num < 1 {
+		num *= 2
+		exp--
+	}
+
+	// num is now in [1, 2)
+	// Format mantissa with precision hex digits after decimal point
+	prefix := "0x"
+	pSign := "p"
+	if upper {
+		prefix = "0X"
+		pSign = "P"
+	}
+
+	// First digit is always 1 for normalized numbers
+	mantissa := num - 1.0 // fractional part
+
+	hexDigits := "0123456789abcdef"
+	if upper {
+		hexDigits = "0123456789ABCDEF"
+	}
+
+	result := prefix + "1"
+
+	if precision >= 0 {
+		result += "."
+		for i := 0; i < precision; i++ {
+			mantissa *= 16
+			digit := int(mantissa)
+			result += string(hexDigits[digit])
+			mantissa -= float64(digit)
+		}
+	} else {
+		// Auto precision - output significant digits (up to 13 for double precision)
+		result += "."
+		for i := 0; i < 13 && mantissa > 1e-16; i++ {
+			mantissa *= 16
+			digit := int(mantissa)
+			result += string(hexDigits[digit])
+			mantissa -= float64(digit)
+		}
+	}
+
+	// Add exponent
+	expSign := "+"
+	if exp < 0 {
+		expSign = "-"
+		exp = -exp
+	}
+	result += fmt.Sprintf("%s%s%d", pSign, expSign, exp)
+
+	if neg {
+		result = "-" + result
+	} else if showPlus {
+		result = "+" + result
+	}
+
+	return result
+}
+
+// parseFormatFlags extracts format flags and precision from formatSpec.
+// Returns (hasPrecision, precision, showPlus).
+// For "%.3a", returns (true, 3, false). For "%+.2A", returns (true, 2, true).
+func parseFormatFlags(formatSpec string) (bool, int, bool) {
+	if formatSpec == "" {
+		return false, -1, false
+	}
+	i := 0
+	showPlus := false
+	// Skip flags
+	for i < len(formatSpec) {
+		switch formatSpec[i] {
+		case '+':
+			showPlus = true
+			i++
+		case '-', '#', '0', ' ':
+			i++
+		default:
+			goto afterFlags
+		}
+	}
+afterFlags:
+	// Skip width
+	for i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+		i++
+	}
+	// Check for precision
+	if i < len(formatSpec) && formatSpec[i] == '.' {
+		i++
+		if i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+			prec := 0
+			for i < len(formatSpec) && formatSpec[i] >= '0' && formatSpec[i] <= '9' {
+				prec = prec*10 + int(formatSpec[i]-'0')
+				i++
+			}
+			return true, prec, showPlus
+		}
+		// "." without digits means precision 0
+		return true, 0, showPlus
+	}
+	return false, -1, showPlus
+}
+
+// parseFormatPrecision extracts precision from formatSpec.
+// Returns (hasPrecision, precision).
+// For "%.3a", returns (true, 3). For "%a", returns (false, -1).
+func parseFormatPrecision(formatSpec string) (bool, int) {
+	hasPrec, prec, _ := parseFormatFlags(formatSpec)
+	return hasPrec, prec
+}
+
 func stdStringFormat(L *State) int {
 	format, ok := L.ToString(1)
 	if !ok {
@@ -1014,7 +1185,24 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					if num, ok := v.ToNumber(); ok {
+					// Try integer first to preserve precision for large integers
+					if ival, ok := v.ToInteger(); ok {
+						if formatSpec == "" {
+							if conversion == 'x' {
+								result.WriteString(strconv.FormatUint(uint64(ival), 16))
+							} else {
+								result.WriteString(strings.ToUpper(strconv.FormatUint(uint64(ival), 16)))
+							}
+						} else {
+							// Handle precision 0 with value 0 - output nothing
+							hasPrec, prec, _ := parseFormatFlags(formatSpec)
+							if hasPrec && prec == 0 && ival == 0 {
+								// Skip output for %.x with value 0
+							} else {
+								result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), uint64(ival)))
+							}
+						}
+					} else if num, ok := v.ToNumber(); ok {
 						if formatSpec == "" {
 							if conversion == 'x' {
 								result.WriteString(strconv.FormatUint(uint64(num), 16))
@@ -1022,7 +1210,12 @@ func stdStringFormat(L *State) int {
 								result.WriteString(strings.ToUpper(strconv.FormatUint(uint64(num), 16)))
 							}
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), uint(num)))
+							hasPrec, prec, _ := parseFormatFlags(formatSpec)
+							if hasPrec && prec == 0 && uint64(num) == 0 {
+								// Skip output for %.x with value 0
+							} else {
+								result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), uint(num)))
+							}
 						}
 					}
 				}
@@ -1030,11 +1223,29 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					if num, ok := v.ToNumber(); ok {
+					// Try integer first to preserve precision for large integers
+					if ival, ok := v.ToInteger(); ok {
+						if formatSpec == "" {
+							result.WriteString(strconv.FormatUint(uint64(ival), 8))
+						} else {
+							// Handle precision 0 with value 0 - output nothing
+							hasPrec, prec, _ := parseFormatFlags(formatSpec)
+							if hasPrec && prec == 0 && ival == 0 {
+								// Skip output for %.o with value 0
+							} else {
+								result.WriteString(fmt.Sprintf("%"+formatSpec+"o", uint64(ival)))
+							}
+						}
+					} else if num, ok := v.ToNumber(); ok {
 						if formatSpec == "" {
 							result.WriteString(strconv.FormatUint(uint64(num), 8))
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+"o", uint(num)))
+							hasPrec, prec, _ := parseFormatFlags(formatSpec)
+							if hasPrec && prec == 0 && uint64(num) == 0 {
+								// Skip output for %.o with value 0
+							} else {
+								result.WriteString(fmt.Sprintf("%"+formatSpec+"o", uint(num)))
+							}
 						}
 					}
 				}
@@ -1042,11 +1253,29 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					if num, ok := v.ToNumber(); ok {
+					// Try integer first to preserve precision for large integers
+					if ival, ok := v.ToInteger(); ok {
+						if formatSpec == "" {
+							result.WriteString(strconv.FormatUint(uint64(ival), 10))
+						} else {
+							// Handle precision 0 with value 0 - output nothing
+							hasPrec, prec, _ := parseFormatFlags(formatSpec)
+							if hasPrec && prec == 0 && ival == 0 {
+								// Skip output for %.u with value 0
+							} else {
+								result.WriteString(fmt.Sprintf("%"+formatSpec+"u", uint64(ival)))
+							}
+						}
+					} else if num, ok := v.ToNumber(); ok {
 						if formatSpec == "" {
 							result.WriteString(strconv.FormatUint(uint64(num), 10))
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+"u", uint(num)))
+							hasPrec, prec, _ := parseFormatFlags(formatSpec)
+							if hasPrec && prec == 0 && uint64(num) == 0 {
+								// Skip output for %.u with value 0
+							} else {
+								result.WriteString(fmt.Sprintf("%"+formatSpec+"u", uint(num)))
+							}
 						}
 					}
 				}
@@ -1055,14 +1284,13 @@ func stdStringFormat(L *State) int {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
 					if num, ok := v.ToNumber(); ok {
-						if formatSpec == "" {
-							if conversion == 'a' {
-								result.WriteString(strconv.FormatFloat(num, 'x', -1, 64))
-							} else {
-								result.WriteString(strings.ToUpper(strconv.FormatFloat(num, 'x', -1, 64)))
-							}
+						upper := conversion == 'A'
+						hasPrec, prec, showPlus := parseFormatFlags(formatSpec)
+						if hasPrec {
+							result.WriteString(formatHexFloat(num, upper, prec, showPlus))
 						} else {
-							result.WriteString(fmt.Sprintf("%"+formatSpec+string(conversion), num))
+							// No precision specified - use auto precision
+							result.WriteString(formatHexFloat(num, upper, -1, showPlus))
 						}
 					}
 				}
