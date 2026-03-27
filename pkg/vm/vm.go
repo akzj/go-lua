@@ -306,18 +306,19 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			// Coerce strings to numbers if needed
-			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
-			if !rbOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
-			if !rcOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			if rbIsInt && rcIsInt {
-				vm.Stack[vm.Base+a].SetInteger(int64(rbNum) + int64(rcNum))
+			// Check if both operands are integers (preserve precision for large integers)
+			if rb.IsInt && rc.IsInt {
+				vm.Stack[vm.Base+a].SetInteger(rb.Value.Int + rc.Value.Int)
 			} else {
+				// Coerce strings to numbers if needed
+				rbNum, _, rbOk := vm.coerceToNumber(rb)
+				if !rbOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
+				rcNum, _, rcOk := vm.coerceToNumber(rc)
+				if !rcOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
 				result := rbNum + rcNum
 				vm.Stack[vm.Base+a].SetNumber(result)
 			}
@@ -335,18 +336,19 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			// Coerce strings to numbers if needed
-			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
-			if !rbOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
-			if !rcOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			if rbIsInt && rcIsInt {
-				vm.Stack[vm.Base+a].SetInteger(int64(rbNum) - int64(rcNum))
+			// Check if both operands are integers (preserve precision for large integers)
+			if rb.IsInt && rc.IsInt {
+				vm.Stack[vm.Base+a].SetInteger(rb.Value.Int - rc.Value.Int)
 			} else {
+				// Coerce strings to numbers if needed
+				rbNum, _, rbOk := vm.coerceToNumber(rb)
+				if !rbOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
+				rcNum, _, rcOk := vm.coerceToNumber(rc)
+				if !rcOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
 				result := rbNum - rcNum
 				vm.Stack[vm.Base+a].SetNumber(result)
 			}
@@ -364,18 +366,19 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			// Coerce strings to numbers if needed
-			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
-			if !rbOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
-			if !rcOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			if rbIsInt && rcIsInt {
-				vm.Stack[vm.Base+a].SetInteger(int64(rbNum) * int64(rcNum))
+			// Check if both operands are integers (preserve precision for large integers)
+			if rb.IsInt && rc.IsInt {
+				vm.Stack[vm.Base+a].SetInteger(rb.Value.Int * rc.Value.Int)
 			} else {
+				// Coerce strings to numbers if needed
+				rbNum, _, rbOk := vm.coerceToNumber(rb)
+				if !rbOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
+				rcNum, _, rcOk := vm.coerceToNumber(rc)
+				if !rcOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
 				result := rbNum * rcNum
 				vm.Stack[vm.Base+a].SetNumber(result)
 			}
@@ -418,18 +421,10 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetNil()
 			}
 		} else {
-			// Coerce strings to numbers if needed
-			rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
-			if !rbOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
-			if !rcOk {
-				return vm.runtimeError("attempt to perform arithmetic on a string value")
-			}
-			if rbIsInt && rcIsInt {
-				rbInt := int64(rbNum)
-				rcInt := int64(rcNum)
+			// Check if both operands are integers (preserve precision for large integers)
+			if rb.IsInt && rc.IsInt {
+				rbInt := rb.Value.Int
+				rcInt := rc.Value.Int
 				// Lua floor modulo: a % b = a - floor(a/b) * b
 				// Handle division by zero
 				if rcInt == 0 {
@@ -445,6 +440,15 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 					vm.Stack[vm.Base+a].SetInteger(result)
 				}
 			} else {
+				// Coerce strings to numbers if needed
+				rbNum, _, rbOk := vm.coerceToNumber(rb)
+				if !rbOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
+				rcNum, _, rcOk := vm.coerceToNumber(rc)
+				if !rcOk {
+					return vm.runtimeError("attempt to perform arithmetic on a string value")
+				}
 				// Float modulo: a % b = a - floor(a/b) * b
 				if rcNum == 0 {
 					vm.Stack[vm.Base+a].SetNumber(math.NaN())
@@ -484,19 +488,11 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 		a, b, c := instr.A(), instr.B(), instr.C()
 		rb := vm.getRKValue(b)
 		rc := vm.getRKValue(c)
-		// Coerce strings to numbers if needed
-		rbNum, rbIsInt, rbOk := vm.coerceToNumber(rb)
-		if !rbOk {
-			return vm.runtimeError("attempt to perform arithmetic on a string value")
-		}
-		rcNum, rcIsInt, rcOk := vm.coerceToNumber(rc)
-		if !rcOk {
-			return vm.runtimeError("attempt to perform arithmetic on a string value")
-		}
-		// Handle division by zero
-		if rbIsInt && rcIsInt {
-			rbInt := int64(rbNum)
-			rcInt := int64(rcNum)
+		// Check if both operands are integers (preserve precision for large integers)
+		if rb.IsInt && rc.IsInt {
+			rbInt := rb.Value.Int
+			rcInt := rc.Value.Int
+			// Handle division by zero
 			if rcInt == 0 {
 				vm.Stack[vm.Base+a].SetNumber(math.NaN())
 			} else {
@@ -509,6 +505,15 @@ func (vm *VM) ExecuteInstruction(instr Instruction) error {
 				vm.Stack[vm.Base+a].SetInteger(q)
 			}
 		} else {
+			// Coerce strings to numbers if needed
+			rbNum, _, rbOk := vm.coerceToNumber(rb)
+			if !rbOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
+			rcNum, _, rcOk := vm.coerceToNumber(rc)
+			if !rcOk {
+				return vm.runtimeError("attempt to perform arithmetic on a string value")
+			}
 			if rcNum == 0 {
 				vm.Stack[vm.Base+a].SetNumber(math.NaN())
 			} else {
@@ -1767,6 +1772,8 @@ func (vm *VM) getStackValue(index int) *object.TValue {
 func (vm *VM) coerceToNumber(v *object.TValue) (num float64, isInt bool, ok bool) {
 	if v.Type == object.TypeNumber {
 		if v.IsInt {
+			// Return the integer value as float64 for backward compatibility,
+			// but mark it as integer so callers can use v.Value.Int directly
 			return float64(v.Value.Int), true, true
 		}
 		return v.Value.Num, false, true

@@ -214,10 +214,53 @@ func preprocessLua55(source string) string {
 		line = convertNamedVararg(line)
 		trimmed = strings.TrimSpace(line)
 
+		// Convert Lua 5.5 Unicode escapes \uXXXX to Lua 5.4 format \u{XXXX}
+		line = convertUnicodeEscapes(line)
+
 		result = append(result, line)
 	}
 
 	return strings.Join(result, "\n")
+}
+
+// convertUnicodeEscapes converts Lua 5.5 Unicode escape sequences to Lua 5.4 format.
+// Lua 5.5: \uXXXX (exactly 4 hex digits)
+// Lua 5.4: \u{XXXX} (variable hex digits in braces)
+// Also handles \u{XXXX} (already in 5.4 format, pass through)
+func convertUnicodeEscapes(line string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(line) {
+		if i+1 < len(line) && line[i] == '\\' && line[i+1] == 'u' {
+			// Found \u - check what follows
+			if i+2 < len(line) && line[i+2] == '{' {
+				// Already in Lua 5.4 format \u{...} - pass through
+				result.WriteString(line[i:])
+				break
+			} else if i+5 < len(line) {
+				// Check for 4 hex digits (Lua 5.5 format)
+				hexDigits := line[i+2 : i+6]
+				allHex := true
+				for _, c := range hexDigits {
+					if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+						allHex = false
+						break
+					}
+				}
+				if allHex {
+					// Convert \uXXXX to \u{XXXX}
+					result.WriteString("\\u{")
+					result.WriteString(hexDigits)
+					result.WriteString("}")
+					i += 6
+					continue
+				}
+			}
+		}
+		result.WriteByte(line[i])
+		i++
+	}
+	return result.String()
 }
 
 // stripConstAttribute removes <const> and <toclose> attributes from local declarations.

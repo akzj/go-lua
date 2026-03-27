@@ -840,6 +840,12 @@ func stdStringFormat(L *State) int {
 					if formatSpec == "" {
 						result.WriteString(str)
 					} else {
+						// Lua 5.4+ raises error when using width/precision with strings containing null bytes
+						if strings.Contains(str, "\x00") {
+							L.PushString("bad argument #2 to 'format' (string contains zeros)")
+							L.Error()
+							return 0
+						}
 						result.WriteString(fmt.Sprintf("%"+formatSpec+"s", str))
 					}
 				}
@@ -1104,9 +1110,7 @@ func luaQuote(s string) string {
 		case '\f':
 			result.WriteString("\\f")
 		case '\n':
-			// Lua outputs backslash followed by ACTUAL newline, not \n
-			result.WriteByte('\\')
-			result.WriteByte('\n')
+			result.WriteString("\\n")
 		case '\r':
 			result.WriteString("\\r")
 		case '\t':
