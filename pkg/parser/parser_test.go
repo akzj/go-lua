@@ -145,7 +145,9 @@ func TestParseUnaryNot(t *testing.T) {
 }
 
 func TestParseUnaryLen(t *testing.T) {
-	expr := parseExpr(t, "#arr")
+	// Note: source starts with space to avoid '#' being treated as first-line comment
+	// (Lua spec: if first char of chunk is '#', skip entire first line)
+	expr := parseExpr(t, " #arr")
 	if expr, ok := expr.(*UnOpExpr); !ok || expr.Op != "#" {
 		t.Errorf("Expected len expression, got %v", expr)
 	}

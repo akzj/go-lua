@@ -3,9 +3,10 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 
 	"github.com/akzj/go-lua/pkg/object"
 )
@@ -58,6 +59,8 @@ func (s *State) OpenLibs() {
 	s.openMathLib()
 	s.openIOLib()
 	s.openDebugLib()
+	s.openOSLib()
+	s.openCoroutineLib()
 
 	// Set standard global variables
 	// _G is a reference to the global table (same as _ENV)
@@ -78,8 +81,44 @@ func (s *State) OpenLibs() {
 	// Set package.path with default search pattern
 	s.PushString("./?.lua")
 	s.SetField(-2, "path")
+	// Set package.cpath (empty for now - no C modules)
+	s.PushString("")
+	s.SetField(-2, "cpath")
+	// Set package.preload (empty table for preloaded modules)
+	s.NewTable()
+	s.SetField(-2, "preload")
+	// Set package.config (Lua configuration string)
+	// Format: dirsep\npathsep\npathmark\nperm\n\n
+	s.PushString("/\n;\n?\n!\n-\n")
+	s.SetField(-2, "config")
+	// Add package.searchpath function
+	s.PushFunction(packageSearchpath)
+	s.SetField(-2, "searchpath")
 	// Set package table as global
 	s.SetGlobal("package")
+
+	// Register standard library modules in package.loaded
+	// This allows require"os" to return the same table as the global os
+	s.GetGlobal("package")
+	s.GetField(-1, "loaded")
+	loadedIdx := s.GetTop()
+
+	// Helper to register a module
+	registerModule := func(name string) {
+		s.GetGlobal(name)
+		s.SetField(loadedIdx, name)
+	}
+
+	registerModule("_G")
+	registerModule("string")
+	registerModule("table")
+	registerModule("math")
+	registerModule("io")
+	registerModule("os")
+	registerModule("debug")
+	registerModule("coroutine")
+
+	s.Pop(2) // Pop loaded and package
 }
 
 // stdPrint implements the Lua print() function.
@@ -98,8 +137,18 @@ func stdPrint(L *State) int {
 			b, _ := v.ToBoolean()
 			fmt.Fprintf(os.Stdout, "%t", b)
 		case object.TypeNumber:
-			num, _ := v.ToNumber()
-			fmt.Fprintf(os.Stdout, "%g", num)
+			// Check IsInt flag for integer formatting
+			if v.IsInt {
+				fmt.Fprintf(os.Stdout, "%d", v.Value.Int)
+			} else {
+				num, _ := v.ToNumber()
+				// Print with .0 for whole number floats to distinguish from integers
+				if math.Trunc(num) == num && !math.IsInf(num, 0) {
+					fmt.Fprintf(os.Stdout, "%.1f", num)
+				} else {
+					fmt.Fprintf(os.Stdout, "%g", num)
+				}
+			}
 		case object.TypeString:
 			str, _ := v.ToString()
 			fmt.Fprint(os.Stdout, str)
@@ -155,6 +204,18 @@ func stdTostring(L *State) int {
 			L.PushString("false")
 		}
 	case object.TypeNumber:
+			// Check IsInt flag for integer formatting
+			if v.IsInt {
+				fmt.Fprintf(os.Stdout, "%d", v.Value.Int)
+			} else {
+				num, _ := v.ToNumber()
+				// Print with .0 for whole number floats to distinguish from integers
+				if math.Trunc(num) == num && !math.IsInf(num, 0) {
+					fmt.Fprintf(os.Stdout, "%.1f", num)
+				} else {
+					fmt.Fprintf(os.Stdout, "%g", num)
+				}
+			}
 		num, _ := v.ToNumber()
 		L.PushString(fmt.Sprintf("%g", num))
 	case object.TypeString:
@@ -177,9 +238,21 @@ func stdTonumber(L *State) int {
 	}
 	if v.IsString() {
 		str, _ := v.ToString()
-		num, err := strconv.ParseFloat(str, 64)
-		if err == nil {
-			L.PushNumber(num)
+		base := 0
+		// Check for optional base argument
+		if L.GetTop() >= 2 {
+			baseArg := L.vm.GetStack(2)
+			if baseArg.IsNumber() {
+				base = int(baseArg.Value.Num)
+			}
+		}
+		num, isInt, ok := object.LuaStringToNumber(str, base)
+		if ok {
+			if isInt {
+				L.PushInteger(int64(num))
+			} else {
+				L.PushNumber(num)
+			}
 			return 1
 		}
 	}
@@ -226,6 +299,18 @@ func stdError(L *State) int {
 		case object.TypeString:
 			msg, _ = v.ToString()
 		case object.TypeNumber:
+			// Check IsInt flag for integer formatting
+			if v.IsInt {
+				fmt.Fprintf(os.Stdout, "%d", v.Value.Int)
+			} else {
+				num, _ := v.ToNumber()
+				// Print with .0 for whole number floats to distinguish from integers
+				if math.Trunc(num) == num && !math.IsInf(num, 0) {
+					fmt.Fprintf(os.Stdout, "%.1f", num)
+				} else {
+					fmt.Fprintf(os.Stdout, "%g", num)
+				}
+			}
 			num, _ := v.ToNumber()
 			msg = fmt.Sprintf("%g", num)
 		}
@@ -972,5 +1057,66 @@ func stdLoadfile(L *State) int {
 	// Minimal implementation - just return nil
 	L.PushNil()
 	L.PushString("loadfile not implemented")
+	return 2
+}
+// packageSearchpath implements package.searchpath(name, path [, sep [, rep]])
+// Searches for a module named name in the given path.
+// Returns the filename if found, or nil and an error message if not found.
+func packageSearchpath(L *State) int {
+	if L.GetTop() < 2 {
+		L.PushNil()
+		L.PushString("missing arguments")
+		return 2
+	}
+
+	name, _ := L.ToString(1)
+	path, _ := L.ToString(2)
+	sep := "."
+	if L.GetTop() >= 3 {
+		if s, ok := L.ToString(3); ok {
+			sep = s
+		}
+	}
+	rep := string(os.PathSeparator)
+	if L.GetTop() >= 4 {
+		if s, ok := L.ToString(4); ok {
+			rep = s
+		}
+	}
+
+	// Replace separator in name with replacement (e.g., "." -> "/")
+	nameReplaced := strings.ReplaceAll(name, sep, rep)
+
+	// Split path by ";"
+	templates := strings.Split(path, ";")
+	var triedPaths []string
+
+	for _, tmpl := range templates {
+		if tmpl == "" {
+			continue
+		}
+		// Replace "?" with the module name
+		candidate := strings.ReplaceAll(tmpl, "?", nameReplaced)
+		triedPaths = append(triedPaths, candidate)
+
+		// Check if file exists
+		if _, err := os.Stat(candidate); err == nil {
+			L.PushString(candidate)
+			return 1
+		}
+	}
+
+	// Not found - return nil and error message
+	L.PushNil()
+	var sb strings.Builder
+	sb.WriteString("no file '")
+	for i, p := range triedPaths {
+		if i > 0 {
+			sb.WriteString("'\n\tno file '")
+		}
+		sb.WriteString(p)
+	}
+	sb.WriteString("'")
+	L.PushString(sb.String())
 	return 2
 }

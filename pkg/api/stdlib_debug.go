@@ -58,6 +58,9 @@ func (s *State) openDebugLib() {
 	s.PushFunction(debugSetmetatable)
 	s.SetField(debugIdx, "setmetatable")
 
+	s.PushFunction(debugGetupvalue)
+	s.SetField(debugIdx, "getupvalue")
+
 	// Register as "debug" global
 	s.SetGlobal("debug")
 }
@@ -154,19 +157,20 @@ func debugGetinfo(L *State) int {
 		case 'l':
 			// linedefined, lastlinedefined, currentline
 			if proto != nil {
-				L.PushNumber(float64(0)) // linedefined - not tracked yet
+				L.PushInteger(0) // linedefined - not tracked yet
 				L.SetField(tableIdx, "linedefined")
-				L.PushNumber(float64(0)) // lastlinedefined - not tracked yet
+				L.PushInteger(0) // lastlinedefined - not tracked yet
 				L.SetField(tableIdx, "lastlinedefined")
 				// currentline - get from LineInfo if we have a CallInfo
+				// Use PC-1 because PC has advanced past the current instruction
 				currentLine := 0
 				if ci != nil {
-					pc := ci.PC
+					pc := ci.PC - 1
 					if pc >= 0 && pc < len(proto.LineInfo) {
 						currentLine = proto.LineInfo[pc]
 					}
 				}
-				L.PushNumber(float64(currentLine))
+				L.PushInteger(int64(currentLine))
 				L.SetField(tableIdx, "currentline")
 			}
 		case 'n':
@@ -203,20 +207,21 @@ func debugGetinfo(L *State) int {
 				L.SetField(tableIdx, "what")
 
 				// linedefined and lastlinedefined
-				L.PushNumber(float64(0)) // linedefined - not tracked yet
+				L.PushInteger(0) // linedefined - not tracked yet
 				L.SetField(tableIdx, "linedefined")
-				L.PushNumber(float64(0)) // lastlinedefined - not tracked yet
+				L.PushInteger(0) // lastlinedefined - not tracked yet
 				L.SetField(tableIdx, "lastlinedefined")
 
 				// currentline
+				// Use PC-1 because PC has advanced past the current instruction
 				currentLine := 0
 				if ci != nil {
-					pc := ci.PC
+					pc := ci.PC - 1
 					if pc >= 0 && pc < len(proto.LineInfo) {
 						currentLine = proto.LineInfo[pc]
 					}
 				}
-				L.PushNumber(float64(currentLine))
+				L.PushInteger(int64(currentLine))
 				L.SetField(tableIdx, "currentline")
 			} else if isGo {
 				L.PushString("=[C]")
@@ -225,11 +230,11 @@ func debugGetinfo(L *State) int {
 				L.SetField(tableIdx, "short_src")
 				L.PushString("C")
 				L.SetField(tableIdx, "what")
-				L.PushNumber(float64(-1)) // linedefined for C functions
+				L.PushInteger(-1) // linedefined for C functions
 				L.SetField(tableIdx, "linedefined")
-				L.PushNumber(float64(-1)) // lastlinedefined for C functions
+				L.PushInteger(-1) // lastlinedefined for C functions
 				L.SetField(tableIdx, "lastlinedefined")
-				L.PushNumber(float64(-1)) // currentline for C functions
+				L.PushInteger(-1) // currentline for C functions
 				L.SetField(tableIdx, "currentline")
 			}
 		case 't':
@@ -239,16 +244,16 @@ func debugGetinfo(L *State) int {
 		case 'u':
 			// nups, nparams, isvararg
 			if proto != nil {
-				L.PushNumber(float64(len(proto.Upvalues)))
+				L.PushInteger(int64(len(proto.Upvalues)))
 				L.SetField(tableIdx, "nups")
-				L.PushNumber(float64(proto.NumParams))
+				L.PushInteger(int64(proto.NumParams))
 				L.SetField(tableIdx, "nparams")
 				L.PushBoolean(proto.IsVarArg)
 				L.SetField(tableIdx, "isvararg")
 			} else if isGo {
-				L.PushNumber(float64(0))
+				L.PushInteger(0)
 				L.SetField(tableIdx, "nups")
-				L.PushNumber(float64(0))
+				L.PushInteger(0)
 				L.SetField(tableIdx, "nparams")
 				L.PushBoolean(false)
 				L.SetField(tableIdx, "isvararg")
@@ -510,7 +515,7 @@ func debugGethook(L *State) int {
 		maskStr += "l"
 	}
 	L.PushString(maskStr)
-	L.PushNumber(float64(count))
+	L.PushInteger(int64(count))
 	
 	return 3
 }
@@ -759,4 +764,60 @@ func debugSetmetatable(L *State) int {
 	// Return the value
 	L.vm.Push(*value)
 	return 1
+}
+// debugGetupvalue implements debug.getupvalue(f, n)
+// Returns the name and value of upvalue n from function f.
+// Returns nil if there is no such upvalue.
+func debugGetupvalue(L *State) int {
+	if L.GetTop() < 2 {
+		L.PushNil()
+		return 1
+	}
+
+	// Get the function
+	f := L.vm.GetStack(1)
+	if !f.IsFunction() {
+		L.PushNil()
+		return 1
+	}
+
+	// Get the upvalue index
+	n, ok := L.ToNumber(2)
+	if !ok || n < 1 {
+		L.PushNil()
+		return 1
+	}
+	idx := int(n)
+
+	// Get the closure
+	closure, _ := f.ToFunction()
+	if closure == nil || closure.Proto == nil {
+		L.PushNil()
+		return 1
+	}
+
+	// Check if upvalue exists
+	if idx > len(closure.Upvalues) {
+		L.PushNil()
+		return 1
+	}
+
+	// Get upvalue name from prototype
+	if idx > len(closure.Proto.Upvalues) {
+		L.PushNil()
+		return 1
+	}
+	name := "_ENV" // placeholder - upvalue names not stored in UpvalueDesc
+
+	// Get upvalue value
+	uv := closure.Upvalues[idx-1]
+	if uv == nil || uv.Value == nil {
+		L.PushNil()
+		return 1
+	}
+
+	// Return name and value
+	L.PushString(name)
+	L.vm.Push(*uv.Value)
+	return 2
 }

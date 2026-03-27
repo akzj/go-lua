@@ -156,7 +156,7 @@ func (s *Scanner) SkipWhile(pred func(byte) bool) int {
 
 // AtEnd reports whether the scanner is at the end of the source.
 func (s *Scanner) AtEnd() bool {
-	return s.current == 0
+	return s.pos >= len(s.source)
 }
 
 // Substring returns a substring from the source.

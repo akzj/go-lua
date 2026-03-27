@@ -42,8 +42,10 @@ package object
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Type represents Lua type tags.
@@ -157,6 +159,7 @@ type Value struct {
 type TValue struct {
 	Value Value
 	Type  Type
+	IsInt bool
 }
 
 // NewNil creates a new TValue with nil value.
@@ -177,6 +180,7 @@ func NewNumber(n float64) *TValue {
 	return &TValue{
 		Type:  TypeNumber,
 		Value: Value{Num: n},
+		IsInt: false,
 	}
 }
 
@@ -185,6 +189,7 @@ func NewInteger(i int64) *TValue {
 	return &TValue{
 		Type:  TypeNumber,
 		Value: Value{Int: i, Num: float64(i)},
+		IsInt: true,
 	}
 }
 
@@ -296,13 +301,79 @@ func (v *TValue) IsCollectable() bool {
 // Returns the number value and true if successful,
 // or 0 and false if the value cannot be converted to a number.
 //
-// Currently, only TypeNumber values can be converted.
-// Future versions may support string-to-number conversion.
+// ToNumber converts the value to a number.
+//
+// Returns the numeric value and true if successful,
+// or 0 and false if the value cannot be converted.
+//
+// For TypeNumber, returns the stored number.
+// For TypeString, attempts to parse the string as a number
+// with whitespace trimming and hex prefix support.
 func (v *TValue) ToNumber() (float64, bool) {
 	if v.Type == TypeNumber {
 		return v.Value.Num, true
 	}
+	if v.Type == TypeString {
+		num, _, ok := LuaStringToNumber(v.Value.Str, 0)
+		return num, ok
+	}
 	return 0, false
+}
+
+// LuaStringToNumber converts a Lua string to a number.
+// It handles whitespace trimming, hex prefixes (0x/0X), and optional base.
+// When base is 0, it auto-detects: 0x/0X prefix for hex, otherwise decimal.
+// When base is provided (2-36), it parses the string in that base.
+// Returns (number, isInteger, success).
+func LuaStringToNumber(s string, base int) (num float64, isInt bool, ok bool) {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return 0, false, false
+	}
+
+	// Handle explicit base
+	if base >= 2 && base <= 36 {
+		val, err := strconv.ParseInt(s, base, 64)
+		if err != nil {
+			return 0, false, false
+		}
+		return float64(val), true, true
+	}
+
+	// Auto-detect: check for hex prefix (handle negative sign)
+	neg := false
+	hexStr := s
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		hexStr = s[1:]
+	}
+	if len(hexStr) >= 2 && (hexStr[0] == '0' && (hexStr[1] == 'x' || hexStr[1] == 'X')) {
+		val, err := strconv.ParseInt(hexStr[2:], 16, 64)
+		if err != nil {
+			return 0, false, false
+		}
+		if neg {
+			val = -val
+		}
+		return float64(val), true, true
+	}
+
+	// Try parsing as float
+	val, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false, false
+	}
+
+	// Check if it's an integer value
+	// Scientific notation (e/E) or decimal point means it's a float
+	hasFloatSyntax := strings.ContainsAny(s, "eE.")
+	if hasFloatSyntax {
+		return val, false, true
+	}
+	if math.Trunc(val) == val && !math.IsInf(val, 0) && math.Abs(val) <= float64(1<<53) {
+		return val, true, true
+	}
+	return val, false, true
 }
 
 // ToString converts the value to a string.
@@ -434,12 +505,14 @@ func (v *TValue) SetBoolean(b bool) {
 func (v *TValue) SetNumber(n float64) {
 	v.Type = TypeNumber
 	v.Value = Value{Num: n}
+	v.IsInt = false
 }
 
 // SetInteger sets the value to an integer number.
 func (v *TValue) SetInteger(i int64) {
 	v.Type = TypeNumber
 	v.Value = Value{Int: i, Num: float64(i)}
+	v.IsInt = true
 }
 
 // SetString sets the value to a string.
@@ -488,6 +561,7 @@ func (v *TValue) SetProto(p *Prototype) {
 func (v *TValue) CopyFrom(src *TValue) {
 	v.Type = src.Type
 	v.Value = src.Value
+	v.IsInt = src.IsInt
 }
 
 // Clear clears the value to nil.
@@ -801,6 +875,10 @@ func ToStringRaw(v *TValue) string {
 		return "false"
 	case TypeNumber:
 		// Check if it's an integer
+		// Check IsInt flag first for exact integer representation
+		if v.IsInt {
+			return strconv.FormatInt(v.Value.Int, 10)
+		}
 		if v.Value.Num == float64(int64(v.Value.Num)) {
 			return strconv.FormatInt(int64(v.Value.Num), 10)
 		}

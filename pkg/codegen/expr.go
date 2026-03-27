@@ -99,8 +99,18 @@ func (cg *CodeGenerator) genNumber(expr *parser.NumberExpr) int {
 	if expr.IsInt && expr.Int >= -128 && expr.Int <= 127 {
 		// Use LOADI for small integers (sBx format)
 		cg.EmitAsBx(vm.OP_LOADI, reg, int(expr.Int))
+	} else if expr.IsInt {
+		// Use LOADK for large integers - preserve IsInt flag
+		value := object.NewInteger(expr.Int)
+		idx := cg.addOrGetConstant(*value)
+		if idx <= 255 {
+			cg.EmitABx(vm.OP_LOADK, reg, idx)
+		} else {
+			cg.EmitABx(vm.OP_LOADKX, reg, 0)
+			cg.EmitAx(vm.OP_EXTRAARG, idx)
+		}
 	} else {
-		// Use LOADK for other numbers
+		// Use LOADK for floats
 		value := object.NewNumber(expr.Value)
 		idx := cg.addOrGetConstant(*value)
 		if idx <= 255 {

@@ -497,7 +497,7 @@ func (p *Parser) parseFuncDefStmt() Stmt {
 	}
 
 	// Parse function name (can be dotted or with colon)
-	nameExpr = p.parseFuncName()
+	nameExpr, isMethod := p.parseFuncName()
 	if nameExpr == nil {
 		p.sync()
 		return nil
@@ -505,6 +505,15 @@ func (p *Parser) parseFuncDefStmt() Stmt {
 
 	// Parse parameter list
 	params, isVarArg := p.parseParamList()
+
+	// If method syntax (colon), prepend 'self' parameter
+	if isMethod {
+		selfParam := &VarExpr{
+			baseExpr: baseExpr{line: line},
+			Name:     "self",
+		}
+		params = append([]*VarExpr{selfParam}, params...)
+	}
 
 	// Parse body
 	body := p.parseBlock()
@@ -535,6 +544,7 @@ func (p *Parser) parseFuncDefStmt() Stmt {
 	return &FuncDefStmt{
 		baseStmt: baseStmt{line: line},
 		Name:     names,
+		FullName: nameExpr,
 		Params:   params,
 		Body:     body,
 		IsVarArg: isVarArg,
@@ -543,10 +553,11 @@ func (p *Parser) parseFuncDefStmt() Stmt {
 }
 
 // parseFuncName parses a function name (can include dots and colons).
-func (p *Parser) parseFuncName() Expr {
+// Returns the name expression and whether it's a method (colon syntax).
+func (p *Parser) parseFuncName() (Expr, bool) {
 	if p.Current.Type != lexer.TK_NAME {
 		p.Error("expected function name")
-		return nil
+		return nil, false
 	}
 
 	line := p.Current.Line
@@ -562,7 +573,7 @@ func (p *Parser) parseFuncName() Expr {
 	for p.match(lexer.TK_DOT) {
 		if p.Current.Type != lexer.TK_NAME {
 			p.Error("expected field name after '.'")
-			return expr
+			return expr, false
 		}
 		field := p.Current.Value.(string)
 		p.advance()
@@ -574,10 +585,11 @@ func (p *Parser) parseFuncName() Expr {
 	}
 
 	// Check for colon (method)
+	isMethod := false
 	if p.match(lexer.TK_COLON) {
 		if p.Current.Type != lexer.TK_NAME {
 			p.Error("expected method name after ':'")
-			return expr
+			return expr, false
 		}
 		method := p.Current.Value.(string)
 		p.advance()
@@ -586,9 +598,10 @@ func (p *Parser) parseFuncName() Expr {
 			Table:    expr,
 			Field:    method,
 		}
+		isMethod = true
 	}
 
-	return expr
+	return expr, isMethod
 }
 
 // parseGotoStmt parses a goto statement.

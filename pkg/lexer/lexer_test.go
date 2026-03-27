@@ -239,7 +239,7 @@ func TestOperators(t *testing.T) {
 		{"slash", "/", lexer.TK_SLASH},
 		{"percent", "%", lexer.TK_PERCENT},
 		{"caret", "^", lexer.TK_CARET},
-		{"hash", "#", lexer.TK_HASH},
+		{"hash", " #", lexer.TK_HASH},
 		{"eq", "==", lexer.TK_EQ},
 		{"ne", "~=", lexer.TK_NE},
 		{"le", "<=", lexer.TK_LE},

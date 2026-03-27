@@ -387,12 +387,13 @@ func (s *LabelStmt) stmtNode() {}
 // FuncDefStmt represents a function definition statement.
 type FuncDefStmt struct {
 	baseStmt
-	Name   []*VarExpr
-	Params []*VarExpr
-	Body   *BlockStmt
+	Name     []*VarExpr
+	FullName Expr       // Full name expression (may be FieldExpr for dotted names)
+	Params   []*VarExpr
+	Body     *BlockStmt
 	IsVarArg bool
-	IsLocal bool
-	Func   *FuncExpr
+	IsLocal  bool
+	Func     *FuncExpr
 }
 
 func (s *FuncDefStmt) stmtNode() {}

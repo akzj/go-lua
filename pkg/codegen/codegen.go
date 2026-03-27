@@ -31,6 +31,7 @@ type GotoInfo struct {
 	Label      string // Label name
 	BlockDepth int    // Block depth where the goto is emitted
 	Line       int    // Source line number
+	NumLocals  int    // Total number of locals at goto time
 }
 
 // CodeGenerator generates bytecode from AST.
@@ -62,6 +63,30 @@ type LocalVar struct {
 	Active   bool
 	IsParam  bool
 	StartPC  int // PC where variable becomes active
+}
+
+// countLocals returns the total number of local variables across all scope levels.
+func (cg *CodeGenerator) countLocals() int {
+	count := 0
+	for _, scope := range cg.Locals {
+		count += len(scope)
+	}
+	return count
+}
+
+// getLocalsSince returns the names of locals added after the given count.
+func (cg *CodeGenerator) getLocalsSince(sinceCount int) []string {
+	var names []string
+	count := 0
+	for _, scope := range cg.Locals {
+		for _, local := range scope {
+			if count >= sinceCount {
+				names = append(names, local.Name)
+			}
+			count++
+		}
+	}
+	return names
 }
 
 // JumpEntry represents a pending jump to patch.

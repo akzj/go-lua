@@ -3,6 +3,7 @@
 package api
 
 import (
+	"github.com/akzj/go-lua/pkg/object"
 	"math"
 	"math/rand"
 	"time"
@@ -59,10 +60,10 @@ func (s *State) openMathLib() {
 	s.SetField(tableIdx, "huge")
 
 	// Integer limits (Lua 5.3+)
-	s.PushNumber(float64(math.MinInt64))
+	s.PushInteger(math.MinInt64)
 	s.SetField(tableIdx, "mininteger")
 
-	s.PushNumber(float64(math.MaxInt64))
+	s.PushInteger(math.MaxInt64)
 	s.SetField(tableIdx, "maxinteger")
 
 	// Register as global
@@ -449,11 +450,14 @@ func stdMathToInteger(L *State) int {
 
 // stdMathType implements math.type(x)
 // Returns "integer" if x is an integer, "float" if x is a float, nil otherwise.
-// Since the VM uses float64 for all numbers, this always returns "float" for numbers.
 func stdMathType(L *State) int {
-	if L.IsNumber(1) {
-		// VM uses float64 for all numbers, so always "float"
-		L.PushString("float")
+	v := L.vm.GetStack(1)
+	if v.Type == object.TypeNumber {
+		if v.IsInt {
+			L.PushString("integer")
+		} else {
+			L.PushString("float")
+		}
 		return 1
 	}
 	
