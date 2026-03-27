@@ -835,8 +835,25 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					// %s should convert any value to string (Lua 5.4 behavior)
-					str := object.ToStringRaw(v)
+					// %s should convert any value to string, calling __tostring metamethod if present
+					var str string
+					if v.IsTable() {
+						t, _ := v.ToTable()
+						mm := L.vm.GetMetamethod(t, "__tostring")
+						if mm != nil && mm.IsFunction() {
+							// Call the metamethod
+							result := L.vm.CallMetamethod(mm, []object.TValue{*v})
+							if result != nil && result.IsString() {
+								str, _ = result.ToString()
+							} else {
+								str = object.ToStringRaw(v)
+							}
+						} else {
+							str = object.ToStringRaw(v)
+						}
+					} else {
+						str = object.ToStringRaw(v)
+					}
 					if formatSpec == "" {
 						result.WriteString(str)
 					} else {
@@ -1110,7 +1127,9 @@ func luaQuote(s string) string {
 		case '\f':
 			result.WriteString("\\f")
 		case '\n':
-			result.WriteString("\\n")
+			// Lua 5.5 outputs backslash followed by actual newline byte
+			result.WriteByte('\\')
+			result.WriteByte('\n')
 		case '\r':
 			result.WriteString("\\r")
 		case '\t':

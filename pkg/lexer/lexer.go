@@ -438,6 +438,9 @@ func (l *Lexer) readString(delim byte) (string, error) {
 				l.buffer.WriteByte('\'')
 				l.Advance()
 			case '\n', '\r':
+				// \<newline> is an escape sequence that produces a newline character
+				// (not line continuation - Lua 5.1/5.5 semantics)
+				l.buffer.WriteByte('\n')
 				l.skipNewline()
 			case 'x': // \xHH
 				l.Advance()
