@@ -801,6 +801,9 @@ func (cg *CodeGenerator) genGoto(stmt *parser.GotoStmt) {
 	labelName := stmt.Label
 	currentPC := cg.GetCurrentPC()
 	
+	// DEBUG
+	println("DEBUG genGoto: label=", labelName, " blockDepth=", cg.blockDepth, " activeLocals=", len(cg.getActiveLocals()))
+	
 	// Check if label is already defined (backward jump)
 	if labelInfo, exists := cg.labels[labelName]; exists {
 		// Backward jump: check that we're not jumping into an inner block
@@ -842,6 +845,9 @@ func (cg *CodeGenerator) genLabel(stmt *parser.LabelStmt) {
 	labelName := stmt.Name
 	currentPC := cg.GetCurrentPC()
 	labelBlockDepth := cg.blockDepth
+	
+	// DEBUG
+	println("DEBUG genLabel: label=", labelName, " blockDepth=", labelBlockDepth, " hasForwardGotos=", cg.forwardGotos[labelName] != nil)
 	
 	// Check for duplicate labels
 	// A label is visible if it's in the same or outer block (blockDepth <= current)
