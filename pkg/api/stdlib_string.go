@@ -59,6 +59,8 @@ func stdStringLength(L *State) int {
 
 // stdStringSub implements string.sub(s, i [, j])
 // Returns substring from i to j (inclusive). Negative indices count from end.
+// stdStringSub implements string.sub(s, i [, j])
+// Returns substring from i to j (inclusive). Negative indices count from end.
 func stdStringSub(L *State) int {
 	str, ok := L.ToString(1)
 	if !ok {
@@ -69,46 +71,51 @@ func stdStringSub(L *State) int {
 	n := len(str)
 
 	// Get start index (required)
-	i := 1
+	i := 1.0
 	if L.GetTop() >= 2 {
 		if num, ok := L.ToNumber(2); ok {
-			i = int(num)
+			i = num
 		}
 	}
 
-	// Get end index (optional, defaults to -1 = end)
-	j := n
+	// Get end index (optional, defaults to end of string)
+	j := float64(n)
 	if L.GetTop() >= 3 {
 		if num, ok := L.ToNumber(3); ok {
-			j = int(num)
+			j = num
 		}
 	}
 
-	// Handle negative indices
+	// Handle negative indices (count from end)
 	if i < 0 {
-		i = n + i + 1
+		i = float64(n) + i + 1
 	}
 	if j < 0 {
-		j = n + j + 1
+		j = float64(n) + j + 1
 	}
 
-	// Clamp to valid range
+	// Clamp to valid range [1, n] BEFORE converting to int to prevent overflow
+	// Only clamp lower bound for i, upper bound for j
+	// This ensures out-of-bounds start (i > n) results in i > j → empty string
 	if i < 1 {
 		i = 1
 	}
-	if j > n {
-		j = n
+	if j > float64(n) {
+		j = float64(n)
 	}
 
+	// Now safe to convert to int
+	iInt := int(i)
+	jInt := int(j)
+
 	// Return substring
-	if i > j {
+	if iInt > jInt {
 		L.PushString("")
 	} else {
-		L.PushString(str[i-1 : j])
+		L.PushString(str[iInt-1 : jInt])
 	}
 	return 1
 }
-
 // stdStringUpper implements string.upper(s)
 // Returns uppercase version of s.
 func stdStringUpper(L *State) int {
