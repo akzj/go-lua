@@ -835,7 +835,8 @@ func stdStringFormat(L *State) int {
 				if argIdx <= top {
 					v := L.vm.GetStack(argIdx)
 					argIdx++
-					str, _ := v.ToString()
+					// %s should convert any value to string (Lua 5.4 behavior)
+					str := object.ToStringRaw(v)
 					if formatSpec == "" {
 						result.WriteString(str)
 					} else {
