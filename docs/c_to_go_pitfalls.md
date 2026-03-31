@@ -764,19 +764,14 @@ func (t *Table) Get(key *TValue) (TValue, bool) {
         }
     }
     
-    // 查哈希部分
+    // 查哈希部分：⚠️修正：使用链式冲突遍历，不是线性探测
     mp := t.mainPosition(key)
-    for i := mp; ; i = (i + 1) & (len(t.Node) - 1) {
-        if t.Node[i].Key.IsNil() {
-            return TValue{}, false  // 未找到
-        }
+    for i := mp; i != -1; i = t.Node[i].Next {
         if equalValue(&t.Node[i].Key, key) {
             return t.Node[i].Val, true
         }
-        if i == mp {
-            return TValue{}, false  // 绕了一圈
-        }
     }
+    return TValue{}, false  // 未找到
 }
 ```
 
@@ -1003,11 +998,9 @@ func MakeFloat(f float64) *Number {
 // 自动类型转换
 func (n *Number) Add(other *Number) *Number {
     if n.tt == LUA_VNUMINT && other.tt == LUA_VNUMINT {
-        // 整数 + 整数 = 整数（可能溢出）
-        result, overflow := unsafe.AddInt64(n.i, other.i)
-        if overflow {
-            return MakeFloat(float64(n.i) + float64(other.i))
-        }
+        // ⚠️修正：整数溢出 wrap around，不转浮点
+        // C 中使用 uint64 计算后再转回 int64（溢出是未定义，但实际是 wrap）
+        result := int64(uint64(n.i) + uint64(other.i))
         return MakeInteger(result)
     }
     // 其他情况转浮点
