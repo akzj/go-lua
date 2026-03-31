@@ -343,16 +343,14 @@ func formatInt64(n int64) string {
 // stdTablePack implements table.pack(...)
 // Returns a table with all arguments, with n field set to count.
 func stdTablePack(L *State) int {
+	// Save original argument count before creating table
+	n := L.GetTop()
+
 	// Create new table
 	L.NewTable()
-
-	top := L.GetTop()
-	// The table is at position top - (original top - 1)
-	// Actually, after NewTable, the table is at the top
 	tableIdx := L.GetTop()
 
-	// Pack all arguments into table
-	n := top - 1 // Number of arguments (before NewTable)
+	// Pack all arguments into table (from original stack positions)
 	for i := 1; i <= n; i++ {
 		v := L.vm.GetStack(i)
 		L.vm.Push(*v)

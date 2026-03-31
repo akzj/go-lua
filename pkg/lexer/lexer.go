@@ -7,6 +7,7 @@ package lexer
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -726,6 +727,11 @@ func (l *Lexer) readNumber() (Token, error) {
 			if uerr == nil {
 				return Token{Type: TK_FLOAT, Value: float64(uval), Line: tokenLine, Column: tokenColumn}, nil
 			}
+			// Large hex value that overflows uint64 - use big.Float
+			bf := new(big.Float).SetPrec(53) // Use 53 bits like float64
+			bf.Parse("0x"+hexStr, 0)
+			fval, _ := bf.Float64()
+			return Token{Type: TK_FLOAT, Value: fval, Line: tokenLine, Column: tokenColumn}, nil
 		}
 	} else if isOctal {
 		// Octal: strip 0o prefix and parse with base 8

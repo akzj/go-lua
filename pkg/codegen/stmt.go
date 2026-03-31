@@ -89,17 +89,62 @@ func (cg *CodeGenerator) genAssign(stmt *parser.AssignStmt) {
 	// Save current stack top
 	savedStackTop := cg.StackTop
 
+	// Special case: if there are more names than values and the last value is a call expression,
+	// the call should return all its results to fill the remaining variables
+	numLeft := len(stmt.Left)
+	numRight := len(stmt.Right)
+	
+	var needsMultiReturn bool
+	if numLeft > numRight {
+		// Check if last RHS is a call expression
+		lastExpr := stmt.Right[numRight-1]
+		_, isCall := lastExpr.(*parser.CallExpr)
+		if !isCall {
+			_, isCall = lastExpr.(*parser.MethodCallExpr)
+		}
+		needsMultiReturn = isCall
+	}
+
+	// Save old ExpectedResults
+	oldExpected := cg.ExpectedResults
+
 	// Generate all right-hand side values first
 	rightRegs := make([]int, len(stmt.Right))
 	for i, expr := range stmt.Right {
+		// If multi-return needed and this is the last expression, request all results
+		if needsMultiReturn && i == numRight-1 {
+			numResultsNeeded := numLeft - (numRight - 1)
+			cg.ExpectedResults = numResultsNeeded
+		}
 		rightRegs[i] = cg.genExpr(expr)
+		// Reset after each expression
+		cg.ExpectedResults = -1
 	}
+
+	// For multi-return calls, update StackTop to account for all results
+	// The results are in consecutive registers starting at rightRegs[numRight-1]
+	if needsMultiReturn {
+		numResultsNeeded := numLeft - (numRight - 1)
+		lastResultReg := rightRegs[numRight-1]
+		cg.setStackTop(lastResultReg + numResultsNeeded)
+		if cg.StackTop > cg.MaxStackSize {
+			cg.MaxStackSize = cg.StackTop
+		}
+	}
+
+	// Restore ExpectedResults
+	cg.ExpectedResults = oldExpected
 
 	// Assign to left-hand side
 	for i, left := range stmt.Left {
 		var valueReg int
 		if i < len(rightRegs) {
 			valueReg = rightRegs[i]
+		} else if needsMultiReturn {
+			// For multi-return calls, the extra values are in consecutive registers
+			// starting at rightRegs[len(rightRegs)-1]
+			lastResultReg := rightRegs[len(rightRegs)-1]
+			valueReg = lastResultReg + (i - (len(rightRegs) - 1))
 		} else {
 			// More variables than values, use nil
 			valueReg = cg.genNil()
