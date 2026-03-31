@@ -457,7 +457,7 @@ func (p *Parser) parseLocalFunction(line int) Stmt {
 	p.advance()
 
 	// Parse parameter list
-	params, isVarArg := p.parseParamList()
+	params, isVarArg, varargName := p.parseParamList()
 
 	// Parse body
 	body := p.parseBlock()
@@ -479,6 +479,7 @@ func (p *Parser) parseLocalFunction(line int) Stmt {
 		Params:   params,
 		Body:     body,
 		IsVarArg: isVarArg,
+		VarargName: varargName,
 		IsLocal:  true,
 	}
 }
@@ -504,7 +505,7 @@ func (p *Parser) parseFuncDefStmt() Stmt {
 	}
 
 	// Parse parameter list
-	params, isVarArg := p.parseParamList()
+	params, isVarArg, varargName := p.parseParamList()
 
 	// If method syntax (colon), prepend 'self' parameter
 	if isMethod {
@@ -548,6 +549,7 @@ func (p *Parser) parseFuncDefStmt() Stmt {
 		Params:   params,
 		Body:     body,
 		IsVarArg: isVarArg,
+		VarargName: varargName,
 		IsLocal:  isLocal,
 	}
 }

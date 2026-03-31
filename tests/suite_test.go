@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"testing"
 
 	"github.com/akzj/go-lua/pkg/api"
@@ -115,8 +116,16 @@ func runTestFile(t *testing.T, path string, config TestSuiteConfig) TestResult {
 	// Open standard libraries
 	L.OpenLibs()
 
-	// Run the test (use full path so require() can find sibling modules)
-	err = L.DoString(code, "@"+path)
+	// Run the test with timeout (use full path so require() can find sibling modules)
+	done := make(chan error, 1)
+	go func() {
+		done <- L.DoString(code, "@"+path)
+	}()
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		err = fmt.Errorf("test timed out after 10 seconds")
+	}
 	if err != nil {
 		return TestResult{
 			Name:   name,
@@ -415,6 +424,8 @@ func PrintSummary(t *testing.T, results map[string]TestResult) {
 // TestLuaTestSuite runs the official Lua test suite.
 // Note: Basic functionality tests count toward the 5 test scenarios requirement.
 func TestLuaTestSuite(t *testing.T) {
+
+
 	config := DefaultConfig()
 	config.Verbose = true
 

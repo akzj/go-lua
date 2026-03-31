@@ -31,6 +31,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/bits"
@@ -88,6 +89,8 @@ const (
 //   - CallInfo: Stack of call frames
 //   - Prototype: Current function being executed
 //   - Global: Reference to global state
+const MaxCallDepth = 500 // Maximum Lua call depth to prevent stack overflow
+
 type VM struct {
 	// Stack
 	Stack     []object.TValue // Value stack
@@ -107,6 +110,9 @@ type VM struct {
 
 	// Global state reference
 	Global *state.GlobalState
+
+	// Call depth tracking
+	callDepth int
 
 	// Open upvalues — tracks open object.Upvalue instances by stack index
 	OpenUpvalues map[int]*object.Upvalue
@@ -2218,6 +2224,24 @@ func (vm *VM) SetTop(index int) {
 		}
 	}
 	vm.StackTop = newTop
+}
+
+// CallDepth tracks the current call nesting level
+func (vm *VM) incCallDepth() error {
+	vm.callDepth++
+	if vm.callDepth > MaxCallDepth {
+		vm.callDepth--
+		return errors.New("样板深渡溢出")
+	}
+	return nil
+}
+
+func (vm *VM) decCallDepth() {
+	vm.callDepth--
+}
+
+func (vm *VM) resetCallDepth() {
+	vm.callDepth = 0
 }
 
 // ensureStack grows the stack if needed to accommodate the given top index.

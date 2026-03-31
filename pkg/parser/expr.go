@@ -311,7 +311,7 @@ func (p *Parser) parseAnonFunc() Expr {
 	p.advance() // Skip 'function'
 
 	// Parse parameter list
-	params, isVarArg := p.parseParamList()
+	params, isVarArg, varargName := p.parseParamList()
 
 	// Parse body
 	body := p.parseBlock()
@@ -326,22 +326,24 @@ func (p *Parser) parseAnonFunc() Expr {
 		Params:   params,
 		Body:     body,
 		IsVarArg: isVarArg,
+		VarargName: varargName,
 	}
 }
 
 // parseParamList parses a function parameter list.
-func (p *Parser) parseParamList() ([]*VarExpr, bool) {
+func (p *Parser) parseParamList() ([]*VarExpr, bool, string) {
 	params := []*VarExpr{}
 	isVarArg := false
+	varargName := ""
 
 	if !p.match(lexer.TK_LPAREN) {
 		p.Error("expected '(' after 'function'")
-		return params, isVarArg
+		return params, isVarArg, varargName
 	}
 
 	// Check for empty parameter list
 	if p.match(lexer.TK_RPAREN) {
-		return params, isVarArg
+		return params, isVarArg, varargName
 	}
 
 	// Parse parameters
@@ -351,7 +353,7 @@ func (p *Parser) parseParamList() ([]*VarExpr, bool) {
 			p.advance()
 			// Lua 5.4: support named vararg (...t) where t is the vararg table name
 			if p.Current.Type == lexer.TK_NAME {
-				// Consume the vararg parameter name (e.g., 't' in ...t)
+				varargName = p.Current.Value.(string)
 				p.advance()
 			}
 			break
@@ -381,7 +383,7 @@ func (p *Parser) parseParamList() ([]*VarExpr, bool) {
 		p.Error("expected ')' after parameter list")
 	}
 
-	return params, isVarArg
+	return params, isVarArg, varargName
 }
 
 // parseTableConstructor parses a table constructor {...}.

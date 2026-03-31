@@ -216,6 +216,10 @@ func (cg *CodeGenerator) Generate(funcDef *parser.FuncDefStmt) *object.Prototype
 	// Emit VARARGPREP for vararg functions
 	if funcDef.IsVarArg {
 		cg.EmitABC(vm.OP_VARARGPREP, len(funcDef.Params), 0, 0)
+		// Build vararg table if named vararg (...name)
+		if funcDef.VarargName != "" {
+			cg.genVarargTable(funcDef.VarargName, len(funcDef.Params))
+		}
 	}
 	
 	cg.genBlock(funcDef.Body)
@@ -245,6 +249,10 @@ func (cg *CodeGenerator) GenerateFunc(funcExpr *parser.FuncExpr) *object.Prototy
 	// Emit VARARGPREP for vararg functions
 	if funcExpr.IsVarArg {
 		cg.EmitABC(vm.OP_VARARGPREP, len(funcExpr.Params), 0, 0)
+		// Build vararg table if named vararg (...name)
+		if funcExpr.VarargName != "" {
+			cg.genVarargTable(funcExpr.VarargName, len(funcExpr.Params))
+		}
 	}
 	
 	cg.genBlock(funcExpr.Body)
@@ -530,6 +538,72 @@ func (cg *CodeGenerator) constantKey(val object.TValue) string {
 // emitReturn emits RETURN: return B-1 values starting at register A (Lua B=0 means multret).
 func (cg *CodeGenerator) emitReturn(a int, b int) {
 	cg.EmitABC(vm.OP_RETURN, a, b, 0)
+}
+
+// genVarargTable generates code to build a vararg table and assign it to a local.
+// When a function has named vararg (...name), this creates a table {1: arg1, 2: arg2, ...}
+// and assigns it to the local variable with the given name.
+// Uses a helper closure that builds the table from vararg info.
+func (cg *CodeGenerator) genVarargTable(name string, numFixedParams int) {
+	// We need to:
+	// 1. Create a new table
+	// 2. Get vararg count from CallInfo
+	// 3. Copy each vararg into the table
+	// 4. Assign the table to the local variable name
+	
+	// Allocate register for the table
+	tableReg := cg.allocRegister()
+	
+	// Create new empty table
+	cg.EmitABC(vm.OP_NEWTABLE, tableReg, 0, 0)
+	
+	// Get vararg count - we'll use a loop with VARARG
+	// We need to iterate and copy varargs one by one
+	
+	// Allocate registers for loop
+	counterReg := cg.allocRegister()  // Loop counter
+	varargReg := cg.allocRegister()    // Current vararg value
+	
+	// Initialize counter to 1
+	cg.EmitAsBx(vm.OP_LOADI, counterReg, 1)
+	
+	// Loop start - mark position for JMP back
+	loopStart := len(cg.Prototype.Code)
+	
+	// Get next vararg: VARARG R(varargReg) := one vararg
+	// Using C=2 means we want 1 result (C-1)
+	cg.EmitABC(vm.OP_VARARG, varargReg, 1, 2)
+	
+	// Copy vararg to table[counter] using SETI
+	// SETI R(A)[C] := RK(B) where A=tableReg, C=counter, B=vararg
+	cg.EmitABC(vm.OP_SETI, tableReg, varargReg, counterReg)
+	
+	// Increment counter
+	cg.EmitABC(vm.OP_ADDI, counterReg, counterReg, 1)
+	
+	// Get next vararg to check if we're done
+	cg.EmitABC(vm.OP_VARARG, varargReg, 1, 2)
+	
+	// If vararg is not nil, jump back to loop start
+	// EQ has A=1 meaning it sets A register to 1 if equal, 0 if not
+	// We want to JMP if vararg IS nil (end of varargs)
+	// So: EQ check, JMP if not equal (to continue loop)
+	// Actually simpler: if vararg == nil, we're done, else continue
+	
+	// Compare vararg with nil
+	cg.EmitABC(vm.OP_EQ, 0, varargReg, 0)  // A=0 means jump if NOT equal
+	cg.EmitAsBx(vm.OP_JMP, 0, loopStart-len(cg.Prototype.Code)-1)  // Jump to loop start if NOT nil
+	
+	// Loop end - we fall through when vararg is nil
+	// At this point, counter has already been incremented one extra time
+	// but the table has the correct values
+	
+	// Free temporary registers
+	cg.freeRegister()
+	cg.freeRegister()
+	
+	// Add the table as a local variable
+	cg.addLocal(name, tableReg, true)
 }
 
 // genBlock generates code for a block of statements.

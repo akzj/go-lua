@@ -36,6 +36,7 @@ func (s *State) OpenLibs() {
 	s.Register("assert", stdAssert)
 	s.Register("error", stdError)
 	s.Register("pcall", stdPcall)
+	s.Register("xpcall", stdXpcall)
 	s.Register("next", stdNext)
 	s.Register("pairs", stdPairs)
 	s.Register("ipairs", stdIpairs)
@@ -187,24 +188,11 @@ func stdTostring(L *State) int {
 		if mm != nil && mm.IsFunction() {
 			// Call the metamethod
 			result := L.vm.CallMetamethod(mm, []object.TValue{*v})
-			if result != nil && result.IsString() {
+			if result != nil {
 				L.vm.Stack[L.vm.StackTop].CopyFrom(result)
 				L.vm.StackTop++
 				return 1
-			} else {
-				// __tostring must return a string
-				L.PushString("'__tostring' must return a string")
-				L.Error()
-				return 0
 			}
-		}
-		
-		// If no __tostring, check for __name (Lua 5.4+ behavior)
-		nameMM := L.vm.GetMetamethod(t, "__name")
-		if nameMM != nil && nameMM.IsString() {
-			name, _ := nameMM.ToString()
-			L.PushString(fmt.Sprintf("%s: %p", name, v.Value.GC))
-			return 1
 		}
 	}
 	
@@ -400,6 +388,84 @@ func stdPcall(L *State) int {
 
 // stdNext implements the Lua next() function.
 // next(table, key) returns the next key, value pair.
+
+// stdXpcall implements the Lua xpcall() function.
+// xpcall(f, errhandler [, ...]) -> (ok, result...)
+// Similar to pcall but calls errhandler with error message on failure.
+func stdXpcall(L *State) int {
+	top := L.GetTop()
+	
+	if top < 2 {
+		L.PushBoolean(false)
+		L.PushString("bad arguments to xpcall")
+		return 2
+	}
+	
+	// Get function at stack position 1 (index 0 from base)
+	fv := L.vm.GetStack(1)
+	if !fv.IsFunction() && !fv.IsThread() {
+		L.PushBoolean(false)
+		L.PushString("attempt to call a non-function value")
+		return 2
+	}
+	
+	// Get error handler at stack position 2
+	ehv := L.vm.GetStack(2)
+	if !ehv.IsFunction() {
+		L.PushBoolean(false)
+		L.PushString("attempt to call a non-function value")
+		return 2
+	}
+	
+	nargs := top - 2 // Number of additional arguments
+	
+	// Save stack state for results
+	savedStackTop := L.vm.StackTop
+	
+	// Call the function using ProtectedCall
+	// The function is at stack position 1 (relative to base, so we use base+1)
+	err := L.vm.ProtectedCall(1, nargs, -1)
+	
+	if err != nil {
+		// Restore stack and call error handler with the error
+		L.vm.StackTop = savedStackTop
+		
+		// Push error message for error handler
+		L.vm.Push(object.TValue{Type: object.TypeString, Value: object.Value{Str: err.Error()}})
+		
+		// Call error handler
+		errHandlerErr := L.vm.ProtectedCall(0, 1, -1)
+		
+		if errHandlerErr != nil {
+			// Error handler itself errored - "error in error handling"
+			L.vm.StackTop = savedStackTop
+			L.PushBoolean(false)
+			L.PushString("error in error handling")
+			return 2
+		}
+		
+		// Error handler succeeded - return false + handler results
+		numResults := L.vm.StackTop - savedStackTop
+		L.PushBoolean(false)
+		// Move handler results up one slot to make room for false
+		for i := numResults - 1; i >= 0; i-- {
+			L.vm.Stack[savedStackTop+1+i] = L.vm.Stack[savedStackTop+i]
+		}
+		L.vm.Stack[savedStackTop].Type = object.TypeBoolean
+		L.vm.Stack[savedStackTop].Value = object.Value{Bool: true}
+		return 1 + numResults
+	}
+	
+	// Success
+	numResults := L.vm.StackTop - L.vm.Base
+	L.vm.StackTop = savedStackTop
+	L.PushBoolean(true)
+	for i := 0; i < numResults; i++ {
+		L.vm.Push(L.vm.Stack[L.vm.Base+i])
+	}
+	return 1 + numResults
+}
+
 func stdNext(L *State) int {
 	v := L.vm.GetStack(1)
 	t, ok := v.ToTable()
@@ -1041,6 +1107,14 @@ func stdCollectgarbage(L *State) int {
 			case "step":
 				// Perform a GC step
 				return 0
+			case "generational":
+				// Generational GC - return true (no-op but should succeed)
+				L.PushBoolean(true)
+				return 1
+			case "isrunning":
+				// Return true to indicate GC is running
+				L.PushBoolean(true)
+				return 1
 			}
 		}
 	}

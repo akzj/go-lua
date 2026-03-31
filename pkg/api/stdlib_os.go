@@ -37,6 +37,9 @@ func (s *State) openOSLib() {
 	s.PushFunction(osExecute)
 	s.SetField(osIdx, "execute")
 
+	s.PushFunction(osSetlocale)
+	s.SetField(osIdx, "setlocale")
+
 	s.SetGlobal("os")
 }
 
@@ -141,5 +144,14 @@ func osTmpname(L *State) int {
 
 func osExecute(L *State) int {
 	L.PushBoolean(true)
+	return 1
+}
+
+// osSetlocale implements os.setlocale([locale [, category]])
+// Returns the current locale or false if locale cannot be set.
+// Currently returns false as locale support is not implemented.
+func osSetlocale(L *State) int {
+	// os.setlocale returns false (locale not available in this implementation)
+	L.PushBoolean(false)
 	return 1
 }

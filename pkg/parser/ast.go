@@ -233,6 +233,7 @@ type FuncExpr struct {
 	Params []*VarExpr
 	Body *BlockStmt
 	IsVarArg bool
+	VarargName string
 }
 
 func (e *FuncExpr) exprNode() {}
@@ -393,6 +394,7 @@ type FuncDefStmt struct {
 	Body     *BlockStmt
 	IsVarArg bool
 	IsLocal  bool
+	VarargName string
 	Func     *FuncExpr
 }
 
