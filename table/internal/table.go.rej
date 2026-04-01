@@ -1,0 +1,10 @@
+@@ -453,6 +453,9 @@
+ 		return nil
+ 	}
+ 	h := uintptr(uint64(uintptr(0)))
++	if key.GetValue() != nil {
++		h = uintptr(reflect.ValueOf(key.GetValue()).Pointer())
++	}
+ 	return gnode(t, int(h)&(size-1))
+ }
+ 
