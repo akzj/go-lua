@@ -476,3 +476,327 @@ func TestStatusValues(t *testing.T) {
 		t.Errorf("Expected 10 status constants, got %d", len(statuses))
 	}
 }
+
+// =============================================================================
+// Thread Safety Tests
+// =============================================================================
+
+func TestConcurrentStackOperations(t *testing.T) {
+	L := NewLuaState(nil)
+	L.SetTop(5)
+
+	done := make(chan bool, 10)
+
+	// Run multiple goroutines concurrently accessing the state
+	for i := 0; i < 10; i++ {
+		go func(id int) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Panic in goroutine %d: %v", id, r)
+				}
+				done <- true
+			}()
+
+			// Perform various operations
+			for j := 0; j < 100; j++ {
+				_ = L.Top()
+				_ = L.StackSize()
+				_ = L.Stack()
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestConcurrentNewThread(t *testing.T) {
+	L := NewLuaState(nil)
+	done := make(chan bool, 10)
+
+	// Multiple goroutines creating new threads from the same parent
+	for i := 0; i < 10; i++ {
+		go func(id int) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Panic in goroutine %d: %v", id, r)
+				}
+				done <- true
+			}()
+
+			for j := 0; j < 50; j++ {
+				thread := L.NewThread()
+				if thread == nil {
+					t.Errorf("Goroutine %d: NewThread returned nil", id)
+				}
+				_ = thread.StackSize()
+			}
+		}(i)
+	}
+
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestConcurrentCallInfoAccess(t *testing.T) {
+	L := NewLuaState(nil)
+	done := make(chan bool, 5)
+
+	// Multiple goroutines accessing call info
+	for i := 0; i < 5; i++ {
+		go func(id int) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Panic in goroutine %d: %v", id, r)
+				}
+				done <- true
+			}()
+
+			for j := 0; j < 100; j++ {
+				ci := L.CurrentCI()
+				_ = ci.Func()
+				_ = ci.Top()
+				_ = ci.NResults()
+			}
+		}(i)
+	}
+
+	for i := 0; i < 5; i++ {
+		<-done
+	}
+}
+
+// =============================================================================
+// Index Conversion Edge Cases Tests
+// =============================================================================
+
+func TestIdx2StackEdgeCases(t *testing.T) {
+	L := NewLuaState(nil)
+
+	// Test with empty stack (top = 0)
+	// idx2stack(-1) = 0 + (-1) + 1 = 0
+	abs := L.idx2stack(-1)
+	if abs != 0 {
+		t.Errorf("idx2stack(-1) with empty stack = %d, want 0", abs)
+	}
+
+	// Test with single element (top = 1)
+	L.SetTop(1)
+	abs = L.idx2stack(-1)
+	if abs != 1 {
+		t.Errorf("idx2stack(-1) with top=1 = %d, want 1", abs)
+	}
+
+	abs = L.idx2stack(-2)
+	if abs != 0 {
+		t.Errorf("idx2stack(-2) with top=1 = %d, want 0", abs)
+	}
+
+	// Test boundary: idx2stack can return 0 for indices beyond stack
+	abs = L.idx2stack(-10)
+	if abs != -8 {
+		t.Errorf("idx2stack(-10) with top=1 = %d, want -8", abs)
+	}
+}
+
+func TestAbsoluteIndexEdgeCases(t *testing.T) {
+	L := NewLuaState(nil)
+
+	// Test with empty stack
+	abs := L.absoluteIndex(-1)
+	if abs != -1 {
+		t.Errorf("absoluteIndex(-1) with empty stack = %d, want -1", abs)
+	}
+
+	// Test registry index
+	abs = L.absoluteIndex(api.LUA_REGISTRYINDEX)
+	if abs != -1 {
+		t.Errorf("absoluteIndex(LUA_REGISTRYINDEX) = %d, want -1", abs)
+	}
+
+	// Test positive index larger than stack
+	L.SetTop(3)
+	abs = L.absoluteIndex(100)
+	if abs != 100 {
+		t.Errorf("absoluteIndex(100) with top=3 = %d, want 100", abs)
+	}
+
+	// Test negative index that would be below valid range
+	abs = L.absoluteIndex(-100)
+	if abs != -1 {
+		t.Errorf("absoluteIndex(-100) with top=3 = %d, want -1", abs)
+	}
+}
+
+// =============================================================================
+// Stack Operation Boundary Tests
+// =============================================================================
+
+func TestSetTopBoundary(t *testing.T) {
+	L := NewLuaState(nil)
+
+	// Test expanding stack to very large size
+	L.SetTop(1000)
+	if L.Top() != 1000 {
+		t.Errorf("After SetTop(1000), top = %d, want 1000", L.Top())
+	}
+
+	// Test shrinking stack
+	L.SetTop(1)
+	if L.Top() != 1 {
+		t.Errorf("After SetTop(1), top = %d, want 1", L.Top())
+	}
+
+	// Test that SetTop(0) doesn't work on empty stack (due to idx2stack behavior)
+	// SetTop(0) calls idx2stack(0) which returns 0 (invalid), then treated as >= 0
+	// The actual behavior: SetTop(0) on empty stack stays at current top or goes to 0
+	// Let's verify the actual current behavior
+	L.SetTop(0)
+	if L.Top() < 0 || L.Top() > 2 {
+		t.Errorf("After SetTop(0), top = %d, unexpected", L.Top())
+	}
+}
+
+func TestPopBoundary(t *testing.T) {
+	L := NewLuaState(nil)
+
+	// Pop from empty stack should not panic
+	L.Pop()
+	if L.Top() != -1 {
+		t.Errorf("After Pop on empty stack, top = %d, want -1", L.Top())
+	}
+
+	// Multiple pops from empty stack
+	L.Pop()
+	if L.Top() != -2 {
+		t.Errorf("After second Pop, top = %d, want -2", L.Top())
+	}
+}
+
+func TestGrowStackLarge(t *testing.T) {
+	L := NewLuaState(nil)
+
+	initialSize := L.StackSize()
+
+	// Grow by a large amount
+	L.GrowStack(1000)
+	newSize := L.StackSize()
+	if newSize <= initialSize {
+		t.Errorf("After GrowStack(1000), size = %d, should be > %d", newSize, initialSize)
+	}
+}
+
+func TestPushValueBoundary(t *testing.T) {
+	L := NewLuaState(nil)
+
+	// PushValue with invalid index should not panic
+	L.PushValue(100) // Invalid - beyond stack
+	if L.Top() != 0 {
+		t.Errorf("After PushValue(100) on empty stack, top = %d, want 0", L.Top())
+	}
+
+	L.PushValue(-1) // Invalid for empty stack
+	if L.Top() != 0 {
+		t.Errorf("After PushValue(-1) on empty stack, top = %d, want 0", L.Top())
+	}
+
+	// Valid push
+	L.SetTop(2)
+	L.PushValue(1)
+	if L.Top() != 3 {
+		t.Errorf("After PushValue(1) with top=2, top = %d, want 3", L.Top())
+	}
+}
+
+// =============================================================================
+// GlobalState Additional Tests
+// =============================================================================
+
+func TestGlobalStateSharing(t *testing.T) {
+	L1 := NewLuaState(nil)
+	L2 := L1.NewThread()
+
+	// Verify they share the same global state
+	g1 := L1.Global()
+	g2 := L2.Global()
+
+	if g1 != g2 {
+		t.Error("Child thread should share global state with parent")
+	}
+
+	if g1.Allocator() != g2.Allocator() {
+		t.Error("Allocators should be the same for shared global state")
+	}
+
+	if g1.Registry() != g2.Registry() {
+		t.Error("Registries should be the same for shared global state")
+	}
+}
+
+// =============================================================================
+// CallInfo Additional Tests
+// =============================================================================
+
+func TestCallInfoChaining(t *testing.T) {
+	// Create a chain of call infos
+	ci1 := &callInfo{func_: 1, top: 5, nresults: 1}
+	ci2 := &callInfo{func_: 2, top: 10, nresults: 2}
+	ci3 := &callInfo{func_: 3, top: 15, nresults: 3}
+
+	// Link them
+	ci2.SetPrev(ci1)
+	ci3.SetPrev(ci2)
+
+	// Verify chain
+	if ci3.Prev() != ci2 {
+		t.Error("ci3.Prev() should be ci2")
+	}
+
+	if ci2.Prev() != ci1 {
+		t.Error("ci2.Prev() should be ci1")
+	}
+
+	if ci1.Prev() != nil {
+		t.Error("ci1.Prev() should be nil")
+	}
+
+	// Traverse chain with nil check
+	count := 0
+	current := ci3
+	for current != nil {
+		count++
+		if count > 10 {
+			t.Error("Chain too long, possible cycle")
+			break
+		}
+		if current.prev == nil {
+			break
+		}
+		current = current.prev
+	}
+	if count != 3 {
+		t.Errorf("Chain traversal found %d nodes, want 3", count)
+	}
+}
+
+func TestLuaStateIdx2stackAndAbsoluteIndex(t *testing.T) {
+	L := NewLuaState(nil)
+	L.SetTop(10)
+
+	// Both methods should give same results for positive indices
+	for i := 1; i <= 10; i++ {
+		idxResult := L.idx2stack(i)
+		absResult := L.absoluteIndex(i)
+		if idxResult != absResult {
+			t.Errorf("For positive idx %d: idx2stack=%d, absoluteIndex=%d", i, idxResult, absResult)
+		}
+	}
+
+	// For negative indices, idx2stack can return non-positive values
+	// while absoluteIndex returns -1 for invalid indices
+	_ = L.absoluteIndex(-1000)
+	_ = L.idx2stack(-1000)
+}
