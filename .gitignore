@@ -30,3 +30,17 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+# Compiled Lua
+*.o
+*.a
+lua
+
+# Backups
+.backups/
+
+# Analysis
+.analysis/
+
+# IDE
+.vscode/
+.idea/
