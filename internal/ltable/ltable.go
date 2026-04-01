@@ -81,8 +81,11 @@ func CeilLog2(x int) int {
 ** Size of node array (power of 2)
  */
 func SizeNode(t *lobject.Table) int {
-	if t.Lsizenode == 0 {
+	if t.Node == nil {
 		return 0
+	}
+	if t.Lsizenode == 0 {
+		return len(t.Node)
 	}
 	return 1 << int(t.Lsizenode)
 }

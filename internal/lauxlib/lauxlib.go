@@ -559,6 +559,13 @@ func luaL_loadstring(L *lstate.LuaState, s string) int {
 	return luaL_loadbufferx(L, s, s, "")
 }
 
+/*
+** LuaL_loadstring - exported version
+ */
+func LuaL_loadstring(L *lstate.LuaState, s string) int {
+	return luaL_loadstring(L, s)
+}
+
 func luaL_getsubtable(L *lstate.LuaState, idx int, fname string) int {
 	if lapi.Lua_getfield(L, idx, fname) == lobject.LUA_TTABLE {
 		return 1
