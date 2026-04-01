@@ -1889,3 +1889,13 @@ func Lua_setwarnf(L *lstate.LuaState, f LuaWarnFunction, ud interface{}) {
 func Lua_closeslot(L *lstate.LuaState, idx int) {
 	lua_closeslot(L, idx)
 }
+
+// Lua_isinteger - check if value is an integer
+func Lua_isinteger(L *lstate.LuaState, idx int) int {
+	if Lua_type(L, idx) != lobject.LUA_TNUMBER {
+		return 0
+	}
+	var isnum int
+	Lua_tointegerx(L, idx, &isnum)
+	return isnum
+}
