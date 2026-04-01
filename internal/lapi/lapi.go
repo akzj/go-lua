@@ -14,9 +14,11 @@ import (
 	"github.com/akzj/go-lua/internal/lfunc"
 	"github.com/akzj/go-lua/internal/lmem"
 	"github.com/akzj/go-lua/internal/lobject"
+	"github.com/akzj/go-lua/internal/lparser"
 	"github.com/akzj/go-lua/internal/lstate"
 	"github.com/akzj/go-lua/internal/lstring"
 	"github.com/akzj/go-lua/internal/ltable"
+	"github.com/akzj/go-lua/internal/lzio"
 )
 
 /*
@@ -825,18 +827,62 @@ func lua_pcallk(L *lstate.LuaState, nargs, nresults, errfunc int, ctx lobject.Lu
 }
 
 /*
-** lua_load - load chunk
+** lua_load - load chunk using parser
  */
 func lua_load(L *lstate.LuaState, reader LuaReader, data interface{}, chunkname string, mode string) int {
 	if chunkname == "" {
 		chunkname = "?"
 	}
-	// Simplified: just create empty function
+
+	// If data is a string, use it directly with lzio
+	if data != nil {
+		if s, ok := data.(string); ok {
+			z := &lzio.ZIO{}
+			sr := &stringReader{data: s}
+			lzio.Init(L, z, sr.Read, data)
+
+			buff := &lzio.Mbuffer{}
+			lzio.InitBuffer(buff)
+			lzio.ResizeBuffer(L, buff, 256)
+
+			cl := lparser.LuaY_parser(L, z, buff, chunkname)
+			if cl == nil {
+				return int(lobject.LUA_ERRSYNTAX)
+			}
+
+			// Push closure to stack using SetObj
+			L.Top.P.Value_.Gc = (*lobject.GCObject)(unsafe.Pointer(cl))
+			L.Top.P.Tt_ = uint8(lobject.CTb(lobject.LUA_VLCL))
+			apiIncrTop(L)
+			return int(lobject.LUA_OK)
+		}
+	}
+
+	// No data - create empty closure
 	f := lfunc.NewLClosure(L, 0)
 	L.Top.P.Value_.Gc = (*lobject.GCObject)(unsafe.Pointer(f))
 	L.Top.P.Tt_ = uint8(lobject.LUA_VLCL)
 	apiIncrTop(L)
 	return int(lobject.LUA_OK)
+}
+
+/*
+** stringReader - implements lzio.Reader for string input
+ */
+type stringReader struct {
+	data string
+	pos  int
+}
+
+func (r *stringReader) Read(L *lstate.LuaState, data interface{}, size *int64) []byte {
+	if r.pos >= len(r.data) {
+		*size = 0
+		return nil
+	}
+	remaining := r.data[r.pos:]
+	*size = int64(len(remaining))
+	r.pos = len(r.data)
+	return []byte(remaining)
 }
 
 /*
@@ -1796,6 +1842,13 @@ func Lua_replace(L *lstate.LuaState, idx int) {
  */
 func Lua_call(L *lstate.LuaState, nargs, nresults int) {
 	lua_callk(L, nargs, nresults, 0, nil)
+}
+
+/*
+** Lua_pcall - protected call, returns error code
+ */
+func Lua_pcall(L *lstate.LuaState, nargs, nresults, errfunc int) int {
+	return lua_pcallk(L, nargs, nresults, errfunc, 0, nil)
 }
 
 /*
