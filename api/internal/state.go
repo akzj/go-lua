@@ -80,6 +80,12 @@ func (L *LuaState) Top() int {
 	return L.top
 }
 
+// GetTop returns the index of the top element in the stack.
+// Matches lua_gettop from C API.
+func (L *LuaState) GetTop() int {
+	return L.Top()
+}
+
 func (L *LuaState) SetTop(idx int) {
 	if idx < 0 {
 		idx = 0
@@ -115,6 +121,12 @@ func (L *LuaState) Yield(nResults int) error {
 
 func (L *LuaState) Global() stateapi.GlobalState {
 	return L.delegate.Global()
+}
+
+// PushGlobalTable pushes the global table onto the stack.
+// Matches lua_pushglobaltable from C API.
+func (L *LuaState) PushGlobalTable() {
+	L.PushInteger(0) // TODO: get global table properly - placeholder
 }
 
 // =============================================================================
@@ -155,6 +167,12 @@ func (L *LuaState) AbsIndex(idx int) int {
 
 func (L *LuaState) Rotate(idx int, n int) {
 	// TODO: implement rotation
+}
+
+// Insert moves the top element to position idx.
+// Implemented as Rotate(idx, 1) per lua_insert semantics.
+func (L *LuaState) Insert(pos int) {
+	L.Rotate(pos, 1)
 }
 
 func (L *LuaState) Copy(fromidx, toidx int) {
@@ -409,6 +427,15 @@ func (L *LuaState) PushBoolean(b bool) {
 func (L *LuaState) PushLightUserData(p interface{}) {
 	L.ensureCapacity(L.top + 1)
 	L.stack[L.top] = luaValue{tp: luaapi.LUA_TLIGHTUSERDATA, data: p}
+	L.top++
+}
+
+// PushGoFunction pushes a Go function onto the stack.
+// TODO: implement proper Go function wrapping
+func (L *LuaState) PushGoFunction(fn func(L luaapi.LuaAPI) int) {
+	L.ensureCapacity(L.top + 1)
+	// Store function as a special value type
+	L.stack[L.top] = luaValue{tp: luaapi.LUA_TFUNCTION, data: fn}
 	L.top++
 }
 

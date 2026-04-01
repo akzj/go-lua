@@ -122,6 +122,27 @@ type LuaAPI interface {
 	// Basic Stack Operations (lua.h lua_gettop, lua_settop, etc.)
 	// =====================================================================
 
+	// GetTop returns the index of the top element in the stack.
+	// Because the stack is 1-indexed, this is the number of elements.
+	// Returns 0 if the stack is empty.
+	//
+	// Why not Top()? GetTop matches lua_gettop from C API.
+	GetTop() int
+
+	// SetTop sets the top of the stack to the given index.
+	// Can be used to pop or push values.
+	// If new top > current top, nil values are pushed.
+	// If new top < current top, values are popped.
+	SetTop(idx int)
+
+	// Pop removes (and discards) the value at the top of the stack.
+	//
+	// Why Pop vs SetTop(-1)? Pop is more idiomatic for single pops.
+	Pop()
+
+	// PushValue pushes a copy of the value at index onto the top.
+	PushValue(idx int)
+
 	// AbsIndex converts a possibly-relative index to an absolute index.
 	//
 	// Why need this?
@@ -242,6 +263,23 @@ type LuaAPI interface {
 	// PushLightUserData pushes light userdata (a pointer) onto the stack.
 	// Light userdata has no metatable and is not managed by GC.
 	PushLightUserData(p interface{})
+
+	// Insert moves the element at the top of the stack to the given position.
+	// 1 <= pos <= top
+	// All elements above pos are shifted up by one.
+	// This is equivalent to lua_insert in C.
+	//
+	// Why not just Rotate? Insert is more idiomatic for this operation.
+	// Rotate(1) = pop + push, Insert(1) = push at bottom.
+	Insert(pos int)
+
+	// PushGoFunction pushes a Go function onto the stack.
+	// The function can then be called by Lua code or used as a callback.
+	//
+	// Why not use types.CFunction?
+	// - CFunction is unsafe.Pointer for FFI interop
+	// - PushGoFunction handles Go closure conversion internally
+	PushGoFunction(fn func(L LuaAPI) int)
 
 	// =====================================================================
 	// Table Operations (lua_get*, lua_set*)
@@ -400,6 +438,12 @@ type LuaAPI interface {
 
 	// Registry returns the registry table.
 	Registry() tableapi.TableInterface
+
+	// PushGlobalTable pushes the global table onto the stack.
+	// This is equivalent to lua_pushglobaltable in C API.
+	//
+	// Why not GetGlobalTable? Push matches C API naming (lua_pushglobaltable).
+	PushGlobalTable()
 
 	// Ref pops a value from the stack and creates a reference to it.
 	// Returns the reference id. Use lua_unref to release.
