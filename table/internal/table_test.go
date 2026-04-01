@@ -1,5 +1,5 @@
-// Package table provides tests for the table module.
-package table
+// Package internal provides tests for the table module.
+package internal
 
 import (
 	"reflect"

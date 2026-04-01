@@ -1,11 +1,10 @@
-package mem
+package internal
 
 import (
 	"testing"
 	"unsafe"
 
 	"github.com/akzj/go-lua/mem/api"
-	"github.com/akzj/go-lua/mem/internal"
 )
 
 // failingAllocator always returns nil to simulate OOM.
@@ -65,7 +64,7 @@ func TestReallocToZero(t *testing.T) {
 
 func TestSafeReallocOOMConfig(t *testing.T) {
 	oomCalled := false
-	alloc := internal.NewAllocatorWithConfig(&api.AllocatorConfig{
+	alloc := NewAllocatorWithConfig(&api.AllocatorConfig{
 		OnOutOfMemory: func() {
 			oomCalled = true
 		},

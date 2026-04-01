@@ -1,7 +1,9 @@
-package string
+package internal
 
 import (
 	"testing"
+
+	stringapi "github.com/akzj/go-lua/string/api"
 )
 
 func TestNewString_ShortString(t *testing.T) {
@@ -128,11 +130,11 @@ func TestIsReservedWord(t *testing.T) {
 }
 
 func TestDefaultStringTable(t *testing.T) {
-	if DefaultStringTable == nil {
+	if stringapi.DefaultStringTable == nil {
 		t.Error("expected DefaultStringTable to be initialized")
 	}
 	
-	ts := DefaultStringTable.NewString("default")
+	ts := stringapi.DefaultStringTable.NewString("default")
 	if ts == nil {
 		t.Error("expected non-nil from DefaultStringTable")
 	}

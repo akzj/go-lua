@@ -1,7 +1,9 @@
-package types
+package internal
 
 import (
 	"testing"
+
+	"github.com/akzj/go-lua/types/api"
 )
 
 func TestTValueTypeChecks(t *testing.T) {
@@ -73,41 +75,41 @@ func TestStringCreation(t *testing.T) {
 
 func TestTypeConstants(t *testing.T) {
 	// Verify type constants are correctly defined
-	if LUA_TNIL != 0 {
-		t.Errorf("expected LUA_TNIL == 0, got %d", LUA_TNIL)
+	if api.LUA_TNIL != 0 {
+		t.Errorf("expected LUA_TNIL == 0, got %d", api.LUA_TNIL)
 	}
-	if LUA_TBOOLEAN != 1 {
-		t.Errorf("expected LUA_TBOOLEAN == 1, got %d", LUA_TBOOLEAN)
+	if api.LUA_TBOOLEAN != 1 {
+		t.Errorf("expected LUA_TBOOLEAN == 1, got %d", api.LUA_TBOOLEAN)
 	}
-	if LUA_NUMTYPES != 8 {
-		t.Errorf("expected LUA_NUMTYPES == 8, got %d", LUA_NUMTYPES)
+	if api.LUA_NUMTYPES != 8 {
+		t.Errorf("expected LUA_NUMTYPES == 8, got %d", api.LUA_NUMTYPES)
 	}
 
 	// Verify variant constants
-	if LUA_VFALSE != LUA_TBOOLEAN|(0<<4) {
+	if api.LUA_VFALSE != api.LUA_TBOOLEAN|(0<<4) {
 		t.Errorf("LUA_VFALSE incorrect")
 	}
-	if LUA_VTRUE != LUA_TBOOLEAN|(1<<4) {
+	if api.LUA_VTRUE != api.LUA_TBOOLEAN|(1<<4) {
 		t.Errorf("LUA_VTRUE incorrect")
 	}
 }
 
 func TestUtilityFunctions(t *testing.T) {
 	// Test MakeVariant
-	v := MakeVariant(LUA_TNUMBER, 1)
-	if v != LUA_VNUMFLT {
-		t.Errorf("MakeVariant(LUA_TNUMBER, 1) = %d, want %d", v, LUA_VNUMFLT)
+	v := api.MakeVariant(api.LUA_TNUMBER, 1)
+	if v != api.LUA_VNUMFLT {
+		t.Errorf("MakeVariant(LUA_TNUMBER, 1) = %d, want %d", v, api.LUA_VNUMFLT)
 	}
 
 	// Test Ctb (mark as collectable)
-	ct := Ctb(LUA_VTABLE)
-	if ct != LUA_VTABLE|BIT_ISCOLLECTABLE {
+	ct := api.Ctb(api.LUA_VTABLE)
+	if ct != api.LUA_VTABLE|api.BIT_ISCOLLECTABLE {
 		t.Error("Ctb incorrect")
 	}
 
 	// Test Novariant
-	nv := Novariant(LUA_VNUMFLT)
-	if nv != LUA_TNUMBER {
-		t.Errorf("Novariant(LUA_VNUMFLT) = %d, want %d", nv, LUA_TNUMBER)
+	nv := api.Novariant(api.LUA_VNUMFLT)
+	if nv != api.LUA_TNUMBER {
+		t.Errorf("Novariant(LUA_VNUMFLT) = %d, want %d", nv, api.LUA_TNUMBER)
 	}
 }
