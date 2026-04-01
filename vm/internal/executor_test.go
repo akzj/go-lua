@@ -2,6 +2,7 @@
 package internal
 
 import (
+	"fmt"
 	"testing"
 
 	opcodes "github.com/akzj/go-lua/opcodes/api"
@@ -314,5 +315,189 @@ func TestHasKBit(t *testing.T) {
 	inst = createABC(opcodes.OP_EQ, 0, 1, 2)
 	if vmapi.HasKBit(inst) {
 		t.Error("HasKBit should return false when k bit is not set")
+	}
+}
+
+// =============================================================================
+// For Loop Opcode Tests
+// =============================================================================
+
+func TestForLoopOpcodes(t *testing.T) {
+	exec := newTestExecutor()
+	exec.frames = append(exec.frames, &Frame{base: 0})
+	exec.code = make([]opcodes.Instruction, 100)
+
+	// Test OP_FORPREP - should add offset to pc (jump forward for setup)
+	exec.pc = 10
+	inst := createAsBx(opcodes.OP_FORPREP, 0, 5)
+	exec.Execute(inst)
+
+	// FORPREP should add 5 to pc (jumping to the loop body)
+	if exec.pc != 15 {
+		t.Errorf("OP_FORPREP pc after execution = %d, want 15", exec.pc)
+	}
+
+	// Test OP_FORPREP with negative offset
+	exec.pc = 20
+	inst = createAsBx(opcodes.OP_FORPREP, 0, -3)
+	exec.Execute(inst)
+
+	if exec.pc != 17 {
+		t.Errorf("OP_FORPREP negative pc = %d, want 17", exec.pc)
+	}
+
+	// Test OP_TFORPREP (generic for loop prep)
+	exec.pc = 30
+	inst = createAsBx(opcodes.OP_TFORPREP, 0, 10)
+	exec.Execute(inst)
+
+	if exec.pc != 40 {
+		t.Errorf("OP_TFORPREP pc = %d, want 40", exec.pc)
+	}
+}
+
+// =============================================================================
+// Control Flow Additional Tests
+// =============================================================================
+
+func TestControlFlowFurther(t *testing.T) {
+	exec := newTestExecutor()
+	exec.frames = append(exec.frames, &Frame{base: 0})
+	exec.code = make([]opcodes.Instruction, 100)
+
+	// Test multiple sequential JMPs
+	exec.pc = 0
+	inst := createAsBx(opcodes.OP_JMP, 0, 5)
+	exec.Execute(inst)
+	if exec.pc != 5 {
+		t.Errorf("First JMP pc = %d, want 5", exec.pc)
+	}
+
+	exec.pc = 5
+	inst = createAsBx(opcodes.OP_JMP, 0, 10)
+	exec.Execute(inst)
+	if exec.pc != 15 {
+		t.Errorf("Second JMP pc = %d, want 15", exec.pc)
+	}
+
+	// Test JMP from different starting positions
+	exec.pc = 100
+	inst = createAsBx(opcodes.OP_JMP, 0, -50)
+	exec.Execute(inst)
+	if exec.pc != 50 {
+		t.Errorf("Negative JMP pc = %d, want 50", exec.pc)
+	}
+}
+
+// =============================================================================
+// Frame and Stack Tests
+// =============================================================================
+
+func TestFrameStackIntegrity(t *testing.T) {
+	exec := newTestExecutor()
+	exec.frames = append(exec.frames, &Frame{base: 0})
+	exec.frames = append(exec.frames, &Frame{base: 10, prev: exec.frames[0]})
+
+	// Test currentFrame returns correct frame
+	frame := exec.currentFrame()
+	if frame.Base() != 10 {
+		t.Errorf("currentFrame Base = %d, want 10", frame.Base())
+	}
+
+	// Test frameBase with multiple frames
+	base := frameBase(exec)
+	if base != 10 {
+		t.Errorf("frameBase = %d, want 10", base)
+	}
+}
+
+// =============================================================================
+// Run Method Tests
+// =============================================================================
+
+func TestRunMethod(t *testing.T) {
+	exec := NewExecutor().(*Executor)
+
+	// Test Run with no code - should complete without error
+	err := exec.Run()
+	if err != nil {
+		t.Errorf("Run() with no code returned error: %v", err)
+	}
+
+	// Test Run with code but no frames
+	exec.code = []opcodes.Instruction{createAsBx(opcodes.OP_JMP, 0, 1)}
+	exec.pc = 0
+	err = exec.Run()
+	// Should stop when pc reaches end of code
+	if err != nil {
+		t.Errorf("Run() with code returned unexpected error: %v", err)
+	}
+}
+
+func TestExecuteNext(t *testing.T) {
+	exec := newTestExecutor()
+	exec.frames = append(exec.frames, &Frame{base: 0})
+	exec.code = []opcodes.Instruction{
+		createAsBx(opcodes.OP_JMP, 0, 1), // at idx 0, will set pc=2 after
+		createAsBx(opcodes.OP_JMP, 0, 1), // at idx 1, will set pc=3 after
+		createAsBx(opcodes.OP_JMP, 0, 0), // self-loop
+	}
+	exec.pc = 0
+
+	// Execute first instruction: executeNext increments pc to 1, then JMP(1) adds 1 -> pc=2
+	more := exec.executeNext()
+	if !more {
+		t.Error("executeNext should return true for valid instruction")
+	}
+	if exec.pc != 2 {
+		t.Errorf("After first JMP pc = %d, want 2", exec.pc)
+	}
+
+	// Execute second instruction: pc increments to 2, then JMP(1) adds 1 -> pc=3
+	more = exec.executeNext()
+	if !more {
+		t.Error("executeNext should return true for valid instruction")
+	}
+	if exec.pc != 3 {
+		t.Errorf("After second JMP pc = %d, want 3", exec.pc)
+	}
+
+	// Test executeNext when pc >= len(code) - should return false
+	exec.pc = len(exec.code)
+	more = exec.executeNext()
+	if more {
+		t.Error("executeNext should return false when pc >= len(code)")
+	}
+
+	// Test executeNext with no frames - should return false
+	exec2 := NewExecutor().(*Executor)
+	exec2.code = []opcodes.Instruction{createAsBx(opcodes.OP_JMP, 0, 1)}
+	more = exec2.executeNext()
+	if more {
+		t.Error("executeNext should return false when no frames")
+	}
+}
+
+// =============================================================================
+// Executor State Tests
+// =============================================================================
+
+func TestExecutorState(t *testing.T) {
+	exec := NewExecutor().(*Executor)
+
+	// Test initial state
+	if exec.err != nil {
+		t.Error("new executor should have nil error")
+	}
+
+	// Test error state
+	exec.err = fmt.Errorf("test error")
+	if err := exec.Run(); err == nil || err.Error() != "test error" {
+		t.Errorf("Run should return stored error, got: %v", err)
+	}
+
+	// Test stack is initialized
+	if len(exec.stack) == 0 {
+		t.Error("stack should be initialized with capacity")
 	}
 }
