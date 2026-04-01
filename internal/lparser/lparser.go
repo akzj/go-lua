@@ -1019,6 +1019,13 @@ func Statement(ls *llex.LexState) {
 		returnStatement(ls)
 	case llex.TK_BREAK:
 		breakStatement(ls)
+	case llex.TK_DBCOLON:
+		llex.Next(ls) // skip first ::
+		name := StrCheckName(ls)
+		labelstat(ls, name, ls.LastLine)
+	case llex.TK_GOTO:
+		llex.Next(ls)
+		gotostat(ls, ls.LastLine)
 	case ';':
 		llex.Next(ls)
 	default:
@@ -1369,6 +1376,91 @@ func breakStatement(ls *llex.LexState) {
 		}
 		bl = bl.Previous
 	}
+}
+/*
+** Find label with the given name starting from index 'ilb'
+ */
+func findlabel(ls *llex.LexState, name *lobject.TString, ilb int) *Labeldesc {
+	dyd := ls.Dyd.(*Dyndata)
+	for ; ilb < dyd.Label.N; ilb++ {
+		lb := &dyd.Label.Arr[ilb]
+		if lb.Name == name {
+			return lb
+		}
+	}
+	return nil
+}
+
+/*
+** Adds a new label/goto in the corresponding list.
+ */
+func newlabelentry(ls *llex.LexState, l *Labellist, name *lobject.TString, line, pc int) int {
+	n := l.N
+	if n >= l.Size {
+		l.Arr = append(l.Arr, Labeldesc{})
+		l.Size = len(l.Arr)
+	}
+	fs := GetFuncState(ls)
+	l.Arr[n].Name = name
+	l.Arr[n].Line = line
+	l.Arr[n].NActVar = fs.NActVar
+	l.Arr[n].Close = 0
+	l.Arr[n].Pc = pc
+	l.N = n + 1
+	return n
+}
+
+/*
+** Create an entry for the goto and the code for it.
+ */
+func newgotoentry(ls *llex.LexState, name *lobject.TString, line int) {
+	fs := GetFuncState(ls)
+	pc := Jump(fs)                              // create jump
+	CodeABC(fs, lopcodes.OP_CLOSE, 0, 1, 0)    // spaceholder
+	newlabelentry(ls, &ls.Dyd.(*Dyndata).Gt, name, line, pc)
+}
+
+/*
+** Check whether there is already a label with the given 'name'.
+ */
+func checkrepeated(ls *llex.LexState, name *lobject.TString) {
+	fs := GetFuncState(ls)
+	lb := findlabel(ls, name, fs.FirstLabel)
+	if lb != nil {
+		llex.SyntaxError(ls, fmt.Sprintf("label '%s' already defined on line %d", string(lstring.GetStr(name)), lb.Line))
+	}
+}
+
+/*
+** Create a new label with the given 'name'.
+ */
+func createlabel(ls *llex.LexState, name *lobject.TString, line int, last bool) {
+	fs := GetFuncState(ls)
+	ll := &ls.Dyd.(*Dyndata).Label
+	l := newlabelentry(ls, ll, name, line, getlabel(fs))
+	if last {
+		ll.Arr[l].NActVar = fs.Bl.NActVar
+	}
+}
+
+/*
+** Goto statement
+ */
+func gotostat(ls *llex.LexState, line int) {
+	name := StrCheckName(ls)
+	newgotoentry(ls, name, line)
+}
+
+/*
+** Label statement - '::' NAME '::'
+ */
+func labelstat(ls *llex.LexState, name *lobject.TString, line int) {
+	CheckMatch(ls, llex.TK_DBCOLON, llex.TK_DBCOLON, line)
+	for ls.T.Token == ';' || ls.T.Token == llex.TK_DBCOLON {
+		Statement(ls)
+	}
+	checkrepeated(ls, name)
+	createlabel(ls, name, line, BlockFollow(ls, false))
 }
 
 /*

@@ -313,3 +313,55 @@ func TestParseBreakStatement(t *testing.T) {
 	}
 	t.Logf("break statement: %d bytecode instructions", len(cl.P.Code))
 }
+
+// TestParseGotoStatement tests parsing "goto label"
+func TestParseGotoStatement(t *testing.T) {
+	L := &lstate.LuaState{}
+	_ = lstring.NewString(L, "test")
+
+	input := "goto label"
+	reader := &StringReader{s: input, pos: 0}
+	z := &lzio.ZIO{}
+	lzio.Init(L, z, reader.Read, nil)
+	buff := &lzio.Mbuffer{}
+	lzio.InitBuffer(buff)
+	lzio.ResizeBuffer(L, buff, 256)
+
+	cl := LuaY_parser(L, z, buff, "test")
+	if cl == nil || cl.P == nil {
+		t.Fatal("Failed to parse goto statement")
+	}
+	if len(cl.P.Code) == 0 {
+		t.Error("No bytecode generated for goto statement")
+	}
+	t.Logf("goto statement: %d bytecode instructions", len(cl.P.Code))
+	for i, instr := range cl.P.Code {
+		t.Logf("  [%d] = 0x%08x", i, instr)
+	}
+}
+
+// TestParseLabelStatement tests parsing "::label::"
+func TestParseLabelStatement(t *testing.T) {
+	L := &lstate.LuaState{}
+	_ = lstring.NewString(L, "test")
+
+	input := "::label::"
+	reader := &StringReader{s: input, pos: 0}
+	z := &lzio.ZIO{}
+	lzio.Init(L, z, reader.Read, nil)
+	buff := &lzio.Mbuffer{}
+	lzio.InitBuffer(buff)
+	lzio.ResizeBuffer(L, buff, 256)
+
+	cl := LuaY_parser(L, z, buff, "test")
+	if cl == nil || cl.P == nil {
+		t.Fatal("Failed to parse label statement")
+	}
+	if len(cl.P.Code) == 0 {
+		t.Error("No bytecode generated for label statement")
+	}
+	t.Logf("label statement: %d bytecode instructions", len(cl.P.Code))
+	for i, instr := range cl.P.Code {
+		t.Logf("  [%d] = 0x%08x", i, instr)
+	}
+}
