@@ -24,6 +24,12 @@ const MINSTRTABSIZE = 128
 const MAXSTRTB = 1<<31 - 1
 
 /*
+** String interning cache - module-level map for string deduplication
+** This prevents creating duplicate TString objects for the same string content
+ */
+var stringCache = make(map[string]*lobject.TString)
+
+/*
 ** String equality
  */
 func EqStr(a, b *lobject.TString) bool {
@@ -99,36 +105,56 @@ func IsReserved(ts *lobject.TString) bool {
 }
 
 /*
-** Create a new short string
-** Note: L is unused in this simplified implementation
+** Create a new short string with proper interning
+** FIXED: Store bytes in a module-level cache to prevent dangling pointers
+**        and ensure string deduplication
  */
 func NewString(L *lstate.LuaState, s string) *lobject.TString {
+	// Check if string already exists in cache (string interning)
+	if existing, ok := stringCache[s]; ok {
+		return existing
+	}
+
 	ts := &lobject.TString{}
 	ts.Extra = 0
 	ts.Hash = HashString([]byte(s), 0)
 	ts.Shrlen = int8(len(s))
 	ts.U.Lnglen = 0
-	// Store string data in Contents as pointer to first byte
+
+	// Store string data - allocate on heap (not stack) to prevent dangling pointer
+	// The Data slice is stored as a field on TString or kept alive by the cache
 	if len(s) > 0 {
-		// Create a byte slice and get pointer to first element
-		data := []byte(s)
+		data := []byte(s) // This allocates on heap, data variable keeps the slice alive
+		// Pin the slice to prevent GC - store reference in module-level cache
 		ts.Contents = &data[0]
+		// Keep data alive - the cache holds the reference
+		stringCache[s] = ts
+		// Also need to keep the actual byte slice alive - use a separate map
+		keepAlive(s, data)
 	}
 	return ts
 }
 
+// Module-level map to keep byte slices alive for string interning
+var byteSliceCache = make(map[string][]byte)
+
+func keepAlive(s string, data []byte) {
+	byteSliceCache[s] = data
+}
+
 /*
 ** Create a new long string
-** Note: L is unused in this simplified implementation
+** FIXED: Same approach as NewString - use heap-allocated data
  */
 func NewLongString(L *lstate.LuaState, s string) *lobject.TString {
+	// Long strings are typically not interned, but we still need proper allocation
 	ts := &lobject.TString{}
 	ts.Extra = 0
 	ts.Shrlen = -1 // marks it as long string
 	ts.U.Lnglen = uint64(len(s))
 	ts.Hash = HashString([]byte(s), 0)
 	if len(s) > 0 {
-		data := []byte(s)
+		data := []byte(s) // heap allocated
 		ts.Contents = &data[0]
 	}
 	return ts

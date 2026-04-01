@@ -18,7 +18,6 @@ import (
 	"github.com/akzj/go-lua/internal/lstate"
 	"github.com/akzj/go-lua/internal/lstring"
 	"github.com/akzj/go-lua/internal/ltable"
-	"github.com/akzj/go-lua/internal/lvm"
 	"github.com/akzj/go-lua/internal/lzio"
 )
 
@@ -106,8 +105,7 @@ func adjustresults(L *lstate.LuaState, nres int) {
 ** API status conversion
  */
 func APIstatus(status lobject.TStatus) int {
-	// Return 0 for success, non-zero for error (standard Lua convention)
-	if status == lobject.LUA_OK || status == lobject.LUA_YIELD {
+	if status != lobject.LUA_OK && status != lobject.LUA_YIELD {
 		return 0
 	}
 	return 1
@@ -419,24 +417,17 @@ func lua_toboolean(L *lstate.LuaState, idx int) int {
  */
 func lua_tolstring(L *lstate.LuaState, idx int, len *int) string {
 	o := index2value(L, idx)
-	if lobject.TtIsString(o) {
-		ts := lobject.Gco2Ts(lobject.GcValue(o))
+	if !lobject.TtIsString(o) {
 		if len != nil {
-			*len = lstring.StrLen(ts)
+			*len = 0
 		}
-		return string(lstring.GetStr(ts))
+		return ""
 	}
-	// Handle numbers
-	if lobject.TtIsInteger(o) {
-		return fmt.Sprintf("%d", o.Value_.I)
-	}
-	if lobject.TtIsNumber(o) {
-		return fmt.Sprintf("%v", o.Value_.N)
-	}
+	ts := lobject.Gco2Ts(lobject.GcValue(o))
 	if len != nil {
-		*len = 0
+		*len = lstring.StrLen(ts)
 	}
-	return ""
+	return string(lstring.GetStr(ts))
 }
 
 /*
@@ -624,7 +615,29 @@ func lua_rawgeti(L *lstate.LuaState, idx int, n lobject.LuaInteger) int {
 ** lua_getglobal - gets global value
  */
 func lua_getglobal(L *lstate.LuaState, name string) int {
-	return lua_getfield(L, LUA_REGISTRYINDEX, name)
+	// First get _G from registry, then look up the name in _G
+	lua_getfield(L, LUA_REGISTRYINDEX, "_G")  // push registry["_G"] = global table
+	t := index2value(L, -1)
+	if !lobject.TtIsTable(t) {
+		// pop the non-table value
+		L.Top.P = (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(L.Top.P)) - unsafe.Sizeof(lobject.TValue{})))
+		return lobject.LUA_TNIL
+	}
+	tbl := lobject.Gco2T(lobject.GcValue(t))
+	// pop the table, we'll push the result
+	L.Top.P = (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(L.Top.P)) - unsafe.Sizeof(lobject.TValue{})))
+	
+	// Look up name in global table
+	key := &lobject.TValue{Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(lstring.NewString(L, name)))}, Tt_: uint8(lobject.LUA_VSHRSTR)}
+	_, val := ltable.Get(tbl, key)
+	if val != nil {
+		lobject.SetObj(L.Top.P, val)
+		apiIncrTop(L)
+		return lobject.RawTT(val) & 0x0F
+	}
+	lobject.SetNilValue(L.Top.P)
+	apiIncrTop(L)
+	return lobject.LUA_TNIL
 }
 
 /*
@@ -676,9 +689,7 @@ func lua_settable(L *lstate.LuaState, idx int) {
 func lua_setfield(L *lstate.LuaState, idx int, k string) {
 	t := index2value(L, idx)
 	key := &lobject.TValue{Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(lstring.NewString(L, k)))}, Tt_: uint8(lobject.LUA_VSHRSTR)}
-	// FIX: Read val from slot BEFORE decrementing L.Top.P
-	val := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(L.Top.P)) - unsafe.Sizeof(lobject.TValue{})))
-	fmt.Printf("DEBUG setfield: key=%s val=%p Tt_=%d Gc=%p\n", k, val, val.Tt_, val.Value_.Gc)
+	val := L.Top.P
 	L.Top.P = (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(L.Top.P)) - unsafe.Sizeof(lobject.TValue{})))
 	if lobject.TtIsTable(t) {
 		tbl := lobject.Gco2T(lobject.GcValue(t))
@@ -691,8 +702,8 @@ func lua_setfield(L *lstate.LuaState, idx int, k string) {
  */
 func lua_seti(L *lstate.LuaState, idx int, n lobject.LuaInteger) {
 	t := index2value(L, idx)
-	// FIX: Read val from slot BEFORE decrementing L.Top.P
-	val := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(L.Top.P)) - unsafe.Sizeof(lobject.TValue{})))
+	val := L.Top.P
+	L.Top.P = (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(L.Top.P)) - unsafe.Sizeof(lobject.TValue{})))
 	key := &lobject.TValue{Value_: lobject.Value{I: n}, Tt_: uint8(lobject.LUA_VNUMINT)}
 	if lobject.TtIsTable(t) {
 		tbl := lobject.Gco2T(lobject.GcValue(t))
@@ -734,10 +745,6 @@ func lua_rawseti(L *lstate.LuaState, idx int, n lobject.LuaInteger) {
 ** lua_setglobal - sets global value
  */
 func lua_setglobal(L *lstate.LuaState, name string) {
-	// Debug: show which table we're setting in
-	t := index2value(L, LUA_REGISTRYINDEX)
-	tbl := lobject.Gco2T(lobject.GcValue(t))
-	fmt.Printf("DEBUG lua_setglobal: name=%s tbl=%p\n", name, tbl)
 	lua_setfield(L, LUA_REGISTRYINDEX, name)
 }
 
@@ -805,19 +812,6 @@ func luaD_call(L *lstate.LuaState, func_ *lobject.TValue, nresults int) {
 	} else if lobject.TtIsLcf(func_) {
 		f := lobject.FValue(func_)
 		f((*lobject.LuaState)(unsafe.Pointer(L)))
-	} else if lobject.TtIsLClosure(func_) {
-		// Lua closure - call VM
-		cl := lobject.Gco2Lcl(lobject.GcValue(func_))
-		fmt.Printf("DEBUG lapi: func_=%p cl=%p cl.P=%p\n", func_, cl, cl.P)
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("DEBUG VM panic: %v\n", r)
-					panic(r)
-				}
-			}()
-			lvm.LuaV_execute(L, L.Ci, func_)
-		}()
 	}
 	_ = nresults
 }
@@ -877,24 +871,6 @@ func lua_load(L *lstate.LuaState, reader LuaReader, data interface{}, chunkname 
 			if cl == nil {
 				return int(lobject.LUA_ERRSYNTAX)
 			}
-			// Set up _ENV upvalue for main chunk
-			if int(cl.Nupvalues) < 1 {
-				cl.Upvals = append(cl.Upvals, nil)
-				cl.Nupvalues = 1
-			}
-			if cl.Upvals[0] == nil {
-				cl.Upvals[0] = &lobject.UpVal{}
-			}
-			// LRegistry is a TValue, get the Table from its Value_.Gc field
-			globalTbl := lobject.Gco2T(L.G.LRegistry.Value_.Gc)
-			fmt.Printf("DEBUG _ENV: globalTbl=%p\n", globalTbl)
-			cl.Upvals[0].V = &lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(globalTbl))}
-			fmt.Printf("DEBUG: _ENV set, Nupvalues=%d\n", cl.Nupvalues)
-			fmt.Printf("DEBUG: PARSER Code len=%d K len=%d\n", len(cl.P.Code), len(cl.P.K))
-			for i := 0; i < len(cl.P.Code) && i < 10; i++ {
-				fmt.Printf("DEBUG: PARSER ins[%d]=%d\n", i, cl.P.Code[i])
-			}
-			fmt.Printf("DEBUG: K len=%d\n", len(cl.P.K))
 
 			// Push closure to stack using SetObj
 			L.Top.P.Value_.Gc = (*lobject.GCObject)(unsafe.Pointer(cl))
@@ -1168,13 +1144,25 @@ func lua_newstate(f lobject.LuaAlloc, ud interface{}, seed uint) *lstate.LuaStat
 	// Set current white
 	g.CurrentWhite = 1 << uint8(3)
 
-	// Create global table and add to registry
+	// Create registry table with at least 1 slot for "_G"
+	registryTbl := newTable()
+	registryTbl.Node = make([]lobject.Node, 1)  // pre-allocate 1 node for "_G" key
+	
+	// Create global table
 	globalTbl := newTable()
 	gtPtr := &lobject.TValue{Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(globalTbl))}, Tt_: uint8(lobject.LUA_VTABLE)}
-	lobject.SetObj(&g.LRegistry, gtPtr)
-
-	// Set global table in registry (simplified - direct access)
-	// The registry table is already set up, we'll initialize it lazily
+	
+	// Set registry["_G"] = global table using MainPosition
+	regKey := &lobject.TValue{Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(lstring.NewString(L, "_G")))}, Tt_: uint8(lobject.LUA_VSHRSTR)}
+	mp := ltable.MainPosition(registryTbl, regKey)
+	if mp != nil && lobject.IsKeyNil(mp) {
+		lobject.SetObj(&mp.IVal, gtPtr)
+		mp.Key.Value = regKey.Value_
+		mp.Key.Tt = uint8(lobject.LUA_VSHRSTR)
+	}
+	
+	// Set g.LRegistry = registry
+	lobject.SetObj(&g.LRegistry, &lobject.TValue{Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(registryTbl))}, Tt_: uint8(lobject.LUA_VTABLE)})
 
 	return L
 }

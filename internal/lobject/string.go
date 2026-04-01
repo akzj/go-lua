@@ -1,7 +1,6 @@
 package lobject
 
 import (
-	"fmt"
 	"unsafe"
 )
 
@@ -57,16 +56,13 @@ func StrLen(ts *TString) int {
 /*
 ** Compare two strings by content (for use in table key comparison)
 ** Returns true if both strings have the same content
- */
+*/
 func TestStringValue(ts1, ts2 *TString) bool {
-	fmt.Printf("DEBUG TestStringValue: ts1=%p, ts2=%p\n", ts1, ts2)
 	if ts1 == ts2 {
-		fmt.Println("DEBUG TestStringValue: same pointer, return true")
 		return true
 	}
 	len1 := StrLen(ts1)
 	len2 := StrLen(ts2)
-	fmt.Printf("DEBUG TestStringValue: len1=%d, len2=%d\n", len1, len2)
 	if len1 != len2 {
 		return false
 	}
@@ -75,11 +71,9 @@ func TestStringValue(ts1, ts2 *TString) bool {
 		c1 := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ts1.Contents)) + uintptr(i)))
 		c2 := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ts2.Contents)) + uintptr(i)))
 		if c1 != c2 {
-			fmt.Printf("DEBUG TestStringValue: mismatch at %d: %c vs %c\n", i, c1, c2)
 			return false
 		}
 	}
-	fmt.Println("DEBUG TestStringValue: strings match!")
 	return true
 }
 

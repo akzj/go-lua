@@ -488,7 +488,6 @@ func getlabel(fs *FuncState) int {
 ** Add constant to prototype
  */
 func addk(fs *FuncState, v *lobject.TValue) int {
-	fmt.Printf("DEBUG addk: NK=%d Tt_=%d\n", fs.NK, v.Tt_)
 	f := fs.F
 	fs.NK++
 	if fs.NK > len(f.K) {
@@ -520,7 +519,6 @@ func nilK(fs *FuncState) int {
 
 // String constant - adds TString to constant pool
 func stringK(fs *FuncState, s *lobject.TString) int {
-	fmt.Printf("DEBUG stringK: s=%p -> K[%d]\n", s, fs.NK)
 	var v lobject.TValue
 	v.Value_.Gc = (*lobject.GCObject)(unsafe.Pointer(s))
 	v.Tt_ = uint8(lobject.LUA_VSHRSTR)
@@ -832,7 +830,6 @@ func Indexed(fs *FuncState, t *Expdesc, k *Expdesc) {
 ** Create code string expression
  */
 func CodeString(ls *llex.LexState, e *Expdesc, s *lobject.TString) {
-	fmt.Printf("DEBUG CodeString: s=%p\n", s)
 	fs := GetFuncState(ls)
 	if fs == nil {
 		InitExp(e, VKSTR, 0)
@@ -1720,12 +1717,9 @@ func simpleExp(ls *llex.LexState, v *Expdesc) {
 		if ls.T.Token == '(' {
 			// Function call - emit GETTABUP to load function from _ENV
 			// First, add function name to constant pool
-			fmt.Printf("DEBUG GETTABUP key: name=%p\n", name)
 			keyIdx := addk(fs, &lobject.TValue{Tt_: uint8(lobject.LUA_VSHRSTR), Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(name))}})
-			fmt.Printf("DEBUG GETTABUP: name=%p keyIdx=%d\n", name, keyIdx)
 			// Capture current FreeReg as function register (function goes in R[FreeReg])
 			fnReg := int(fs.FreeReg)
-			fmt.Printf("DEBUG GETTABUP: fnReg=%d keyIdx=%d\n", fnReg, keyIdx)
 			// Emit GETTABUP to load _ENV[name] into R(fnReg)
 			CodeABC(fs, lopcodes.OP_GETTABUP, fnReg, 0, keyIdx)
 			// Mark expression as relocated (result in R(fnReg))
@@ -1940,7 +1934,6 @@ func LuaY_parser(L *lstate.LuaState, z *lzio.ZIO, buff *lzio.Mbuffer, name strin
 	// Create closure
 	cl := lfunc.NewLClosure(L, int(fs.Nups))
 	cl.P = fs.F
-	fmt.Printf("DEBUG PARSER: cl=%p cl.P=%p fs.F=%p\n", cl, cl.P, fs.F)
 
 	// Initialize upvalues
 	lfunc.InitUpvals(L, cl)

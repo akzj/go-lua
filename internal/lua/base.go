@@ -8,6 +8,7 @@ package lua
 
 import (
 	"fmt"
+	"os"
 	"unsafe"
 
 	"github.com/akzj/go-lua/internal/lapi"
@@ -246,9 +247,20 @@ var baselibs = []lauxlib.LuaL_Reg{
 
 // OpenBase - open base library
 func OpenBase(L *lstate.LuaState) {
-	lauxlib.LuaL_newlib(L, baselibs)
-	lapi.Lua_pushglobaltable(L)
-	lauxlib.LuaL_setfuncs(L, baselibs, 0)
-	lapi.Lua_pushvalue(L, -1)
-	lapi.Lua_setfield(L, lapi.LUA_REGISTRYINDEX, LUA_GNAME)
+	fmt.Fprintf(os.Stderr, "OpenBase: stack before pushglobaltable top=%d\n", lapi.Lua_gettop(L))
+	lapi.Lua_pushglobaltable(L)      // push global table first
+	fmt.Fprintf(os.Stderr, "OpenBase: after pushglobaltable top=%d, type=%d\n", lapi.Lua_gettop(L), lapi.Lua_type(L, -1))
+	
+	// Manually set print to test
+	lapi.Lua_pushcfunction(L, luaB_print, 0)
+	fmt.Fprintf(os.Stderr, "OpenBase: after pushcfunction top=%d\n", lapi.Lua_gettop(L))
+	lapi.Lua_setfield(L, -2, "print")
+	fmt.Fprintf(os.Stderr, "OpenBase: after setfield top=%d\n", lapi.Lua_gettop(L))
+	
+	// Check if print was set
+	lapi.Lua_getfield(L, -1, "print")
+	fmt.Fprintf(os.Stderr, "OpenBase: check print type=%d\n", lapi.Lua_type(L, -1))
+	lapi.Lua_pop(L, 1)
+	
+	// Note: _G is already registered in lua_newstate, don't overwrite LRegistry!
 }

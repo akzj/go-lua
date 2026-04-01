@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/akzj/go-lua/internal/lapi"
+	"github.com/akzj/go-lua/internal/lobject"
 	"github.com/akzj/go-lua/internal/lua"
 )
 
@@ -27,30 +28,11 @@ func main() {
 		}
 	}()
 
-	// Get _G from registry before OpenAll
-	lapi.Lua_getfield(L, lapi.LUA_REGISTRYINDEX, "_G")
-	fmt.Fprintf(os.Stderr, "Before OpenAll: _G type=%d\n", lapi.Lua_type(L, -1))
-	lapi.Lua_pop(L, 1)
-
-	fmt.Fprintf(os.Stderr, "Opening libraries...\n")
 	lua.OpenAll(L)
 
-	// Get _G from registry after OpenAll
-	lapi.Lua_getfield(L, lapi.LUA_REGISTRYINDEX, "_G")
-	fmt.Fprintf(os.Stderr, "After OpenAll: _G type=%d\n", lapi.Lua_type(L, -1))
-	
-	// Try to get print directly from _G
-	lapi.Lua_getfield(L, -1, "print")
-	fmt.Fprintf(os.Stderr, "From _G: print type=%d\n", lapi.Lua_type(L, -1))
-	lapi.Lua_pop(L, 1)
-	
-	// Try getglobal
-	r4 := lapi.Lua_getglobal(L, "print")
-	fmt.Fprintf(os.Stderr, "getglobal print: result=%d, type=%d\n", r4, lapi.Lua_type(L, -1))
-	lapi.Lua_pop(L, 1)
-
 	if len(args) == 0 {
-		fmt.Println("Go Lua 5.5 - Usage: golua [script.lua]")
+		fmt.Println("Go Lua 5.5 - A Lua interpreter written in Go")
+		fmt.Println("Usage: golua [script.lua] [args...]")
 		lapi.Lua_close(L)
 		os.Exit(0)
 	}
@@ -63,6 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Load chunk
 	errcode := lapi.Lua_load(L, nil, string(data), filename, "t")
 	if errcode != 0 {
 		var l int
@@ -72,9 +55,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Execute
 	errcode = lapi.Lua_pcall(L, 0, -1, 0)
 	if errcode != 0 {
-		fmt.Fprintf(os.Stderr, "Runtime error!\n")
+		if lapi.Lua_type(L, -1) == lobject.LUA_TSTRING {
+			var l int
+			msg := lapi.Lua_tolstring(L, -1, &l)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
+		} else {
+			fmt.Fprintf(os.Stderr, "Runtime error code: %d\n", errcode)
+		}
+		lapi.Lua_close(L)
+		os.Exit(1)
 	}
 
 	lapi.Lua_close(L)
