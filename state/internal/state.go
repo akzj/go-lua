@@ -8,6 +8,7 @@ import (
 	"github.com/akzj/go-lua/state/api"
 	tableapi "github.com/akzj/go-lua/table/api"
 	types "github.com/akzj/go-lua/types/api"
+	"github.com/akzj/go-lua/vm"
 )
 
 // LuaState is the concrete implementation of LuaStateInterface.
@@ -20,6 +21,7 @@ type LuaState struct {
 	baseC    *callInfo       // Base call info (for the main thread)
 	status   api.Status      // Thread status
 	global   *globalState    // Shared global state
+	executor vm.VMFrameManager // VM executor (lazy initialization)
 }
 
 // NewLuaState creates a new Lua state.
@@ -199,10 +201,6 @@ func (L *LuaState) NewThread() api.LuaStateInterface {
 // =============================================================================
 // Function Calls
 // =============================================================================
-
-func (L *LuaState) Call(nArgs, nResults int) {
-	panic("TODO: implement Call")
-}
 
 func (L *LuaState) Resume() error {
 	panic("TODO: implement Resume")
