@@ -1,10 +1,9 @@
 // Package vm implements the Lua 5.5.1 virtual machine execution engine.
-//
-// This package re-exports the public API from vm/api.
 package vm
 
 import (
 	"github.com/akzj/go-lua/vm/api"
+	"github.com/akzj/go-lua/vm/internal"
 )
 
 // Re-export types and interfaces
@@ -12,6 +11,10 @@ type Instruction = api.Instruction
 type OpCode = api.OpCode
 type VMExecutor = api.VMExecutor
 type StackFrame = api.StackFrame
+type VMFrameManager = api.VMFrameManager
+
+// NewVMFrameManager creates a new VM frame manager for integrated execution.
+var NewVMFrameManager = internal.NewVMFrameManager
 
 // Re-export helpers
 var (
