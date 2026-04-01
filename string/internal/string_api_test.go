@@ -1,12 +1,13 @@
-package api
+package internal
 
 import (
 	"testing"
+	api "github.com/akzj/go-lua/string/api"
 )
 
 func TestTStringImpl_ShortString(t *testing.T) {
-	ts := &TStringImpl{
-		TT:     LUA_VSHRSTR,
+	ts := &api.TStringImpl{
+		TT:     api.LUA_VSHRSTR,
 		Shrlen: 5,
 		Data:   []byte("hello"),
 	}
@@ -20,8 +21,8 @@ func TestTStringImpl_ShortString(t *testing.T) {
 }
 
 func TestTStringImpl_LongString(t *testing.T) {
-	ts := &TStringImpl{
-		TT:     LUA_VLNGSTR,
+	ts := &api.TStringImpl{
+		TT:     api.LUA_VLNGSTR,
 		Shrlen: -1,
 		Data:   []byte("this is a long string with more than 40 characters"),
 	}
@@ -35,18 +36,18 @@ func TestTStringImpl_LongString(t *testing.T) {
 }
 
 func TestMaxShortStringLen(t *testing.T) {
-	if MaxShortStringLen != 40 {
-		t.Errorf("expected MaxShortStringLen = 40, got %d", MaxShortStringLen)
+	if api.MaxShortStringLen != 40 {
+		t.Errorf("expected MaxShortStringLen = 40, got %d", api.MaxShortStringLen)
 	}
 }
 
 func TestStringVariants(t *testing.T) {
 	// LUA_VSHRSTR = LUA_TSTRING | (0 << 4) = 4
 	// LUA_VLNGSTR = LUA_TSTRING | (1 << 4) = 4 | 16 = 20
-	if LUA_VSHRSTR != 4 {
-		t.Errorf("expected LUA_VSHRSTR = 4, got %d", LUA_VSHRSTR)
+	if api.LUA_VSHRSTR != 4 {
+		t.Errorf("expected LUA_VSHRSTR = 4, got %d", api.LUA_VSHRSTR)
 	}
-	if LUA_VLNGSTR != 20 {
-		t.Errorf("expected LUA_VLNGSTR = 20, got %d", LUA_VLNGSTR)
+	if api.LUA_VLNGSTR != 20 {
+		t.Errorf("expected LUA_VLNGSTR = 20, got %d", api.LUA_VLNGSTR)
 	}
 }
