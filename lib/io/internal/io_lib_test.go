@@ -570,3 +570,327 @@ func TestNewFileHandleWithCloser(t *testing.T) {
 		t.Error("Custom close function was not called")
 	}
 }
+
+// TestReadLine tests line reading functionality.
+func TestReadLine(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	content := "line1\nline2\nline3\n"
+	if _, err := tmpfile.WriteString(content); err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+	tmpfile.Close()
+
+	f, err := os.Open(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer f.Close()
+
+	var fileInterface io.File = &osFile{file: f}
+	fh := &io.FileHandle{
+		File: &fileInterface,
+	}
+
+	f.Seek(0, os.SEEK_SET)
+	line, err := readLine(nil, fh, false)
+	if err != nil {
+		t.Errorf("readLine failed: %v", err)
+	}
+	if line != "line1" {
+		t.Errorf("expected 'line1', got %q", line)
+	}
+
+	f.Seek(0, os.SEEK_SET)
+	line, err = readLine(nil, fh, true)
+	if err != nil {
+		t.Errorf("readLine with newline failed: %v", err)
+	}
+	if line != "line1\n" {
+		t.Errorf("expected 'line1\\n', got %q", line)
+	}
+}
+
+// TestReadLineNilFile tests readLine with nil file.
+func TestReadLineNilFile(t *testing.T) {
+	line, err := readLine(nil, nil, false)
+	if err != nil {
+		t.Errorf("readLine with nil file should not error, got: %v", err)
+	}
+	if line != "" {
+		t.Errorf("expected empty string, got %q", line)
+	}
+}
+
+// TestReadChars tests reading specific number of characters.
+func TestReadChars(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	content := "0123456789"
+	if _, err := tmpfile.WriteString(content); err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+	tmpfile.Close()
+
+	f, err := os.Open(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer f.Close()
+
+	var fileInterface io.File = &osFile{file: f}
+	fh := &io.FileHandle{
+		File: &fileInterface,
+	}
+
+	result, err := readChars(nil, fh, 5)
+	if err != nil {
+		t.Errorf("readChars failed: %v", err)
+	}
+	if result != "01234" {
+		t.Errorf("expected '01234', got %q", result)
+	}
+}
+
+// TestReadCharsNilFile tests readChars with nil file.
+func TestReadCharsNilFile(t *testing.T) {
+	result, err := readChars(nil, nil, 10)
+	if err != nil {
+		t.Errorf("readChars with nil file should not error, got: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// TestReadRange tests reading character ranges.
+func TestReadRange(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	content := "0123456789"
+	if _, err := tmpfile.WriteString(content); err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+	tmpfile.Close()
+
+	f, err := os.Open(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer f.Close()
+
+	var fileInterface io.File = &osFile{file: f}
+	fh := &io.FileHandle{
+		File: &fileInterface,
+	}
+
+	result, err := readRange(nil, fh, 3, 6)
+	if err != nil {
+		t.Errorf("readRange failed: %v", err)
+	}
+	if result != "2345" {
+		t.Errorf("expected '2345', got %q", result)
+	}
+}
+
+// TestReadRangeNilFile tests readRange with nil file.
+func TestReadRangeNilFile(t *testing.T) {
+	result, err := readRange(nil, nil, 1, 10)
+	if err != nil {
+		t.Errorf("readRange with nil file should not error, got: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// TestCloseFileNilHandle tests closeFile with nil handle.
+func TestCloseFileNilHandle(t *testing.T) {
+	err := closeFile(nil)
+	if err != nil {
+		t.Errorf("closeFile(nil) should not error, got: %v", err)
+	}
+}
+
+// TestOsFileSeekModes tests all seek modes.
+func TestOsFileSeekModes(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	content := "0123456789"
+	if _, err := tmpfile.WriteString(content); err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+	tmpfile.Close()
+
+	f, err := os.Open(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer f.Close()
+
+	of := &osFile{file: f}
+
+	pos, err := of.Seek(5, os.SEEK_SET)
+	if err != nil {
+		t.Errorf("Seek SEEK_SET failed: %v", err)
+	}
+	if pos != 5 {
+		t.Errorf("expected pos=5, got %d", pos)
+	}
+
+	pos, err = of.Seek(2, os.SEEK_CUR)
+	if err != nil {
+		t.Errorf("Seek SEEK_CUR failed: %v", err)
+	}
+	if pos != 7 {
+		t.Errorf("expected pos=7, got %d", pos)
+	}
+
+	pos, err = of.Seek(-3, os.SEEK_END)
+	if err != nil {
+		t.Errorf("Seek SEEK_END failed: %v", err)
+	}
+	if pos != 7 {
+		t.Errorf("expected pos=7, got %d", pos)
+	}
+}
+
+// TestOsFileWriteAndSeek tests writing and seeking.
+func TestOsFileWriteAndSeek(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	tmpfile.Close()
+
+	f, err := os.OpenFile(tmpfile.Name(), os.O_RDWR, 0666)
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer f.Close()
+
+	of := &osFile{file: f}
+
+	n, err := of.Write([]byte("hello"))
+	if err != nil {
+		t.Errorf("Write failed: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("expected n=5, got %d", n)
+	}
+
+	pos, err := of.Seek(0, os.SEEK_SET)
+	if err != nil {
+		t.Errorf("Seek failed: %v", err)
+	}
+	if pos != 0 {
+		t.Errorf("expected pos=0, got %d", pos)
+	}
+
+	buf := make([]byte, 5)
+	n, err = of.Read(buf)
+	if err != nil {
+		t.Errorf("Read failed: %v", err)
+	}
+	if string(buf) != "hello" {
+		t.Errorf("expected 'hello', got %q", string(buf))
+	}
+}
+
+// TestReadNumberBasic tests readNumber functionality.
+func TestReadNumberBasic(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	content := "12345abc"
+	if _, err := tmpfile.WriteString(content); err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+	tmpfile.Close()
+
+	f, err := os.Open(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer f.Close()
+
+	var fileInterface io.File = &osFile{file: f}
+	fh := &io.FileHandle{
+		File: &fileInterface,
+	}
+
+	num, ok := readNumber(nil, fh)
+	if !ok {
+		t.Error("expected readNumber to succeed")
+	}
+	if num != "12345" {
+		t.Errorf("expected '12345', got %q", num)
+	}
+}
+
+// TestReadNumberNilFile tests readNumber with nil file.
+func TestReadNumberNilFile(t *testing.T) {
+	result, ok := readNumber(nil, nil)
+	if ok {
+		t.Error("expected readNumber to fail with nil file")
+	}
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// TestParseNumberEdgeCases tests parseNumber edge cases.
+func TestParseNumberEdgeCases(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+		ok    bool
+	}{
+		{"0", 0, true},
+		{"-0", 0, true},
+		{"+0", 0, true},
+		{"-123", -123, true},
+		{"+456", 456, true},
+		{"2147483647", 2147483647, true},
+		{"a", 0, false},
+		{"1a", 0, false},
+		{"a1", 0, false},
+		{"--1", 0, false},
+		{"1-", 0, false},
+		{" ", 0, false},
+		{"-", 0, false},
+		{"+", 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, ok := parseNumber(tt.input)
+			if ok != tt.ok {
+				t.Errorf("parseNumber(%q) ok = %v, want %v", tt.input, ok, tt.ok)
+			}
+			if ok && got != tt.want {
+				t.Errorf("parseNumber(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
