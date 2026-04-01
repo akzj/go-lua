@@ -93,6 +93,11 @@ func luaL_newstate() *lstate.LuaState {
 	return L
 }
 
+// LuaL_newstate - exported version
+func LuaL_newstate() *lstate.LuaState {
+	return luaL_newstate()
+}
+
 /*
 ** LUAL_NUMSIZES - numeric sizes check
  */
@@ -690,3 +695,138 @@ func luaL_openlibs(L *lstate.LuaState) {
 	luaL_getsubtable(L, lapi.LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE)
 	lapi.Lua_pop(L, 1)
 }
+
+/*
+** Exported wrappers for use by other packages
+ */
+
+// LuaL_Reg - exported version of luaL_Reg
+type LuaL_Reg struct {
+	Name string
+	Func lobject.LuaCFunction
+}
+
+// LuaL_setfuncs - exported version of luaL_setfuncs
+func LuaL_setfuncs(L *lstate.LuaState, l []LuaL_Reg, nup int) {
+	luaL_checkstack(L, nup, "too many upvalues")
+	for i := range l {
+		if l[i].Name == "" {
+			lapi.Lua_pushboolean(L, false)
+		} else {
+			for j := 0; j < nup; j++ {
+				lapi.Lua_pushvalue(L, -nup)
+			}
+			lapi.Lua_pushcfunction(L, l[i].Func, nup)
+		}
+		lapi.Lua_setfield(L, -(nup + 2), l[i].Name)
+	}
+	lapi.Lua_pop(L, nup)
+}
+
+// LuaL_newlib - exported version of luaL_newlib
+func LuaL_newlib(L *lstate.LuaState, l []LuaL_Reg) {
+	luaL_checkversion(L)
+	lapi.Lua_createtable(L, 0, len(l)-1)
+	LuaL_setfuncs(L, l, 0)
+}
+
+// LuaL_pushfail - push false value
+func LuaL_pushfail(L *lstate.LuaState) {
+	lapi.Lua_pushboolean(L, false)
+}
+
+// LuaL_tolstring - convert value to string
+func LuaL_tolstring(L *lstate.LuaState, idx int, l *int) string {
+	return luaL_tolstring(L, idx, l)
+}
+
+// LuaL_getmetafield - get metafield
+func LuaL_getmetafield(L *lstate.LuaState, obj int, event string) int {
+	return luaL_getmetafield(L, obj, event)
+}
+
+// LuaL_checkany - check for any value
+func LuaL_checkany(L *lstate.LuaState, arg int) {
+	luaL_checkany(L, arg)
+}
+
+// LuaL_checkinteger - check and get integer
+func LuaL_checkinteger(L *lstate.LuaState, arg int) lobject.LuaInteger {
+	return luaL_checkinteger(L, arg)
+}
+
+// LuaL_optinteger - get optional integer
+func LuaL_optinteger(L *lstate.LuaState, arg int, def lobject.LuaInteger) lobject.LuaInteger {
+	return luaL_optinteger(L, arg, def)
+}
+
+// LuaL_checkstring - check and get string
+func LuaL_checkstring(L *lstate.LuaState, arg int) string {
+	return luaL_checklstring(L, arg, nil)
+}
+
+// LuaL_checktype - check type
+func LuaL_checktype(L *lstate.LuaState, arg, t int) {
+	luaL_checktype(L, arg, t)
+}
+
+// LuaL_argexpected - check type with error
+func LuaL_argexpected(L *lstate.LuaState, cond bool, arg, tname int) {
+	luaL_argexpected(L, cond, arg, tname)
+}
+
+// LuaL_argcheck - check argument condition
+func LuaL_argcheck(L *lstate.LuaState, cond bool, arg int, extramsg string) {
+	luaL_argcheck(L, cond, arg, extramsg)
+}
+
+// LuaL_error - raise error
+func LuaL_error(L *lstate.LuaState, fmtstr string, args ...interface{}) int {
+	return luaL_error(L, fmtstr, args...)
+}
+
+// Exported wrappers for lua package
+
+// LuaL_Buffer - exported alias for luaL_Buffer
+type LuaL_Buffer = luaL_Buffer
+
+// LuaL_checknumber - check and get number argument
+func LuaL_checknumber(L *lstate.LuaState, arg int) lobject.LuaNumber {
+	return luaL_checknumber(L, arg)
+}
+
+// LuaL_typeerror - raise type error
+func LuaL_typeerror(L *lstate.LuaState, arg int, tname string) int {
+	return luaL_typeerror(L, arg, tname)
+}
+
+// LuaL_optlstring - get optional string argument
+func LuaL_optlstring(L *lstate.LuaState, arg int, def string, l *int) string {
+	return luaL_optlstring(L, arg, def, l)
+}
+
+// LuaL_buffinit - initialize buffer
+func LuaL_buffinit(L *lstate.LuaState, B *LuaL_Buffer) {
+	luaL_buffinit(L, (*luaL_Buffer)(B))
+}
+
+// LuaL_prepbuffsize - prepare buffer size
+func LuaL_prepbuffsize(B *LuaL_Buffer, sz int) []byte {
+	return luaL_prepbuffsize((*luaL_Buffer)(B), sz)
+}
+
+// LuaL_addlstring - add string to buffer
+func LuaL_addlstring(B *LuaL_Buffer, s string, l int) {
+	luaL_addlstring((*luaL_Buffer)(B), s, l)
+}
+
+// LuaL_addvalue - add value to buffer
+func LuaL_addvalue(L *lstate.LuaState, B *LuaL_Buffer) {
+	luaL_addvalue((*luaL_Buffer)(B))
+}
+
+// LuaL_pushresult - push buffer result
+func LuaL_pushresult(L *lstate.LuaState, B *LuaL_Buffer) {
+	luaL_pushresult((*luaL_Buffer)(B))
+}
+
