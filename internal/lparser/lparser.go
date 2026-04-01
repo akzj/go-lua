@@ -8,6 +8,7 @@ package lparser
 
 import (
 	"fmt"
+	"unsafe"
 	"math"
 
 	"github.com/akzj/go-lua/internal/lfunc"
@@ -487,6 +488,7 @@ func getlabel(fs *FuncState) int {
 ** Add constant to prototype
  */
 func addk(fs *FuncState, v *lobject.TValue) int {
+	fmt.Printf("DEBUG addk: NK=%d Tt_=%d\n", fs.NK, v.Tt_)
 	f := fs.F
 	fs.NK++
 	if fs.NK > len(f.K) {
@@ -515,6 +517,17 @@ func nilK(fs *FuncState) int {
 	lobject.SetNilValue(&v)
 	return addk(fs, &v)
 }
+
+// String constant - adds TString to constant pool
+func stringK(fs *FuncState, s *lobject.TString) int {
+	fmt.Printf("DEBUG stringK: s=%p -> K[%d]\n", s, fs.NK)
+	var v lobject.TValue
+	v.Value_.Gc = (*lobject.GCObject)(unsafe.Pointer(s))
+	v.Tt_ = uint8(lobject.LUA_VSHRSTR)
+	idx := addk(fs, &v)
+	return idx
+}
+
 
 /*
 ** Discharge variables
@@ -562,7 +575,7 @@ func exp2reg(fs *FuncState, e *Expdesc, reg int) {
 	case VKINT:
 		loadk(fs, reg, intK(fs, e.U.Ival))
 	case VKSTR:
-		loadk(fs, reg, addk(fs, &lobject.TValue{}))
+		loadk(fs, reg, e.U.Info)  // e.U.Info set by CodeString
 	case VRELOC:
 		inst := &fs.F.Code[e.U.Info]
 		lopcodes.SETARG_A(inst, reg)
@@ -818,16 +831,23 @@ func Indexed(fs *FuncState, t *Expdesc, k *Expdesc) {
 /*
 ** Create code string expression
  */
-func CodeString(e *Expdesc, s *lobject.TString) {
+func CodeString(ls *llex.LexState, e *Expdesc, s *lobject.TString) {
+	fmt.Printf("DEBUG CodeString: s=%p\n", s)
+	fs := GetFuncState(ls)
+	if fs == nil {
+		InitExp(e, VKSTR, 0)
+		e.U.Info = 0
+		return
+	}
 	InitExp(e, VKSTR, 0)
-	e.U.Strval = s
+	e.U.Info = stringK(fs, s)
 }
 
 /*
 ** Create code name expression
  */
 func CodeName(ls *llex.LexState, e *Expdesc) {
-	CodeString(e, StrCheckName(ls))
+	CodeString(ls, e, StrCheckName(ls))
 }
 
 /*
@@ -1539,6 +1559,10 @@ func SetList(fs *FuncState, base, nelems, tostore int) {
  */
 func Finish(fs *FuncState) {
 	// Post-processing pass
+	// Ensure K slice only contains what was actually added
+	if len(fs.F.K) > int(fs.NK) {
+		fs.F.K = fs.F.K[:fs.NK]
+	}
 }
 
 /*
@@ -1676,7 +1700,7 @@ func simpleExp(ls *llex.LexState, v *Expdesc) {
 		v.U.Nval = ls.T.SemInfo.R
 		llex.Next(ls)
 	case llex.TK_STRING:
-		CodeString(v, ls.T.SemInfo.Ts)
+		CodeString(ls, v, ls.T.SemInfo.Ts)
 		llex.Next(ls)
 	case llex.TK_NIL:
 		InitExp(v, VNIL, 0)
@@ -1688,10 +1712,43 @@ func simpleExp(ls *llex.LexState, v *Expdesc) {
 		InitExp(v, VFALSE, 0)
 		llex.Next(ls)
 	case llex.TK_NAME:
-		// IMPORTANT: Save name BEFORE calling Next
+		// Save name BEFORE calling Next
 		name := ls.T.SemInfo.Ts
 		llex.Next(ls)
 		singlevaraux(fs, name, v, 1)
+		// Check if this is a function call (followed by '(')
+		if ls.T.Token == '(' {
+			// Function call - emit GETTABUP to load function from _ENV
+			// First, add function name to constant pool
+			fmt.Printf("DEBUG GETTABUP key: name=%p\n", name)
+			keyIdx := addk(fs, &lobject.TValue{Tt_: uint8(lobject.LUA_VSHRSTR), Value_: lobject.Value{Gc: (*lobject.GCObject)(unsafe.Pointer(name))}})
+			fmt.Printf("DEBUG GETTABUP: name=%p keyIdx=%d\n", name, keyIdx)
+			// Capture current FreeReg as function register (function goes in R[FreeReg])
+			fnReg := int(fs.FreeReg)
+			fmt.Printf("DEBUG GETTABUP: fnReg=%d keyIdx=%d\n", fnReg, keyIdx)
+			// Emit GETTABUP to load _ENV[name] into R(fnReg)
+			CodeABC(fs, lopcodes.OP_GETTABUP, fnReg, 0, keyIdx)
+			// Mark expression as relocated (result in R(fnReg))
+			InitExp(v, VRELOC, fnReg)
+			// Reserve register AFTER getting fnReg
+			fs.FreeReg++
+			// Parse arguments
+			llex.Next(ls) // consume '('
+			args := 0
+			if ls.T.Token != ')' {
+				var e Expdesc
+				args = expList(ls, &e)
+				if args == 0 {
+					InitExp(&e, VVOID, 0)
+				} else {
+					Exp2NextReg(fs, &e)
+				}
+			}
+			CheckMatch(ls, ')', '(', ls.LastLine)
+			// Emit CALL instruction - A is fnReg, B is args+1, C is results (1 = 0 results)
+			CodeABC(fs, lopcodes.OP_CALL, fnReg, args+1, 1)
+			InitExp(v, VCALL, 0)
+		}
 	case '{':
 		llex.Next(ls)
 		constructor(ls, v)
@@ -1883,6 +1940,7 @@ func LuaY_parser(L *lstate.LuaState, z *lzio.ZIO, buff *lzio.Mbuffer, name strin
 	// Create closure
 	cl := lfunc.NewLClosure(L, int(fs.Nups))
 	cl.P = fs.F
+	fmt.Printf("DEBUG PARSER: cl=%p cl.P=%p fs.F=%p\n", cl, cl.P, fs.F)
 
 	// Initialize upvalues
 	lfunc.InitUpvals(L, cl)

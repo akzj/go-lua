@@ -234,6 +234,13 @@ func GetOpCode(i lobject.LUInt32) OpCode {
 	return OpCode((i >> POS_OP) & mask1(SIZE_OP, 0))
 }
 
+// TranslateFromC - Pass through Go opcode values (parser already uses Go lopcodes)
+// Parser uses lopcodes.OP_CALL (value 68), bytecode contains Go opcode values
+// This function now just returns the opcode as-is
+func TranslateFromC(cOpcode int) OpCode {
+	return OpCode(cOpcode)
+}
+
 func SetOpCode(i *lobject.LUInt32, o OpCode) {
 	*i = (*i & mask0(SIZE_OP, POS_OP)) | ((lobject.LUInt32(o) << POS_OP) & mask1(SIZE_OP, POS_OP))
 }

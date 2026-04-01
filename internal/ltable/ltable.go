@@ -1,6 +1,7 @@
 package ltable
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/akzj/go-lua/internal/lmem"
@@ -56,10 +57,17 @@ func SetNodevector(L *lobject.LuaState, t *lobject.Table, size int) {
 		t.Node = nil
 		t.Lsizenode = 0
 	} else {
-		t.Lsizenode = uint8(CeilLog2(size))
-		t.Node = make([]lobject.Node, size)
+		// For small tables, just set Lsizenode=1 directly
+		if size <= 2 {
+			t.Lsizenode = 1
+		} else {
+			t.Lsizenode = uint8(CeilLog2(size))
+		}
+		actualSize := 1 << int(t.Lsizenode)
+		t.Node = make([]lobject.Node, actualSize)
 		for i := range t.Node {
 			lobject.SetNilValue(&t.Node[i].IVal)
+			t.Node[i].Key.Tt = uint8(lobject.LUA_TNIL)
 		}
 	}
 }
@@ -107,28 +115,30 @@ func HashInt(t *lobject.Table, i lobject.LuaInteger) int {
 func MainPosition(t *lobject.Table, key *lobject.TValue) *lobject.Node {
 	size := SizeNode(t)
 	if size == 0 {
+		fmt.Printf("MainPosition: size=0, returning nil (table=%p)\n", t)
 		return nil
 	}
 
+	var idx int
 	switch {
 	case lobject.TtIsInteger(key):
-		idx := HashInt(t, lobject.IntValue(key))
-		return &t.Node[idx]
+		idx = HashInt(t, lobject.IntValue(key))
 	case lobject.TtIsShrString(key):
 		ts := lobject.Gco2Ts(lobject.GcValue(key))
-		idx := int(ts.Hash) & (size - 1)
-		return &t.Node[idx]
+		idx = int(ts.Hash) & (size - 1)
 	case lobject.TtIsFalse(key):
-		return &t.Node[0]
+		idx = 0
 	case lobject.TtIsTrue(key):
-		return &t.Node[1]
+		idx = 1
 	default:
 		ptr := uintptr(0)
 		if lobject.GcValue(key) != nil {
 			ptr = uintptr(unsafe.Pointer(lobject.GcValue(key)))
 		}
-		return &t.Node[int(ptr)&(size-1)]
+		idx = int(ptr) & (size - 1)
 	}
+	fmt.Printf("MainPosition: table=%p key.Tt_=%d idx=%d size=%d mp=&Node[%d]=%p mp.Key.Tt=%d\n", t, key.Tt_, idx, size, idx, &t.Node[idx], t.Node[idx].Key.Tt)
+	return &t.Node[idx]
 }
 
 /*
@@ -148,7 +158,9 @@ func GetFreePos(t *lobject.Table) *lobject.Node {
 ** Check if two keys are equal
  */
 func EqualKey(k1 *lobject.TValue, n2 *lobject.Node) bool {
+	fmt.Printf("EqualKey: k1.Tt_=%d n2.Key.Tt=%d\n", k1.Tt_, n2.Key.Tt)
 	if int(n2.Key.Tt) != int(k1.Tt_) {
+		fmt.Println("EqualKey: type mismatch")
 		return false
 	}
 	switch {
@@ -159,7 +171,9 @@ func EqualKey(k1 *lobject.TValue, n2 *lobject.Node) bool {
 	case lobject.TtIsShrString(k1):
 		ts1 := lobject.Gco2Ts(lobject.GcValue(k1))
 		ts2 := lobject.Gco2Ts(n2.Key.Value.Gc)
-		return ts1 == ts2
+		fmt.Printf("EqualKey string: ts1=%p ts2=%p\n", ts1, ts2)
+		// Compare string content, not pointer
+		return lobject.TestStringValue(ts1, ts2)
 	default:
 		return lobject.GcValue(k1) == n2.Key.Value.Gc
 	}
@@ -242,8 +256,11 @@ func GetInt(t *lobject.Table, key lobject.LuaInteger) (int, *lobject.TValue) {
 ** luaH_set - generic set
  */
 func Set(L *lobject.LuaState, t *lobject.Table, key, value *lobject.TValue) {
+	fmt.Printf("DEBUG ltable.Set: key=%p val=%p t=%p SizeNode=%d\n", key, value, t, SizeNode(t))
 	result := SetGeneric(L, t, key, value)
+	fmt.Printf("DEBUG ltable.Set: SetGeneric returned %d\n", result)
 	if result != HOK {
+		fmt.Println("DEBUG ltable.Set: calling FinishSet")
 		FinishSet(L, t, key, value, result)
 	}
 }
@@ -291,28 +308,41 @@ func SetGeneric(L *lobject.LuaState, t *lobject.Table, key, value *lobject.TValu
 ** Finish set operation
  */
 func FinishSet(L *lobject.LuaState, t *lobject.Table, key, value *lobject.TValue, result int) {
+	fmt.Println("AAAA FinishSet ENTRY")
 	if result == HOK {
+		fmt.Println("AAAA result==HOK, returning")
 		return
 	}
 
 	if lobject.TtIsNil(value) {
+		fmt.Println("AAAA value is nil, returning")
 		return
 	}
 
+	fmt.Println("AAAA about to call SizeNode")
 	if SizeNode(t) == 0 {
+		fmt.Println("AAAA SizeNode==0, calling SetNodevector")
 		SetNodevector(L, t, 1)
 	}
 
+	fmt.Println("AAAA about to call MainPosition")
 	mp := MainPosition(t, key)
-
-	if lobject.IsKeyNil(mp) {
+	
+	fmt.Printf("AAAA FinishSet ENTRY: mp=%p mp.Key.Tt=%d\n", mp, mp.Key.Tt)
+	
+	// Check if main position is empty - directly compare Key.Tt to nil type
+	if mp.Key.Tt == uint8(lobject.LUA_TNIL) {
+		// Empty slot - store key and value
+		fmt.Println("FinishSet: STORING IN EMPTY SLOT")
 		mp.IVal = *value
 		mp.Key.Tt = key.Tt_
 		mp.Key.Value = key.Value_
 		mp.Key.Next = 0
+		fmt.Printf("FinishSet: after store, mp.Key.Tt=%d\n", mp.Key.Tt)
 		return
 	}
 
+	fmt.Println("DEBUG FinishSet: slot not empty, using free list")
 	free := GetFreePos(t)
 	if free == nil {
 		Rehash(L, t, key)

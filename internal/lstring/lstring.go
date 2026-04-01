@@ -105,7 +105,7 @@ func IsReserved(ts *lobject.TString) bool {
 func NewString(L *lstate.LuaState, s string) *lobject.TString {
 	ts := &lobject.TString{}
 	ts.Extra = 0
-	ts.Hash = 0
+	ts.Hash = HashString([]byte(s), 0)
 	ts.Shrlen = int8(len(s))
 	ts.U.Lnglen = 0
 	// Store string data in Contents as pointer to first byte

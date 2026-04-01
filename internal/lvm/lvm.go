@@ -7,10 +7,14 @@ package lvm
 */
 
 import (
+	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/akzj/go-lua/internal/lobject"
+	"github.com/akzj/go-lua/internal/lopcodes"
 	"github.com/akzj/go-lua/internal/lstate"
+	"github.com/akzj/go-lua/internal/ltable"
 )
 
 /*
@@ -399,4 +403,138 @@ func intop(op rune, v1, v2 lobject.LuaInteger) lobject.LuaInteger {
 		return v1 ^ v2
 	}
 	return 0
+}
+/*
+** LuaV_execute - execute Lua bytecode
+ */
+func LuaV_execute(L *lstate.LuaState, ci *lstate.CallInfo, func_ *lobject.TValue) {
+	// Get closure from func_
+	gcObj := lobject.GcValue(func_)
+	cl := lobject.Gco2Lcl(gcObj)
+	fmt.Printf("DEBUG VM: func_=%p cl=%p cl.P=%p\n", func_, cl, cl.P)
+	if cl == nil || cl.P == nil {
+		return
+	}
+	
+	// Get constant pool and instructions
+	k := cl.P.K
+	ins := cl.P.Code
+	fmt.Printf("DEBUG K[] len=%d\n", len(k))
+	for i := 0; i < len(k) && i < 10; i++ {
+		gcPtr := lobject.GcValue(&k[i])
+		fmt.Printf("DEBUG K[%d] Tt_=%d GcPtr=%p\n", i, k[i].Tt_, gcPtr)
+	}
+	fmt.Printf("DEBUG ins[] len=%d\n", len(ins))
+	for i := 0; i < len(ins) && i < 10; i++ {
+		fmt.Printf("DEBUG ins[%d]=%d\n", i, ins[i])
+	}
+	if len(ins) == 0 {
+		return
+	}
+	
+	// Base pointer points to function slot
+	base := func_
+	
+	// Program counter
+	pc := 0
+	
+	// Main VM loop
+	for pc < len(ins) {
+		i := ins[pc]
+		opcode := lopcodes.TranslateFromC(int(lopcodes.GetOpCode(i)))
+		
+		switch opcode {
+		case lopcodes.OP_GETTABUP:
+			a := lopcodes.GETARG_A(i)
+			b := lopcodes.GETARG_B(i)
+			c := lopcodes.GETARG_C(i)
+			fmt.Printf("DEBUG VM GETTABUP: R[%d] = _ENV[%d][K[%d]]\n", a, b, c)
+			dst := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(a)*unsafe.Sizeof(lobject.TValue{})))
+			fmt.Printf("DEBUG VM GETTABUP: BEFORE R[%d] Tt_=%d Value_.I=%d\n", a, dst.Tt_, dst.Value_.I)
+			// Get upvalue[0] (which is _ENV)
+			if b < int(cl.Nupvalues) && cl.Upvals[b] != nil {
+				upvalPtr := cl.Upvals[b].V
+				if upvalPtr != nil {
+					tblPtr := upvalPtr.Gc
+					if tblPtr != nil {
+						tbl := lobject.Gco2T(tblPtr)
+						fmt.Printf("DEBUG VM GETTABUP: tbl=%p\n", tbl)
+						// Get key from constants[c]
+						if c >= 0 && c < len(k) {
+							key := &k[c]
+							fmt.Printf("DEBUG VM GETTABUP: key Tt_=%d GcPtr=%p\n", key.Tt_, lobject.GcValue(key))
+							// Table access - use SearchGeneric instead
+							if val := ltable.SearchGeneric(tbl, key); val != nil {
+								fmt.Printf("DEBUG VM GETTABUP: found val=%p Tt_=%d Value_.Gc=%p\n", val, val.Tt_, val.Value_.Gc)
+								lobject.SetObj(dst, val)
+								fmt.Printf("DEBUG VM GETTABUP: AFTER SetObj R[%d] Tt_=%d Value_.F=%p\n", a, dst.Tt_, dst.Value_.F)
+							} else {
+								fmt.Printf("DEBUG VM GETTABUP: NOT FOUND\n")
+							}
+						}
+					}
+				}
+			}
+			pc++
+			
+		case lopcodes.OP_LOADK:
+			a := lopcodes.GETARG_A(i)
+			bx := lopcodes.GETARG_Bx(i)
+			fmt.Printf("DEBUG VM LOADK: R[%d] = K[%d] (Tt_=%d)\n", a, bx, k[bx].Tt_)
+			dst := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(a)*unsafe.Sizeof(lobject.TValue{})))
+			if bx >= 0 && bx < len(k) {
+				lobject.SetObj(dst, &k[bx])
+			}
+			pc++
+			
+		case lopcodes.OP_MOVE:
+			a := lopcodes.GETARG_A(i)
+			b := lopcodes.GETARG_B(i)
+			fmt.Printf("DEBUG VM MOVE: R[%d] = R[%d]\n", a, b)
+			src := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(b)*unsafe.Sizeof(lobject.TValue{})))
+			dst := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(a)*unsafe.Sizeof(lobject.TValue{})))
+			lobject.SetObj(dst, src)
+			fmt.Printf("DEBUG VM MOVE: R[%d].Tt_=%d Value_.I=%d\n", a, dst.Tt_, dst.Value_.I)
+			pc++
+			
+		case lopcodes.OP_CALL:
+			a := lopcodes.GETARG_A(i)
+			b := lopcodes.GETARG_B(i)
+			fn := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(a)*unsafe.Sizeof(lobject.TValue{})))
+			fmt.Printf("DEBUG VM CALL: R[%d] fn=%p Tt_=%d F=%p B=%d\n", a, fn, fn.Tt_, fn.Value_.F, b)
+			if lobject.TtIsLcf(fn) {
+				fmt.Printf("DEBUG VM CALL: Is light C function\n")
+				f := lobject.FValue(fn)
+				// sizeof(TValue) = 56 (actual size in this codebase)
+				sz := int(unsafe.Sizeof(lobject.TValue{}))
+				// For CALL R[A] with B args:
+				// - R[A] = function
+				// - R[A+1] to R[A+B-1] = arguments (B-1 visible args for C function)
+				// - L.Top should point past last argument
+				numArgs := b - 1 // C function sees B-1 arguments
+				newTop := (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(a+b)*uintptr(sz)))
+				L.Top.P = newTop
+				// For index2value(L, 1) to return R[A+1] (first arg), need:
+				// ci.F.P + sizeof = base + (A+1)*sizeof
+				// ci.F.P = base + A*sizeof
+				L.Ci.F.P = (*lobject.TValue)(unsafe.Pointer(uintptr(unsafe.Pointer(base)) + uintptr(a)*uintptr(sz)))
+				fmt.Printf("DEBUG VM CALL: ci.F.P=%p base=%p a=%d numArgs=%d\n", L.Ci.F.P, base, a, numArgs)
+				fmt.Printf("DEBUG VM CALL: calling f=%p\n", f)
+				f((*lobject.LuaState)(unsafe.Pointer(L)))
+				fmt.Printf("DEBUG VM CALL: returned from print\n")
+			} else {
+				fmt.Printf("DEBUG VM CALL: Not LCF, skipping\n")
+			}
+			pc++
+			
+		case lopcodes.OP_RETURN, lopcodes.OP_RETURN0:
+			return
+			
+		case lopcodes.OP_RETURN1:
+			return
+			
+		default:
+			pc++
+		}
+	}
 }
