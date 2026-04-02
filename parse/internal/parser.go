@@ -208,6 +208,40 @@ type emptyStat struct {
 func (s *emptyStat) IsScopeEnd() bool   { return false }
 func (s *emptyStat) Kind() astapi.StatKind { return astapi.STAT_EMPTY }
 
+// gotoStat implements goto statement.
+type gotoStat struct {
+	baseNode
+	name string
+}
+
+func (s *gotoStat) IsScopeEnd() bool           { return false }
+func (s *gotoStat) Kind() astapi.StatKind      { return astapi.STAT_GOTO }
+func (s *gotoStat) GetName() string            { return s.name }
+
+// labelStat implements label statement (::name::).
+type labelStat struct {
+	baseNode
+	name string
+}
+
+func (s *labelStat) IsScopeEnd() bool          { return false }
+func (s *labelStat) Kind() astapi.StatKind      { return astapi.STAT_LABEL }
+func (s *labelStat) GetName() string            { return s.name }
+
+// globalVarStat implements global variable declaration (Lua 5.4).
+type globalVarStat struct {
+	baseNode
+	name    string
+	isConst bool
+	exprs   []astapi.ExpNode
+}
+
+func (s *globalVarStat) IsScopeEnd() bool           { return false }
+func (s *globalVarStat) Kind() astapi.StatKind      { return astapi.STAT_GLOBAL_VAR }
+func (s *globalVarStat) GetName() string            { return s.name }
+func (s *globalVarStat) IsConst() bool               { return s.isConst }
+func (s *globalVarStat) GetExprs() []astapi.ExpNode { return s.exprs }
+
 // expressionStat implements function call as statement.
 type expressionStat struct {
 	baseNode
@@ -498,11 +532,23 @@ func (p *parser) parseStatement() bool {
 		}
 		return true
 
+	case lexapi.TOKEN_GOTO:
+		p.parseGoto()
+		return true
+
+	case lexapi.TOKEN_DBCOLON:
+		p.parseLabel()
+		return true
+
+	case lexapi.TOKEN_GLOBAL:
+		p.parseGlobal()
+		return true
+
 	case lexapi.TOKEN_RETURN:
 		// Return ends block - caller handles it
 		return false
 
-	case lexapi.TOKEN_BREAK, lexapi.TOKEN_GOTO:
+	case lexapi.TOKEN_BREAK:
 		// Control flow - ends block
 		return false
 
@@ -1103,6 +1149,109 @@ func (p *parser) parseLocalVar() {
 }
 
 // =============================================================================
+// Goto Statement: goto <name>
+// =============================================================================
+
+func (p *parser) parseGoto() {
+	p.next() // consume 'goto'
+	name := p.current().Value
+	tok := p.current()
+	p.next()
+	
+	stat := &gotoStat{
+		baseNode: baseNode{line: tok.Line, column: tok.Column},
+		name:     name,
+	}
+	p.block.stats = append(p.block.stats, stat)
+}
+
+// =============================================================================
+// Label Statement: ::<name>::
+// =============================================================================
+
+func (p *parser) parseLabel() {
+	// p.current() is :: (TOKEN_DBCOLON) - already consumed by switch case
+	// p.look is the NAME token (label name)
+	// p.look.look (lookahead) is the closing ::
+	
+	// Validate that the next token is a NAME
+	if p.look.Type != lexapi.TOKEN_NAME {
+		return
+	}
+	
+	// First next() consumes ::, moves NAME to cur, closing :: to look
+	p.next() // consume :: (now cur=NAME, look=closing ::)
+	
+	// Now peek at look to see if it's the closing ::
+	if p.look.Type != lexapi.TOKEN_DBCOLON {
+		return
+	}
+	
+	name := p.current().Value
+	nameTok := p.current()
+	p.next() // consume NAME (now cur=NAME, look=closing ::)
+	p.next() // consume closing ::
+	
+	stat := &labelStat{
+		baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+		name:     name,
+	}
+	p.block.stats = append(p.block.stats, stat)
+}
+
+// =============================================================================
+// Global Statement: global [<const>] <name> = <expr> | global [<const>] * = <expr>
+// Lua 5.4 feature: global const, global const *
+// =============================================================================
+
+func (p *parser) parseGlobal() {
+	p.next() // consume 'global'
+	
+	parentBlock := p.block
+	
+	// Check for modifiers
+	isConst := p.peek(lexapi.TOKEN_CONST)
+	if isConst {
+		p.next() // consume 'const'
+	}
+	
+	// Check for '*' export-all modifier: global * = expr
+	if p.peek(lexapi.TOKEN_MUL) {
+		p.next() // consume '*'
+		if p.peek(lexapi.TOKEN_ASSIGN) {
+			p.next()
+			_, err := p.parseExprList()
+			if err != nil {
+				return
+			}
+		}
+		return
+	}
+	
+	// Regular global var = expr
+	if p.peek(lexapi.TOKEN_NAME) {
+		name := p.current().Value
+		nameTok := p.current()
+		p.next()
+		
+		if p.peek(lexapi.TOKEN_ASSIGN) {
+			p.next()
+			exprs, err := p.parseExprList()
+			if err != nil {
+				return
+			}
+			stat := &globalVarStat{
+				baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+				name:     name,
+				isConst:  isConst,
+				exprs:    exprs,
+			}
+			parentBlock.stats = append(parentBlock.stats, stat)
+		}
+	}
+}
+
+// =============================================================================
 // Assignment or Function Call
 // =============================================================================
 
@@ -1312,7 +1461,7 @@ func (p *parser) parseAnd() (astapi.ExpNode, error) {
 }
 
 func (p *parser) parseComparison() (astapi.ExpNode, error) {
-	left, err := p.parseAdd()
+	left, err := p.parseBitwiseOr()
 	if err != nil {
 		return nil, err
 	}
@@ -1320,7 +1469,7 @@ func (p *parser) parseComparison() (astapi.ExpNode, error) {
 		op := p.mapComparisonOp(p.current().Type)
 		tok := p.current()
 		p.next()
-		right, err := p.parseAdd()
+		right, err := p.parseBitwiseOr()
 		if err != nil {
 			return nil, err
 		}
@@ -1346,6 +1495,85 @@ func (p *parser) mapComparisonOp(t lexapi.TokenType) astapi.BinopKind {
 	default:
 		return astapi.BINOP_EQ
 	}
+}
+
+// =============================================================================
+// Bitwise Operators (Lua 5.3+)
+// Precedence: | (lowest) ~ (bxor) & (highest) << >>
+// =============================================================================
+
+func (p *parser) parseBitwiseOr() (astapi.ExpNode, error) {
+	left, err := p.parseBitwiseXor()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek(lexapi.TOKEN_PIPE) { // |
+		tok := p.current()
+		p.next()
+		right, err := p.parseBitwiseXor()
+		if err != nil {
+			return nil, err
+		}
+		left = &binopExp{op: astapi.BINOP_BOR, left: left, right: right, baseNode: baseNode{line: tok.Line, column: tok.Column}}
+	}
+	return left, nil
+}
+
+func (p *parser) parseBitwiseXor() (astapi.ExpNode, error) {
+	left, err := p.parseBitwiseAnd()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek(lexapi.TOKEN_TILDE) { // ~ (bxor in Lua 5.3+)
+		tok := p.current()
+		p.next()
+		right, err := p.parseBitwiseAnd()
+		if err != nil {
+			return nil, err
+		}
+		left = &binopExp{op: astapi.BINOP_BXOR, left: left, right: right, baseNode: baseNode{line: tok.Line, column: tok.Column}}
+	}
+	return left, nil
+}
+
+func (p *parser) parseBitwiseAnd() (astapi.ExpNode, error) {
+	left, err := p.parseShift()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek(lexapi.TOKEN_AMP) { // &
+		tok := p.current()
+		p.next()
+		right, err := p.parseShift()
+		if err != nil {
+			return nil, err
+		}
+		left = &binopExp{op: astapi.BINOP_BAND, left: left, right: right, baseNode: baseNode{line: tok.Line, column: tok.Column}}
+	}
+	return left, nil
+}
+
+func (p *parser) parseShift() (astapi.ExpNode, error) {
+	left, err := p.parseAdd()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek(lexapi.TOKEN_SHL) || p.peek(lexapi.TOKEN_SHR) { // << >>
+		var op astapi.BinopKind
+		if p.peek(lexapi.TOKEN_SHL) {
+			op = astapi.BINOP_SHL
+		} else {
+			op = astapi.BINOP_SHR
+		}
+		tok := p.current()
+		p.next()
+		right, err := p.parseAdd()
+		if err != nil {
+			return nil, err
+		}
+		left = &binopExp{op: op, left: left, right: right, baseNode: baseNode{line: tok.Line, column: tok.Column}}
+	}
+	return left, nil
 }
 
 func (p *parser) parseAdd() (astapi.ExpNode, error) {

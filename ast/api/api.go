@@ -128,6 +128,7 @@ const (
 	STAT_LOCAL_VAR               // Local variable declaration
 	STAT_LOCAL_FUNC              // Local function declaration
 	STAT_GLOBAL_FUNC             // Global function declaration
+	STAT_GLOBAL_VAR              // Global variable declaration (Lua 5.4)
 	STAT_IF                      // If statement
 	STAT_WHILE                   // While statement
 	STAT_REPEAT                  // Repeat until statement
@@ -244,8 +245,11 @@ const (
 	BINOP_GE                    //
 	BINOP_NE                    //
 	BINOP_EQ                    //
-	BINOP_SHL                   //
-	BINOP_SHR                   //
+	BINOP_SHL                   // << shift left
+	BINOP_SHR                   // >> shift right
+	BINOP_BAND                  // & bitwise and
+	BINOP_BOR                   // | bitwise or
+	BINOP_BXOR                  // ~ bitwise xor
 	BINOP_CONCAT                //
 )
 

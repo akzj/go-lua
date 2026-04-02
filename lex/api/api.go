@@ -25,6 +25,7 @@ const (
 	TOKEN_FUNCTION
 	TOKEN_GLOBAL // Lua 5.4 compatibility
 	TOKEN_GOTO
+	TOKEN_CONST // Lua 5.4 compatibility - for "global const"
 	TOKEN_IF
 	TOKEN_IN
 	TOKEN_LOCAL
