@@ -37,18 +37,44 @@ func (p *parser) Parse(chunk string) (astapi.Chunk, error) {
 	p.next() // first token into cur
 	p.next() // second token into cur
 
-	block, err := p.parseBlock()
-	if err != nil {
-		return nil, err
-	}
+	// Parse top-level block(s) - handle orphan 'end' at top level
+	var firstBlock astapi.Block
+	for {
+		block, err := p.parseBlock()
+		if err != nil {
+			return nil, err
+		}
 
-	// Check for trailing garbage
-	if p.cur.Type != lexapi.TOKEN_EOS {
-		return nil, p.errorAt(p.cur, "unexpected symbol")
+		if firstBlock == nil {
+			firstBlock = block
+		}
+
+		// If we got an empty block (orphan 'end' at top level), parse another
+		if len(block.Stats()) == 0 && block.ReturnExp() == nil {
+			// Consume trailing orphan 'end' if present
+			if p.peek(lexapi.TOKEN_END) {
+				p.next()
+				// Consume trailing semicolons
+				for p.peek(lexapi.TOKEN_SEMICOLON) {
+					p.next()
+				}
+				// Continue parsing if not at EOS
+				if p.peek(lexapi.TOKEN_EOS) {
+					break
+				}
+				continue
+			}
+		}
+
+		// Check for trailing garbage
+		if p.cur.Type != lexapi.TOKEN_EOS {
+			return nil, p.errorAt(p.cur, "unexpected symbol")
+		}
+		break
 	}
 
 	return &chunkImpl{
-		block:      block,
+		block:      firstBlock,
 		sourceName: p.lexer.SourceName(),
 	}, nil
 }
@@ -477,7 +503,8 @@ func (p *parser) parseBlock() (astapi.Block, error) {
 	// NOTE: TOKEN_END, TOKEN_ELSEIF, TOKEN_ELSE, TOKEN_UNTIL must be in the loop
 	// condition to stop parsing when these tokens are encountered. Otherwise,
 	// parseStatement() gets called with these tokens and fails.
-	for !p.peek(lexapi.TOKEN_THEN) && !p.peek(lexapi.TOKEN_END) && !p.peek(lexapi.TOKEN_EOS) && !p.peek(lexapi.TOKEN_ELSEIF) && !p.peek(lexapi.TOKEN_ELSE) && !p.peek(lexapi.TOKEN_UNTIL) && !p.peek(lexapi.TOKEN_BREAK) && !p.peek(lexapi.TOKEN_RETURN) {
+	// TOKEN_BREAK and TOKEN_RETURN are handled by parseStatement() directly.
+	for !p.peek(lexapi.TOKEN_THEN) && !p.peek(lexapi.TOKEN_END) && !p.peek(lexapi.TOKEN_EOS) && !p.peek(lexapi.TOKEN_ELSEIF) && !p.peek(lexapi.TOKEN_ELSE) && !p.peek(lexapi.TOKEN_UNTIL) {
 		if !p.parseStatement() {
 			break
 		}
@@ -558,8 +585,14 @@ func (p *parser) parseStatement() bool {
 		return false
 
 	case lexapi.TOKEN_BREAK:
-		// Control flow - ends block
-		return false
+		// break statement - consume token and add to block
+		tok := p.current()
+		p.next() // consume 'break'
+		stat := &breakStat{
+			baseNode: baseNode{line: tok.Line, column: tok.Column},
+		}
+		p.block.stats = append(p.block.stats, stat)
+		return true
 
 	case lexapi.TOKEN_END, lexapi.TOKEN_EOS, lexapi.TOKEN_ELSEIF, lexapi.TOKEN_ELSE, lexapi.TOKEN_UNTIL:
 		// End markers - ends block
@@ -595,10 +628,11 @@ func (p *parser) parseIf() {
 	
 	// Parse then block
 	thenBlock, err := p.parseBlock()
-	p.block = parentBlock // Restore parent block reference
 	if err != nil {
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
+	p.block = parentBlock // Restore parent block reference AFTER block is complete
 	
 	// Handle elseif/else chain
 	var elseBlock astapi.Block = nil
@@ -732,13 +766,14 @@ func (p *parser) parseWhile() {
 	
 	// Parse body block
 	body, err := p.parseBlock()
-	p.block = parentBlock // Restore parent block reference
 	if err != nil {
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	
 	if !p.peek(lexapi.TOKEN_END) {
 		p.errorAt(p.current(), "'end' expected")
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	p.next() // consume 'end'
@@ -764,13 +799,14 @@ func (p *parser) parseDo() {
 	
 	// Parse body block
 	body, err := p.parseBlock()
-	p.block = parentBlock // Restore parent block reference
 	if err != nil {
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	
 	if !p.peek(lexapi.TOKEN_END) {
 		p.errorAt(p.current(), "'end' expected")
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	p.next() // consume 'end'
@@ -839,13 +875,14 @@ func (p *parser) parseFor() {
 		p.next() // consume 'do'
 		
 		body, err := p.parseBlock()
-		p.block = parentBlock // Restore parent block reference
 		if err != nil {
+			p.block = parentBlock // Restore before returning on error
 			return
 		}
 		
 		if !p.peek(lexapi.TOKEN_END) {
 			p.errorAt(p.current(), "'end' expected")
+			p.block = parentBlock // Restore before returning on error
 			return
 		}
 		p.next() // consume 'end'
@@ -858,6 +895,7 @@ func (p *parser) parseFor() {
 			step: step,
 			block: body,
 		}
+		p.block = parentBlock // Restore parent block reference AFTER body is complete
 		// Use saved parent block reference
 		parentBlock.stats = append(parentBlock.stats, stat)
 	} else {
@@ -893,13 +931,14 @@ func (p *parser) parseFor() {
 		p.next() // consume 'do'
 		
 		body, err := p.parseBlock()
-		p.block = parentBlock // Restore parent block reference
 		if err != nil {
+			p.block = parentBlock // Restore before returning on error
 			return
 		}
 		
 		if !p.peek(lexapi.TOKEN_END) {
 			p.errorAt(p.current(), "'end' expected")
+			p.block = parentBlock // Restore before returning on error
 			return
 		}
 		p.next() // consume 'end'
@@ -910,6 +949,7 @@ func (p *parser) parseFor() {
 			exprs: exprs,
 			block: body,
 		}
+		p.block = parentBlock // Restore parent block reference AFTER body is complete
 		// Use saved parent block reference
 		parentBlock.stats = append(parentBlock.stats, stat)
 	}
@@ -927,13 +967,14 @@ func (p *parser) parseRepeat() {
 	
 	// Parse body block
 	body, err := p.parseBlock()
-	p.block = parentBlock // Restore parent block reference
 	if err != nil {
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	
 	if !p.peek(lexapi.TOKEN_UNTIL) {
 		p.errorAt(p.current(), "'until' expected")
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	p.next() // consume 'until'
@@ -941,6 +982,7 @@ func (p *parser) parseRepeat() {
 	// Parse condition
 	cond, err := p.parseExpr()
 	if err != nil {
+		p.block = parentBlock // Restore before returning on error
 		return
 	}
 	
@@ -949,6 +991,7 @@ func (p *parser) parseRepeat() {
 		block: body,
 		condition: cond,
 	}
+	p.block = parentBlock // Restore parent block reference
 	// Use saved parent block reference
 	parentBlock.stats = append(parentBlock.stats, stat)
 }
@@ -963,10 +1006,45 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 	// Save parent block reference
 	parentBlock := p.block
 	
-	// Parse function name
-	name := p.current().Value
-	nameTok := p.current()
+	// Parse function name (could be "t" or "t.m" or "t.m.n")
+	// For method syntax: function t:m() -> name becomes "t.m" (with implicit method)
+	var name string
+	var nameTok lexapi.Token
+	
+	// First name
+	if p.current().Type != lexapi.TOKEN_NAME {
+		p.errorAt(p.current(), "expected function name")
+		return
+	}
+	name = p.current().Value
+	nameTok = p.current()
 	p.next()
+	
+	// Check for method/field syntax: function t:m() or function t.a() or function t.a:m()
+	// Loop to handle chained method/field access
+	for p.peek(lexapi.TOKEN_COLON) || p.peek(lexapi.TOKEN_DOT) {
+		if p.peek(lexapi.TOKEN_COLON) {
+			p.next() // consume ':'
+			if p.current().Type != lexapi.TOKEN_NAME {
+				p.errorAt(p.current(), "expected method name after ':'")
+				return
+			}
+			// Build "prefix.method" name
+			name = name + "." + p.current().Value
+			nameTok = p.current()
+			p.next()
+		} else {
+			p.next() // consume '.'
+			if p.current().Type != lexapi.TOKEN_NAME {
+				p.errorAt(p.current(), "expected field name after '.'")
+				return
+			}
+			// Build "prefix.field" name
+			name = name + "." + p.current().Value
+			nameTok = p.current()
+			p.next()
+		}
+	}
 	
 	// Parse parameters
 	if !p.peek(lexapi.TOKEN_LPAREN) {
@@ -1009,7 +1087,7 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 		return
 	}
 	
-	
+	// Consume 'end' - may have been consumed by parseBlock for return statement
 	if !p.peek(lexapi.TOKEN_END) {
 		p.errorAt(p.current(), "'end' expected")
 		return
@@ -1040,6 +1118,10 @@ type funcDefImpl struct {
 	block   astapi.Block
 	lastLine int
 }
+
+// ExpNode implementation for anonymous functions
+func (f *funcDefImpl) IsConstant() bool { return false }
+func (f *funcDefImpl) Kind() astapi.ExpKind { return astapi.EXP_CALL } // Use EXP_CALL as placeholder
 
 func (f *funcDefImpl) IsLocal() bool              { return f.isLocal }
 func (f *funcDefImpl) Line() int                 { return f.line }
@@ -1106,7 +1188,7 @@ func (p *parser) parseLocalFunction() {
 		return
 	}
 	
-	
+	// Consume 'end' - may have been consumed by parseBlock for return statement
 	if !p.peek(lexapi.TOKEN_END) {
 		p.errorAt(p.current(), "'end' expected")
 		return
@@ -1134,24 +1216,115 @@ func (p *parser) parseLocalFunction() {
 
 func (p *parser) parseLocalVar() {
 	p.next() // consume 'local'
-	name := p.current().Value
-	tok := p.current()
-	p.next()
-
+	
+	// Check for Lua 5.4/5.5 attribute syntax: local <const> ... or local <close> ...
+	// This handles: local <const> x = 1 or local <close> x = 1
+	var inheritedConst bool
+	if p.peek(lexapi.TOKEN_LT) {
+		p.next() // consume '<'
+		if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "const" {
+			inheritedConst = true
+			p.next() // consume 'const'
+		} else if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "close" {
+			// Lua 5.4 <close> attribute - just consume
+			p.next() // consume 'close'
+		} else if p.peek(lexapi.TOKEN_CONST) {
+			inheritedConst = true
+			p.next() // consume 'const'
+		} else {
+			p.errorAt(p.current(), "expected 'const' or 'close'")
+			return
+		}
+		if !p.peek(lexapi.TOKEN_GT) {
+			p.errorAt(p.current(), "expected '>'")
+			return
+		}
+		p.next() // consume '>'
+	}
+	
+	// Parse comma-separated variable names with optional <const> after each
+	// Syntax: local a<const>, b, c<const> = ...
+	type nameWithConst struct {
+		name    string
+		isConst bool
+		tok     lexapi.Token
+	}
+	var namesWithConst []nameWithConst
+	
+	for {
+		if p.current().Type == lexapi.TOKEN_NAME {
+			nameTok := p.current()
+			name := p.current().Value
+			p.next()
+			
+			// Check for <const> or <close> immediately after the name
+			isConst := inheritedConst // inherit attribute from 'local <const>' if present
+			if p.peek(lexapi.TOKEN_LT) {
+				p.next() // consume '<'
+				if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "const" {
+					isConst = true
+					p.next() // consume 'const'
+				} else if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "close" {
+					p.next() // consume 'close'
+				} else if p.peek(lexapi.TOKEN_CONST) {
+					isConst = true
+					p.next() // consume 'const'
+				} else {
+					p.errorAt(p.current(), "expected 'const' or 'close'")
+					return
+				}
+				if !p.peek(lexapi.TOKEN_GT) {
+					p.errorAt(p.current(), "expected '>'")
+					return
+				}
+				p.next() // consume '>'
+			}
+			
+			namesWithConst = append(namesWithConst, nameWithConst{
+				name:    name,
+				isConst: isConst,
+				tok:     nameTok,
+			})
+		}
+		
+		if !p.peek(lexapi.TOKEN_COMMA) {
+			break
+		}
+		p.next() // consume ','
+	}
+	
+	// Extract just the names for the stat
+	var names []string
+	var firstTok lexapi.Token
+	for i, nc := range namesWithConst {
+		names = append(names, nc.name)
+		if i == 0 {
+			firstTok = nc.tok
+		}
+	}
+	
 	// Check for assignment
 	if p.peek(lexapi.TOKEN_ASSIGN) {
 		p.next() // consume '='
 		
-		// Parse expression using full expression parser
-		expr, err := p.parseExpr()
-		if err != nil {
-			return
+		// Parse expression list
+		var exprs []astapi.ExpNode
+		for {
+			expr, err := p.parseExpr()
+			if err != nil {
+				return
+			}
+			exprs = append(exprs, expr)
+			if !p.peek(lexapi.TOKEN_COMMA) {
+				break
+			}
+			p.next() // consume ','
 		}
 		
 		stat := &localVarStat{
-			baseNode: baseNode{line: tok.Line, column: tok.Column},
-			names:    []string{name},
-			exprs:    []astapi.ExpNode{expr},
+			baseNode: baseNode{line: firstTok.Line, column: firstTok.Column},
+			names:    names,
+			exprs:    exprs,
 		}
 		p.block.stats = append(p.block.stats, stat)
 	}
@@ -1229,6 +1402,10 @@ func (p *parser) parseGlobal() {
 		} else if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "close" {
 			// Lua 5.4 <close> attribute - just consume
 			p.next() // consume 'close'
+		} else if p.peek(lexapi.TOKEN_CONST) {
+			// "const" is now a keyword
+			isConst = true
+			p.next() // consume 'const'
 		} else {
 			p.errorAt(p.current(), "expected 'const' or 'close'")
 			return
@@ -1259,13 +1436,36 @@ func (p *parser) parseGlobal() {
 		return
 	}
 	
-	// Parse comma-separated name list: global a, b, c [= exprs]
+	// Parse comma-separated name list: global a<const>, b, c [= exprs]
 	for {
 		if p.peek(lexapi.TOKEN_NAME) {
 			name := p.current().Value
 			nameTok := p.current()
 			p.next()
-			
+
+			// Check for per-variable <const> attribute
+			varVarIsConst := isConst // inherit global const flag
+			if p.peek(lexapi.TOKEN_LT) {
+				p.next() // consume '<'
+				if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "const" {
+					varVarIsConst = true
+					p.next() // consume 'const'
+				} else if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "close" {
+					p.next() // consume 'close'
+				} else if p.peek(lexapi.TOKEN_CONST) {
+					varVarIsConst = true
+					p.next() // consume 'const'
+				} else {
+					p.errorAt(p.current(), "expected 'const' or 'close'")
+					return
+				}
+				if !p.peek(lexapi.TOKEN_GT) {
+					p.errorAt(p.current(), "expected '>'")
+					return
+				}
+				p.next() // consume '>'
+			}
+
 			var exprs []astapi.ExpNode
 			if p.peek(lexapi.TOKEN_ASSIGN) {
 				p.next()
@@ -1275,17 +1475,17 @@ func (p *parser) parseGlobal() {
 					return
 				}
 			}
-			
+
 			// Always add stat - even without assignment (declares global without value)
 			stat := &globalVarStat{
 				baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
 				name:     name,
-				isConst:  isConst,
+				isConst:  varVarIsConst,
 				exprs:    exprs,
 			}
 			parentBlock.stats = append(parentBlock.stats, stat)
 		}
-		
+
 		if !p.peek(lexapi.TOKEN_COMMA) {
 			break
 		}
@@ -1319,28 +1519,66 @@ func (p *parser) parseAssignmentOrCall() bool {
 		if p.peek(lexapi.TOKEN_LPAREN) {
 			// Function call: name(args)
 			p.next() // consume '('
-			if p.peek(lexapi.TOKEN_RPAREN) {
-				p.next()
-				stat := &expressionStat{
-					baseNode: baseNode{line: tok.Line, column: tok.Column},
-					expr: &funcCall{
-						baseNode:     baseNode{line: tok.Line, column: tok.Column},
-						func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
-						args_:        []astapi.ExpNode{},
-						numResults:   1,
-					},
+			var args []astapi.ExpNode
+			var callErr error
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				args, callErr = p.parseExprList()
+				if callErr != nil {
+					return false
 				}
-				p.block.stats = append(p.block.stats, stat)
-				return true
-			}
-			args, err := p.parseExprList()
-			if err != nil {
-				return false
 			}
 			if !p.peek(lexapi.TOKEN_RPAREN) {
 				return false
 			}
 			p.next() // consume ')'
+			
+			// Check if this is part of an expression (comparison or field/index access follows)
+			// e.g., "getmetatable(xyz).__close = nil" or "f() == g()"
+			if p.isComparisonOperator() || p.peek(lexapi.TOKEN_DOT) || p.peek(lexapi.TOKEN_LBRACK) || p.peek(lexapi.TOKEN_COLON) {
+				// Build function call expression and let binary ops handle it
+				var expr astapi.ExpNode = &funcCall{
+					baseNode:     baseNode{line: tok.Line, column: tok.Column},
+					func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+					args_:        args,
+					numResults:   1,
+				}
+				// Continue to suffix loop for field/index access, then binary ops
+				expr = p.handleSuffixLoop(expr)
+				
+				// Check if this is an assignment: e.g., "getmetatable(b).__index = 1"
+				if p.peek(lexapi.TOKEN_ASSIGN) {
+					p.next() // consume '='
+					var exprs []astapi.ExpNode
+					for {
+						e, err := p.parseExpr()
+						if err != nil {
+							return false
+						}
+						exprs = append(exprs, e)
+						if !p.peek(lexapi.TOKEN_COMMA) {
+							break
+						}
+						p.next() // consume ','
+					}
+					stat := &assignStat{
+						baseNode: baseNode{line: tok.Line, column: tok.Column},
+						vars:     []astapi.ExpNode{expr},
+						exprs:    exprs,
+					}
+					p.block.stats = append(p.block.stats, stat)
+					return true
+				}
+				
+				fullExpr := p.handleBinaryOps(expr, tok.Line, tok.Column)
+				stat := &expressionStat{
+					baseNode: baseNode{line: tok.Line, column: tok.Column},
+					expr:     fullExpr,
+				}
+				p.block.stats = append(p.block.stats, stat)
+				return true
+			}
+			
+			// Standalone function call statement
 			stat := &expressionStat{
 				baseNode: baseNode{line: tok.Line, column: tok.Column},
 				expr: &funcCall{
@@ -1359,6 +1597,25 @@ func (p *parser) parseAssignmentOrCall() bool {
 			strVal := p.current().Value
 			strTok := p.current()
 			p.next()
+			
+			// Check if comparison operator or suffix follows - if so, this is part of an expression
+			if p.isComparisonOperator() || p.peek(lexapi.TOKEN_DOT) || p.peek(lexapi.TOKEN_LBRACK) || p.peek(lexapi.TOKEN_COLON) {
+				var expr astapi.ExpNode = &funcCall{
+					baseNode:     baseNode{line: tok.Line, column: tok.Column},
+					func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+					args_:        []astapi.ExpNode{&stringExp{baseNode: baseNode{line: strTok.Line, column: strTok.Column}, value: strVal}},
+					numResults:   1,
+				}
+				expr = p.handleSuffixLoop(expr)
+				fullExpr := p.handleBinaryOps(expr, tok.Line, tok.Column)
+				stat := &expressionStat{
+					baseNode: baseNode{line: tok.Line, column: tok.Column},
+					expr:     fullExpr,
+				}
+				p.block.stats = append(p.block.stats, stat)
+				return true
+			}
+			
 			stat := &expressionStat{
 				baseNode: baseNode{line: tok.Line, column: tok.Column},
 				expr: &funcCall{
@@ -1398,17 +1655,47 @@ func (p *parser) parseAssignmentOrCall() bool {
 		// Handle any suffixes (field access, indexing) first
 		left = p.handleSuffixLoop(left)
 
-		// Assignment: x = expr or t.x = expr
+		// Handle comma-separated list of variables for assignment
+		var vars []astapi.ExpNode
+		vars = append(vars, left)
+		for p.peek(lexapi.TOKEN_COMMA) {
+			p.next() // consume ','
+			// Parse the next variable - must be a name or indexed expression
+			var nextVar astapi.ExpNode
+			switch p.current().Type {
+			case lexapi.TOKEN_NAME:
+				nextName := p.current().Value
+				nextTok := p.current()
+				p.next()
+				nextVar = &nameExp{baseNode: baseNode{line: nextTok.Line, column: nextTok.Column}, name: nextName}
+				nextVar = p.handleSuffixLoop(nextVar)
+			default:
+				// Not a valid assignment target
+				return false
+			}
+			vars = append(vars, nextVar)
+		}
+
+		// Assignment: x, y = expr, expr
 		if p.peek(lexapi.TOKEN_ASSIGN) {
 			p.next() // consume '='
-			expr, err := p.parseExpr()
-			if err != nil {
-				return false
+			// Parse comma-separated expression list
+			var exprs []astapi.ExpNode
+			for {
+				expr, err := p.parseExpr()
+				if err != nil {
+					return false
+				}
+				exprs = append(exprs, expr)
+				if !p.peek(lexapi.TOKEN_COMMA) {
+					break
+				}
+				p.next() // consume ','
 			}
 			stat := &assignStat{
 				baseNode: baseNode{line: tok.Line, column: tok.Column},
-				vars:     []astapi.ExpNode{left},
-				exprs:    []astapi.ExpNode{expr},
+				vars:     vars,
+				exprs:    exprs,
 			}
 			p.block.stats = append(p.block.stats, stat)
 			return true
@@ -1516,6 +1803,7 @@ func (p *parser) handleSuffixLoop(expr astapi.ExpNode) astapi.ExpNode {
 				args_:      args,
 				numResults: 1,
 			}
+			continue // End of method call - continue to check for more suffixes
 		case lexapi.TOKEN_LPAREN:
 			// Function call: expr(args)
 			p.next() // consume '('
@@ -1537,6 +1825,13 @@ func (p *parser) handleSuffixLoop(expr astapi.ExpNode) astapi.ExpNode {
 			strVal := p.current().Value
 			strTok := p.current()
 			p.next()
+			
+			// Check if comparison operator follows - if so, this is NOT a function call
+			// Let caller handle the comparison (e.g., "require"string" == ...")
+			if p.isComparisonOperator() {
+				return expr
+			}
+			
 			expr = &funcCall{
 				baseNode:   baseNode{line: strTok.Line, column: strTok.Column},
 				func_:      expr,
@@ -1638,42 +1933,32 @@ func (p *parser) parseReturn() []astapi.ExpNode {
 	
 	var exprs []astapi.ExpNode
 	
-	for !p.peek(lexapi.TOKEN_EOS) && !p.peek(lexapi.TOKEN_SEMICOLON) && !p.peek(lexapi.TOKEN_END) {
-		var expr astapi.ExpNode
-		switch p.current().Type {
-		case lexapi.TOKEN_INTEGER:
-			var val int64
-			fmt.Sscanf(p.current().Value, "%d", &val)
-			expr = &integerExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: val}
+	// Check for empty return
+	if p.peek(lexapi.TOKEN_SEMICOLON) || p.peek(lexapi.TOKEN_END) || p.peek(lexapi.TOKEN_EOS) {
+		// Consume trailing semicolon if present (advances past it)
+		if p.peek(lexapi.TOKEN_SEMICOLON) {
 			p.next()
-		case lexapi.TOKEN_NUMBER:
-			var val float64
-			fmt.Sscanf(p.current().Value, "%f", &val)
-			expr = &floatExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: val}
-			p.next()
-		case lexapi.TOKEN_STRING:
-			expr = &stringExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: p.current().Value}
-			p.next()
-		case lexapi.TOKEN_NIL:
-			expr = &nilExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		case lexapi.TOKEN_TRUE:
-			expr = &trueExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		case lexapi.TOKEN_FALSE:
-			expr = &falseExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		default:
+		}
+		return exprs
+	}
+	
+	// Parse comma-separated expressions
+	for {
+		expr, err := p.parseExpr()
+		if err != nil {
 			break
 		}
-		if expr != nil {
-			exprs = append(exprs, expr)
-		}
-		// Check for comma
+		exprs = append(exprs, expr)
+		
 		if !p.peek(lexapi.TOKEN_COMMA) {
 			break
 		}
 		p.next() // consume comma
+	}
+	
+	// Consume optional trailing semicolon
+	if p.peek(lexapi.TOKEN_SEMICOLON) {
+		p.next()
 	}
 	
 	return exprs
@@ -1850,12 +2135,15 @@ func (p *parser) parseAdd() (astapi.ExpNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	for p.current().Type == lexapi.TOKEN_PLUS || p.current().Type == lexapi.TOKEN_MINUS {
+	for p.current().Type == lexapi.TOKEN_PLUS || p.current().Type == lexapi.TOKEN_MINUS || p.current().Type == lexapi.TOKEN_CONCAT {
 		var op astapi.BinopKind
-		if p.current().Type == lexapi.TOKEN_PLUS {
+		switch p.current().Type {
+		case lexapi.TOKEN_PLUS:
 			op = astapi.BINOP_ADD
-		} else {
+		case lexapi.TOKEN_MINUS:
 			op = astapi.BINOP_SUB
+		case lexapi.TOKEN_CONCAT:
+			op = astapi.BINOP_CONCAT
 		}
 		tok := p.current()
 		p.next()
@@ -1868,8 +2156,28 @@ func (p *parser) parseAdd() (astapi.ExpNode, error) {
 	return left, nil
 }
 
-func (p *parser) parseMul() (astapi.ExpNode, error) {
+// parsePow handles the power operator '^' which has the highest precedence
+// and is right-associative: a^b^c = a^(b^c)
+func (p *parser) parsePow() (astapi.ExpNode, error) {
 	left, err := p.parseUnary()
+	if err != nil {
+		return nil, err
+	}
+	if p.current().Type == lexapi.TOKEN_POW {
+		tok := p.current()
+		p.next()
+		// Right-associative: parsePow instead of parseUnary
+		right, err := p.parsePow()
+		if err != nil {
+			return nil, err
+		}
+		return &binopExp{op: astapi.BINOP_POW, left: left, right: right, baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
+	}
+	return left, nil
+}
+
+func (p *parser) parseMul() (astapi.ExpNode, error) {
+	left, err := p.parsePow()
 	if err != nil {
 		return nil, err
 	}
@@ -1887,7 +2195,7 @@ func (p *parser) parseMul() (astapi.ExpNode, error) {
 		}
 		tok := p.current()
 		p.next()
-		right, err := p.parseUnary()
+		right, err := p.parsePow()
 		if err != nil {
 			return nil, err
 		}
@@ -1916,8 +2224,26 @@ func (p *parser) parseUnary() (astapi.ExpNode, error) {
 		}
 		return &unopExp{op: astapi.UNOP_NEG, exp: exp, baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
 	}
-	// Note: TOKEN_HASH collides with TOKEN_INTEGER (both = 35)
-	// Length operator '#x' is not implemented to avoid false positives
+	if p.current().Type == lexapi.TOKEN_TILDE {
+		// Unary bitwise NOT: ~x
+		tok := p.current()
+		p.next()
+		exp, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &unopExp{op: astapi.UNOP_BNOT, exp: exp, baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
+	}
+	if p.current().Type == lexapi.TOKEN_HASH {
+		// Length operator: #x
+		tok := p.current()
+		p.next()
+		exp, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &unopExp{op: astapi.UNOP_LEN, exp: exp, baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
+	}
 	return p.parsePrimary()
 }
 
@@ -1926,8 +2252,11 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 	var expr astapi.ExpNode
 	var err error
 
-
 	switch p.current().Type {
+	case lexapi.TOKEN_FUNCTION:
+		// Anonymous function expression: function(args) body end
+		expr = p.parseAnonFunction()
+
 	case lexapi.TOKEN_NAME:
 		name := p.current().Value
 		tok := p.current()
@@ -1949,7 +2278,11 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 				return nil, p.errorAt(p.current(), "expected ')'")
 			}
 			p.next()
+			// Parenthesized expression: the inner expr might be a literal,
+			// but we need to allow suffixes on the whole thing like ("hello"):sub(1)
+			// Skip literal early-returns, go directly to suffix handling
 			expr = exp
+			goto handleSuffixes
 		}
 
 	case lexapi.TOKEN_NIL:
@@ -2000,6 +2333,7 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 
 	// For literals (true, false, nil, numbers, strings), return immediately
 	// Only prefix expressions (NAME, LPAREN) can have suffixes
+	// BUT: parenthesized expressions like ("hello") CAN have suffixes
 	if _, ok := expr.(*trueExp); ok {
 		return expr, nil
 	}
@@ -2021,7 +2355,15 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 	if _, ok := expr.(*varargExp); ok {
 		return expr, nil
 	}
+	if _, ok := expr.(*tableConstructor); ok {
+		// Check if it's the "()" empty case
+		if tc, ok := expr.(*tableConstructor); ok && len(tc.arrayFields) == 0 && tc.recordFields == nil {
+			// This is "()" - return immediately
+			return expr, nil
+		}
+	}
 
+handleSuffixes:
 	// Handle suffixes: function calls, index access, field access
 	// Loop to handle chained operations like table.concat({})
 	for {
@@ -2073,7 +2415,7 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 				baseNode:  baseNode{line: p.current().Line, column: p.current().Column},
 			}
 		} else if p.peek(lexapi.TOKEN_COLON) {
-			// Method call: expr:method(args)
+			// Method call: expr:method(args) or expr:method"string" or expr:method{...}
 			p.next() // consume ':'
 			methodName := p.current().Value
 			methodTok := p.current()
@@ -2084,27 +2426,66 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 				key:      &stringExp{baseNode: baseNode{line: methodTok.Line, column: methodTok.Column}, value: methodName},
 				baseNode: baseNode{line: methodTok.Line, column: methodTok.Column},
 			}
-			// Now parse arguments
-			if !p.peek(lexapi.TOKEN_LPAREN) {
-				return nil, p.errorAt(p.current(), "expected '(' after method name")
-			}
-			p.next() // consume '('
+			// Parse arguments (explicit parens, implicit string, or implicit table)
 			var args []astapi.ExpNode
-			if !p.peek(lexapi.TOKEN_RPAREN) {
-				args, err = p.parseExprList()
+			if p.peek(lexapi.TOKEN_LPAREN) {
+				p.next() // consume '('
+				if !p.peek(lexapi.TOKEN_RPAREN) {
+					args, err = p.parseExprList()
+					if err != nil {
+						return nil, err
+					}
+				}
+				if !p.peek(lexapi.TOKEN_RPAREN) {
+					return nil, p.errorAt(p.current(), "expected ')'")
+				}
+				p.next() // consume ')'
+			} else if p.peek(lexapi.TOKEN_STRING) {
+				// Implicit string arg: expr:method"string"
+				args = append(args, &stringExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: p.current().Value})
+				p.next()
+			} else if p.peek(lexapi.TOKEN_LBRACE) {
+				// Implicit table arg: expr:method{...}
+				table, err := p.parseTableConstructor()
 				if err != nil {
 					return nil, err
 				}
+				if table != nil {
+					args = append(args, table)
+				}
+			} else {
+				// No args after method name
+				args = []astapi.ExpNode{}
 			}
-			if !p.peek(lexapi.TOKEN_RPAREN) {
-				return nil, p.errorAt(p.current(), "expected ')'")
-			}
-			p.next() // consume ')'
 			expr = &funcCall{
 				baseNode:   baseNode{line: methodTok.Line, column: methodTok.Column},
 				func_:      methodExpr,
 				args_:      args,
 				numResults:  1,
+			}
+			continue // End of method call - continue to check for more suffixes
+		} else if p.peek(lexapi.TOKEN_STRING) {
+			// Implicit function call with string arg: expr "string"
+			strVal := p.current().Value
+			strTok := p.current()
+			p.next()
+			expr = &funcCall{
+				baseNode:   baseNode{line: strTok.Line, column: strTok.Column},
+				func_:      expr,
+				args_:      []astapi.ExpNode{&stringExp{baseNode: baseNode{line: strTok.Line, column: strTok.Column}, value: strVal}},
+				numResults: 1,
+			}
+		} else if p.peek(lexapi.TOKEN_LBRACE) {
+			// Implicit function call with table arg: expr {1, 2, 3}
+			table, err := p.parseTableConstructor()
+			if err != nil {
+				return nil, err
+			}
+			expr = &funcCall{
+				baseNode:   baseNode{line: p.current().Line, column: p.current().Column},
+				func_:      expr,
+				args_:      []astapi.ExpNode{table},
+				numResults: 1,
 			}
 		} else {
 			// No more suffixes
@@ -2203,6 +2584,54 @@ func (p *parser) parseExprList() ([]astapi.ExpNode, error) {
 		p.next() // consume comma
 	}
 	return exprs, nil
+}
+
+// parseAnonFunction parses an anonymous function expression.
+// function (params) body end
+func (p *parser) parseAnonFunction() astapi.ExpNode {
+	tok := p.current() // 'function' token
+	p.next() // consume 'function'
+	
+	// Anonymous function - no name, just parse parameters and body
+	// Skip to ')' for parameter parsing
+	if p.peek(lexapi.TOKEN_LPAREN) {
+		p.next() // consume '('
+		depth := 1
+		for {
+			if p.peek(lexapi.TOKEN_LPAREN) {
+				depth++
+				p.next()
+			} else if p.peek(lexapi.TOKEN_RPAREN) {
+				depth--
+				p.next()
+				if depth == 0 {
+					break
+				}
+			} else if p.peek(lexapi.TOKEN_EOS) {
+				break
+			} else {
+				p.next()
+			}
+		}
+	}
+	
+	// Parse function body
+	body, _ := p.parseBlock()
+	
+	// Consume 'end'
+	if p.peek(lexapi.TOKEN_END) {
+		p.next()
+	}
+	
+	// Return a funcDefImpl as expression
+	return &funcDefImpl{
+		baseNode:  baseNode{line: tok.Line, column: tok.Column},
+		isLocal:   true, // anonymous functions are local
+		params:    []string{},
+		varArg:    false,
+		block:     body,
+		lastLine:  tok.Line,
+	}
 }
 
 // parsePrimaryExpr parses primary expressions: names, literals, parentheses.
@@ -2321,6 +2750,16 @@ func (p *parser) peek(t lexapi.TokenType) bool {
 // peekNext returns true if the next token matches.
 func (p *parser) peekNext(t lexapi.TokenType) bool {
 	return p.lookahead().Type == t
+}
+
+// isComparisonOperator returns true if current token is a comparison operator.
+// Used to detect cases like "f() == g()" where the call is part of a comparison.
+func (p *parser) isComparisonOperator() bool {
+	switch p.current().Type {
+	case lexapi.TOKEN_EQ, lexapi.TOKEN_NE, lexapi.TOKEN_LT, lexapi.TOKEN_GT, lexapi.TOKEN_LE, lexapi.TOKEN_GE:
+		return true
+	}
+	return false
 }
 
 // expect consumes the current token and errors if it doesn't match.

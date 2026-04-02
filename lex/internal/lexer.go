@@ -210,6 +210,7 @@ func (l *lexer) readIdentifier() (string, int) {
 var keywords = map[string]api.TokenType{
 	"and":      api.TOKEN_AND,
 	"break":    api.TOKEN_BREAK,
+	"const":    api.TOKEN_CONST,
 	"do":       api.TOKEN_DO,
 	"else":     api.TOKEN_ELSE,
 	"elseif":   api.TOKEN_ELSEIF,
