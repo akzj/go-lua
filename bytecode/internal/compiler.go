@@ -6,6 +6,7 @@ import (
 
 	astapi "github.com/akzj/go-lua/ast/api"
 	bcapi "github.com/akzj/go-lua/bytecode/api"
+	opcodes "github.com/akzj/go-lua/opcodes/api"
 )
 
 // =============================================================================
@@ -40,13 +41,130 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 		lastLineDefined: 0,
 		numparams:      0,
 		flag:            0,
-		maxstacksize:   2,
+		maxstacksize:   3,
+		k:               make([]*bcapi.Constant, 0),
+		code:            make([]uint32, 0),
 	}
 
-	_ = block
-	_ = proto
+	fs := &FuncState{
+		Proto: proto,
+		pc:    0,
+		C:     c,
+	}
+
+	// Compile each statement in the block
+	for _, stat := range block.Stats() {
+		if err := fs.compileStat(stat); err != nil {
+			return nil, err
+		}
+	}
+
+	// Add RETURN0 if no return statement
+	if len(proto.code) == 0 {
+		fs.emit(int(opcodes.OP_RETURN0), 0, 0, 0)
+	}
 
 	return proto, nil
+}
+
+// compileStat compiles a single statement.
+func (fs *FuncState) compileStat(stat astapi.StatNode) error {
+	switch stat.Kind() {
+	case astapi.STAT_CALL:
+		return fs.compileCallStat(stat)
+	default:
+		return nil
+	}
+}
+
+// compileCallStat compiles a function call statement.
+func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
+	var call astapi.FuncCall
+	
+	// Try GetExpr first (expressionStat from parser)
+	if exprStat, ok := stat.(interface{ GetExpr() astapi.ExpNode }); ok {
+		if exp := exprStat.GetExpr(); exp != nil {
+			// Check if it is a FuncCall
+			if fc, ok := exp.(astapi.FuncCall); ok {
+				call = fc
+			} else {
+				return fs.errorf("GetExpr returned %T, not FuncCall", exp)
+			}
+		} else {
+			return fs.errorf("GetExpr returned nil")
+		}
+	} else {
+		return fs.errorf("stat does not have GetExpr, type is %T", stat)
+	}
+	
+	if call == nil {
+		return fs.errorf("could not extract function call")
+	}
+	
+	// Get function expression
+	funcExp := call.Func()
+	var funcName string
+	
+	if g, ok := funcExp.(interface{ Name() string }); ok {
+		funcName = g.Name()
+	} else {
+		return fs.errorf("expected NameExp for function, got %T", funcExp)
+	}
+	
+	// Add function name to constants
+	nameIdx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstString, Str: funcName})
+	
+	// Process arguments
+	args := call.Args()
+	
+	// Allocate register for function
+	reg := fs.allocReg()
+	
+	// Emit GETTABUP R(reg), upval[0], K(nameIdx)
+	fs.emitABC(int(opcodes.OP_GETTABUP), reg, 0, nameIdx+256)
+	
+	// Emit arguments
+	for _, arg := range args {
+		argReg := fs.allocReg()
+		fs.addArgLoad(arg, argReg)
+	}
+	
+	// Emit CALL R(reg), nArgs+1, 1
+	fs.emitABC(int(opcodes.OP_CALL), reg, len(args)+1, 1)
+	
+	return nil
+}
+
+// addArgConstant adds an argument as a constant
+func (fs *FuncState) addArgConstant(arg astapi.ExpNode) {
+	if s, ok := arg.(interface{ GetValue() string }); ok {
+		fs.addConstant(&bcapi.Constant{Type: bcapi.ConstString, Str: s.GetValue()})
+	} else if i, ok := arg.(interface{ GetValue() int64 }); ok {
+		fs.addConstant(&bcapi.Constant{Type: bcapi.ConstInteger, Int: i.GetValue()})
+	} else if f, ok := arg.(interface{ GetValue() float64 }); ok {
+		fs.addConstant(&bcapi.Constant{Type: bcapi.ConstFloat, Float: f.GetValue()})
+	}
+}
+
+// addArgLoad emits code to load an argument into a register
+func (fs *FuncState) addArgLoad(arg astapi.ExpNode, reg int) {
+	if s, ok := arg.(interface{ GetValue() string }); ok {
+		idx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstString, Str: s.GetValue()})
+		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
+	} else if i, ok := arg.(interface{ GetValue() int64 }); ok {
+		idx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstInteger, Int: i.GetValue()})
+		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
+	} else if f, ok := arg.(interface{ GetValue() float64 }); ok {
+		idx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstFloat, Float: f.GetValue()})
+		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
+	} else {
+		fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+	}
+}
+
+// emitABC emits an ABC format instruction (alias for emit).
+func (fs *FuncState) emitABC(opcode, a, b, c int) int {
+	return fs.emit(opcode, a, b, c)
 }
 
 // =============================================================================
@@ -68,7 +186,7 @@ type Prototype struct {
 	sizeabslineinfo int
 	lineDefined     int
 	lastLineDefined int
-	k               []*Constant
+	k               []*bcapi.Constant
 	code            []uint32
 	p               []*Prototype
 	upvalues        []*Upvaldesc
@@ -84,10 +202,8 @@ func (p *Prototype) LastLineDefined() int   { return p.lastLineDefined }
 func (p *Prototype) NumParams() uint8       { return p.numparams }
 func (p *Prototype) IsVararg() bool          { return p.flag&1 != 0 }
 func (p *Prototype) MaxStackSize() uint8    { return p.maxstacksize }
-
-// Getters for internal use (avoid interface overhead)
 func (p *Prototype) GetCode() []uint32        { return p.code }
-func (p *Prototype) GetConstants() []*Constant { return p.k }
+func (p *Prototype) GetConstants() []*bcapi.Constant { return p.k }
 func (p *Prototype) GetSubProtos() []*Prototype { return p.p }
 
 // Constant represents a compile-time constant value.
@@ -206,12 +322,17 @@ func (fs *FuncState) emitAsBx(opcode, a, sbx int) int {
 
 // encodeABC encodes an ABC format instruction.
 func encodeABC(opcode, a, b, c int) uint32 {
-	return uint32(opcode) | (uint32(a) << 7) | (uint32(b) << 14) | (uint32(c) << 23)
+	var k int
+	if c >= 256 {
+		k = 1
+		c -= 256
+	}
+	return uint32(opcode) | (uint32(a) << 7) | (uint32(k) << 15) | (uint32(b) << 16) | (uint32(c) << 24)
 }
 
 // encodeABx encodes an ABx format instruction.
 func encodeABx(opcode, a, bx int) uint32 {
-	return uint32(opcode) | (uint32(a) << 7) | (uint32(bx) << 14)
+	return uint32(opcode) | (uint32(a) << 7) | (uint32(bx) << 15)
 }
 
 // encodeAsBx encodes an AsBx format instruction (signed Bx).
@@ -224,35 +345,36 @@ func encodeAsBx(opcode, a, sbx int) uint32 {
 // =============================================================================
 
 // addConstant adds a constant to the constant table.
-func (fs *FuncState) addConstant(c *Constant) int {
+func (fs *FuncState) addConstant(c *bcapi.Constant) int {
 	// Simple linear search for now
 	for i, k := range fs.Proto.k {
-		if k.equals(c) {
+		if k.Type != c.Type {
+			continue
+		}
+		switch c.Type {
+		case bcapi.ConstNil:
 			return i
+		case bcapi.ConstInteger:
+			if k.Int == c.Int {
+				return i
+			}
+		case bcapi.ConstFloat:
+			if k.Float == c.Float {
+				return i
+			}
+		case bcapi.ConstString:
+			if k.Str == c.Str {
+				return i
+			}
+		case bcapi.ConstBool:
+			if k.Int == c.Int {
+				return i
+			}
 		}
 	}
 	idx := len(fs.Proto.k)
 	fs.Proto.k = append(fs.Proto.k, c)
 	return idx
-}
-
-func (c *Constant) equals(other *Constant) bool {
-	if c.Type != other.Type {
-		return false
-	}
-	switch c.Type {
-	case ConstNil:
-		return true
-	case ConstInteger:
-		return c.Int == other.Int
-	case ConstFloat:
-		return c.Float == other.Float
-	case ConstString:
-		return c.Str == other.Str
-	case ConstBool:
-		return c.Int == other.Int
-	}
-	return false
 }
 
 // NewConstInteger creates an integer constant.

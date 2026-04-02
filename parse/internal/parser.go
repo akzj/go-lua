@@ -147,7 +147,10 @@ type assignStat struct {
 	exprs []astapi.ExpNode
 }
 
-func (s *assignStat) IsScopeEnd() bool { return false }
+func (s *assignStat) IsScopeEnd() bool   { return false }
+func (s *assignStat) Kind() astapi.StatKind { return astapi.STAT_ASSIGN }
+func (s *assignStat) GetVars() []astapi.ExpNode { return s.vars }
+func (s *assignStat) GetExprs() []astapi.ExpNode { return s.exprs }
 
 // localVarStat implements local variable declaration.
 type localVarStat struct {
@@ -156,7 +159,8 @@ type localVarStat struct {
 	exprs []astapi.ExpNode
 }
 
-func (s *localVarStat) IsScopeEnd() bool { return false }
+func (s *localVarStat) IsScopeEnd() bool   { return false }
+func (s *localVarStat) Kind() astapi.StatKind { return astapi.STAT_LOCAL_VAR }
 
 // localFuncStat implements local function declaration.
 type localFuncStat struct {
@@ -165,7 +169,8 @@ type localFuncStat struct {
 	func_ astapi.FuncDef
 }
 
-func (s *localFuncStat) IsScopeEnd() bool { return false }
+func (s *localFuncStat) IsScopeEnd() bool   { return false }
+func (s *localFuncStat) Kind() astapi.StatKind { return astapi.STAT_LOCAL_FUNC }
 
 // globalFuncStat implements global function declaration.
 type globalFuncStat struct {
@@ -174,7 +179,8 @@ type globalFuncStat struct {
 	func_ astapi.FuncDef
 }
 
-func (s *globalFuncStat) IsScopeEnd() bool { return true }
+func (s *globalFuncStat) IsScopeEnd() bool   { return true }
+func (s *globalFuncStat) Kind() astapi.StatKind { return astapi.STAT_GLOBAL_FUNC }
 
 // returnStat implements return statement.
 type returnStat struct {
@@ -182,21 +188,34 @@ type returnStat struct {
 	exprs []astapi.ExpNode
 }
 
-func (s *returnStat) IsScopeEnd() bool { return true }
+func (s *returnStat) IsScopeEnd() bool   { return true }
+func (s *returnStat) Kind() astapi.StatKind { return astapi.STAT_RETURN }
 
 // breakStat implements break statement.
 type breakStat struct {
 	baseNode
 }
 
-func (s *breakStat) IsScopeEnd() bool { return true }
+func (s *breakStat) IsScopeEnd() bool   { return true }
+func (s *breakStat) Kind() astapi.StatKind { return astapi.STAT_BREAK }
 
 // emptyStat implements empty statement (semicolon).
 type emptyStat struct {
 	baseNode
 }
 
-func (s *emptyStat) IsScopeEnd() bool { return false }
+func (s *emptyStat) IsScopeEnd() bool   { return false }
+func (s *emptyStat) Kind() astapi.StatKind { return astapi.STAT_EMPTY }
+
+// expressionStat implements function call as statement.
+type expressionStat struct {
+	baseNode
+	expr astapi.ExpNode
+}
+
+func (s *expressionStat) IsScopeEnd() bool   { return false }
+func (s *expressionStat) Kind() astapi.StatKind { return astapi.STAT_CALL }
+func (s *expressionStat) GetExpr() astapi.ExpNode { return s.expr }
 
 type ifStat struct {
 	baseNode
@@ -205,7 +224,8 @@ type ifStat struct {
 	elseBlock astapi.Block
 }
 
-func (s *ifStat) IsScopeEnd() bool { return false }
+func (s *ifStat) IsScopeEnd() bool   { return false }
+func (s *ifStat) Kind() astapi.StatKind { return astapi.STAT_IF }
 
 type whileStat struct {
 	baseNode
@@ -213,14 +233,16 @@ type whileStat struct {
 	block    astapi.Block
 }
 
-func (s *whileStat) IsScopeEnd() bool { return false }
+func (s *whileStat) IsScopeEnd() bool   { return false }
+func (s *whileStat) Kind() astapi.StatKind { return astapi.STAT_WHILE }
 
 type doStat struct {
 	baseNode
 	block astapi.Block
 }
 
-func (s *doStat) IsScopeEnd() bool { return false }
+func (s *doStat) IsScopeEnd() bool   { return false }
+func (s *doStat) Kind() astapi.StatKind { return astapi.STAT_ASSIGN } // do-stat treated as block
 
 type repeatStat struct {
 	baseNode
@@ -228,7 +250,8 @@ type repeatStat struct {
 	condition astapi.ExpNode
 }
 
-func (s *repeatStat) IsScopeEnd() bool { return true }
+func (s *repeatStat) IsScopeEnd() bool   { return true }
+func (s *repeatStat) Kind() astapi.StatKind { return astapi.STAT_REPEAT }
 
 type forNumStat struct {
 	baseNode
@@ -239,7 +262,8 @@ type forNumStat struct {
 	block astapi.Block
 }
 
-func (s *forNumStat) IsScopeEnd() bool { return false }
+func (s *forNumStat) IsScopeEnd() bool   { return false }
+func (s *forNumStat) Kind() astapi.StatKind { return astapi.STAT_FOR_NUM }
 
 type forInStat struct {
 	baseNode
@@ -248,7 +272,8 @@ type forInStat struct {
 	block astapi.Block
 }
 
-func (s *forInStat) IsScopeEnd() bool { return false }
+func (s *forInStat) IsScopeEnd() bool   { return false }
+func (s *forInStat) Kind() astapi.StatKind { return astapi.STAT_FOR_IN }
 
 // =============================================================================
 // Expression Implementation Helpers
@@ -260,6 +285,7 @@ type nilExp struct {
 }
 
 func (e *nilExp) IsConstant() bool { return true }
+func (e *nilExp) Kind() astapi.ExpKind { return astapi.EXP_NIL }
 
 // trueExp implements true constant.
 type trueExp struct {
@@ -267,6 +293,7 @@ type trueExp struct {
 }
 
 func (e *trueExp) IsConstant() bool { return true }
+func (e *trueExp) Kind() astapi.ExpKind { return astapi.EXP_TRUE }
 
 // falseExp implements false constant.
 type falseExp struct {
@@ -274,6 +301,7 @@ type falseExp struct {
 }
 
 func (e *falseExp) IsConstant() bool { return true }
+func (e *falseExp) Kind() astapi.ExpKind { return astapi.EXP_FALSE }
 
 type indexExpr struct {
 	baseNode
@@ -282,6 +310,7 @@ type indexExpr struct {
 }
 
 func (e *indexExpr) IsConstant() bool { return false }
+func (e *indexExpr) Kind() astapi.ExpKind { return astapi.EXP_INDEXED }
 
 // integerExp implements integer literal.
 type integerExp struct {
@@ -290,6 +319,8 @@ type integerExp struct {
 }
 
 func (e *integerExp) IsConstant() bool { return true }
+func (e *integerExp) Kind() astapi.ExpKind { return astapi.EXP_KINTEGER }
+func (e *integerExp) GetValue() int64 { return e.value }
 
 // floatExp implements float literal.
 type floatExp struct {
@@ -298,6 +329,8 @@ type floatExp struct {
 }
 
 func (e *floatExp) IsConstant() bool { return true }
+func (e *floatExp) Kind() astapi.ExpKind { return astapi.EXP_KFLOAT }
+func (e *floatExp) GetValue() float64 { return e.value }
 
 // stringExp implements string literal.
 type stringExp struct {
@@ -306,6 +339,8 @@ type stringExp struct {
 }
 
 func (e *stringExp) IsConstant() bool { return true }
+func (e *stringExp) Kind() astapi.ExpKind { return astapi.EXP_KSTRING }
+func (e *stringExp) GetValue() string { return e.value }
 
 // nameExp implements variable name.
 type nameExp struct {
@@ -314,6 +349,9 @@ type nameExp struct {
 }
 
 func (e *nameExp) IsConstant() bool { return false }
+func (e *nameExp) Kind() astapi.ExpKind { return astapi.EXP_GLOBAL }
+func (e *nameExp) GetName() string { return e.name }
+func (e *nameExp) Name() string { return e.name }
 
 // varargExp implements vararg expression.
 type varargExp struct {
@@ -321,6 +359,7 @@ type varargExp struct {
 }
 
 func (e *varargExp) IsConstant() bool { return false }
+func (e *varargExp) Kind() astapi.ExpKind { return astapi.EXP_VARARG }
 
 // binopExp implements binary operation.
 type binopExp struct {
@@ -333,6 +372,7 @@ type binopExp struct {
 func (e *binopExp) IsConstant() bool {
 	return e.left.IsConstant() && e.right.IsConstant()
 }
+func (e *binopExp) Kind() astapi.ExpKind { return astapi.EXP_CALL } // relocatable after emit
 
 // unopExp implements unary operation.
 type unopExp struct {
@@ -344,6 +384,7 @@ type unopExp struct {
 func (e *unopExp) IsConstant() bool {
 	return e.exp.IsConstant()
 }
+func (e *unopExp) Kind() astapi.ExpKind { return astapi.EXP_NONRELOC }
 
 // tableConstructor implements table literal.
 type tableConstructor struct {
@@ -362,6 +403,7 @@ func (t *tableConstructor) AddRecordField(k, v astapi.ExpNode) {
 	t.recordFields = append(t.recordFields, struct{ Key, Value astapi.ExpNode }{k, v})
 }
 func (t *tableConstructor) IsConstant() bool { return false }
+func (t *tableConstructor) Kind() astapi.ExpKind { return astapi.EXP_NONRELOC }
 
 // funcCall implements function call.
 type funcCall struct {
@@ -375,6 +417,10 @@ func (f *funcCall) Func() astapi.ExpNode         { return f.func_ }
 func (f *funcCall) Args() []astapi.ExpNode       { return f.args_ }
 func (f *funcCall) NumResults() int              { return f.numResults }
 func (f *funcCall) IsConstant() bool             { return false }
+func (f *funcCall) Kind() astapi.ExpKind         { return astapi.EXP_CALL }
+func (f *funcCall) GetFunc() astapi.ExpNode      { return f.func_ }
+func (f *funcCall) GetArgs() []astapi.ExpNode    { return f.args_ }
+func (f *funcCall) GetNumResults() int           { return f.numResults }
 
 // =============================================================================
 // Block Parsing
@@ -717,44 +763,101 @@ func (p *parser) parseAssignmentOrCall() bool {
 	tok := p.current()
 	p.next()
 
+	// Check what follows the name
+	if p.peek(lexapi.TOKEN_LPAREN) {
+		// Function call: name(args)
+		p.next() // consume '('
+		// Check for empty call: name()
+		if p.peek(lexapi.TOKEN_RPAREN) {
+			p.next()
+			stat := &expressionStat{
+				baseNode: baseNode{line: tok.Line, column: tok.Column},
+				expr: &funcCall{
+					baseNode:     baseNode{line: tok.Line, column: tok.Column},
+					func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+					args_:        []astapi.ExpNode{},
+					numResults:   1,
+				},
+			}
+			p.block.stats = append(p.block.stats, stat)
+			return true
+		}
+		// Parse argument list
+		args, err := p.parseExprList()
+		if err != nil {
+			return false
+		}
+		if !p.peek(lexapi.TOKEN_RPAREN) {
+			return false
+		}
+		p.next() // consume ')'
+		
+		stat := &expressionStat{
+			baseNode: baseNode{line: tok.Line, column: tok.Column},
+			expr: &funcCall{
+				baseNode:     baseNode{line: tok.Line, column: tok.Column},
+				func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+				args_:        args,
+				numResults:   1,
+			},
+		}
+		p.block.stats = append(p.block.stats, stat)
+		return true
+	}
+
 	// Assignment: x = expr
 	if p.peek(lexapi.TOKEN_ASSIGN) {
 		p.next()
 		
-		// Parse integer literal only
-		var expr astapi.ExpNode
-		switch p.current().Type {
-		case lexapi.TOKEN_INTEGER:
-			var val int64
-			fmt.Sscanf(p.current().Value, "%d", &val)
-			expr = &integerExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: val}
-			p.next()
-		case lexapi.TOKEN_NUMBER:
-			var val float64
-			fmt.Sscanf(p.current().Value, "%f", &val)
-			expr = &floatExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: val}
-			p.next()
-		case lexapi.TOKEN_STRING:
-			expr = &stringExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: p.current().Value}
-			p.next()
-		case lexapi.TOKEN_NIL:
-			expr = &nilExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		case lexapi.TOKEN_TRUE:
-			expr = &trueExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		case lexapi.TOKEN_FALSE:
-			expr = &falseExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		default:
-			// Can't parse this expression type
+		// Parse expression using full expression parser (handles binary ops)
+		expr, err := p.parseExpr()
+		if err != nil {
 			return false
 		}
-
+		
 		stat := &assignStat{
 			baseNode: baseNode{line: tok.Line, column: tok.Column},
 			vars:     []astapi.ExpNode{&nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}},
 			exprs:    []astapi.ExpNode{expr},
+		}
+		p.block.stats = append(p.block.stats, stat)
+		return true
+	}
+
+	// String argument without parentheses: print "hello"
+	if p.peek(lexapi.TOKEN_STRING) {
+		strVal := p.current().Value
+		strTok := p.current()
+		p.next()
+		
+		stat := &expressionStat{
+			baseNode: baseNode{line: tok.Line, column: tok.Column},
+			expr: &funcCall{
+				baseNode:     baseNode{line: tok.Line, column: tok.Column},
+				func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+				args_:        []astapi.ExpNode{&stringExp{baseNode: baseNode{line: strTok.Line, column: strTok.Column}, value: strVal}},
+				numResults:   1,
+			},
+		}
+		p.block.stats = append(p.block.stats, stat)
+		return true
+	}
+
+	// Table argument: print {1, 2, 3}
+	if p.peek(lexapi.TOKEN_LBRACE) {
+		table, err := p.parseTableConstructor()
+		if err != nil {
+			return false
+		}
+		
+		stat := &expressionStat{
+			baseNode: baseNode{line: tok.Line, column: tok.Column},
+			expr: &funcCall{
+				baseNode:     baseNode{line: tok.Line, column: tok.Column},
+				func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+				args_:        []astapi.ExpNode{table},
+				numResults:   1,
+			},
 		}
 		p.block.stats = append(p.block.stats, stat)
 		return true
@@ -1077,20 +1180,126 @@ func (p *parser) parseTableConstructor() (astapi.ExpNode, error) {
 	return tc, nil
 }
 
+// parseExprList parses a comma-separated list of expressions.
+// Returns at least one expression, or error.
+func (p *parser) parseExprList() ([]astapi.ExpNode, error) {
+	exprs := []astapi.ExpNode{}
+	for {
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+		if !p.peek(lexapi.TOKEN_COMMA) {
+			break
+		}
+		p.next() // consume comma
+	}
+	return exprs, nil
+}
+
 // parsePrimaryExpr parses primary expressions: names, literals, parentheses.
 func (p *parser) parsePrimaryExpr() (astapi.ExpNode, error) {
-	panic("TODO: parsePrimaryExpr")
+	switch p.current().Type {
+	case lexapi.TOKEN_NAME:
+		name := p.current().Value
+		tok := p.current()
+		p.next()
+		return &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}, nil
+	case lexapi.TOKEN_LPAREN:
+		p.next()
+		exp, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if !p.peek(lexapi.TOKEN_RPAREN) {
+			return nil, p.errorAt(p.current(), "expected ')'")
+		}
+		p.next()
+		return exp, nil
+	default:
+		return nil, p.errorAt(p.current(), "expected expression")
+	}
 }
 
 // parseArgs parses function arguments: '(' [exprlist] ')' | table | string
 func (p *parser) parseArgs() ([]astapi.ExpNode, error) {
-	panic("TODO: parseArgs")
+	switch p.current().Type {
+	case lexapi.TOKEN_LPAREN:
+		p.next() // consume '('
+		// Check for empty call: f()
+		if p.peek(lexapi.TOKEN_RPAREN) {
+			p.next()
+			return []astapi.ExpNode{}, nil
+		}
+		args, err := p.parseExprList()
+		if err != nil {
+			return nil, err
+		}
+		if !p.peek(lexapi.TOKEN_RPAREN) {
+			return nil, p.errorAt(p.current(), "expected ')'")
+		}
+		p.next()
+		return args, nil
+	case lexapi.TOKEN_LBRACE:
+		// Table argument: f({...})
+		table, err := p.parseTableConstructor()
+		if err != nil {
+			return nil, err
+		}
+		return []astapi.ExpNode{table}, nil
+	case lexapi.TOKEN_STRING:
+		// String argument: f"literal"
+		tok := p.current()
+		p.next()
+		return []astapi.ExpNode{&stringExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: tok.Value}}, nil
+	default:
+		return nil, p.errorAt(p.current(), "expected function arguments")
+	}
 }
 
 // parseFunctionCall parses a function call: prefix name args / prefix : name args
 // Why separate from prefix? Method calls obj:method(args) need to parse ':' after prefix.
 func (p *parser) parseFunctionCall(prefix astapi.ExpNode) (astapi.ExpNode, error) {
-	panic("TODO: parseFunctionCall")
+	tok := p.current()
+	var funcNode astapi.ExpNode = prefix
+
+	// Check for method call: obj:method()
+	if p.peek(lexapi.TOKEN_COLON) {
+		p.next()
+		methodName := p.current().Value
+		methodTok := p.current()
+		p.next()
+		// Build obj.method expression
+		funcNode = &indexExpr{
+			table: prefix,
+			key:   &stringExp{baseNode: baseNode{line: methodTok.Line, column: methodTok.Column}, value: methodName},
+			baseNode: baseNode{line: tok.Line, column: tok.Column},
+		}
+	} else if p.peek(lexapi.TOKEN_NAME) {
+		// Direct function call: prefix.name()
+		name := p.current().Value
+		nameTok := p.current()
+		p.next()
+		funcNode = &indexExpr{
+			table: prefix,
+			key:   &stringExp{baseNode: baseNode{line: nameTok.Line, column: nameTok.Column}, value: name},
+			baseNode: baseNode{line: tok.Line, column: tok.Column},
+		}
+	}
+
+	// Parse arguments
+	args, err := p.parseArgs()
+	if err != nil {
+		return nil, err
+	}
+
+	return &funcCall{
+		baseNode:  baseNode{line: tok.Line, column: tok.Column},
+		func_:     funcNode,
+		args_:     args,
+		numResults: 1,
+	}, nil
 }
 
 // =============================================================================

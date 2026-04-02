@@ -38,8 +38,30 @@ func (e *Executor) SetKValues(kvalues []types.TValue) {
 
 // PushFrame pushes a new frame onto the stack
 func (e *Executor) PushFrame(frame vmapi.StackFrame) {
+	// Try to get internal Frame
 	if f, ok := frame.(*Frame); ok {
 		e.frames = append(e.frames, f)
+		return
+	}
+	
+	// For external StackFrame implementations, create a wrapper
+	e.frames = append(e.frames, NewFrameWrapper(frame))
+}
+
+// NewFrameWrapper creates a Frame from an external StackFrame
+func NewFrameWrapper(frame vmapi.StackFrame) *Frame {
+	// Try to get kvalues from the frame if it has them
+	var kvalues []types.TValue
+	if kf, ok := frame.(interface{ KValues() []types.TValue }); ok {
+		kvalues = kf.KValues()
+	}
+	return &Frame{
+		Closure: frame.Func(),
+		base:    frame.Base(),
+		savedPC: frame.PC(),
+		prev:    nil,
+		kvalues: kvalues,
+		upvals:  nil,
 	}
 }
 

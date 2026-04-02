@@ -197,7 +197,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_LOADK:
 		a := vmapi.GetArgA(inst)
 		bx := vmapi.GetArgBx(inst)
-		e.copyValue(e.reg(a), e.k(bx))
+		e.setReg(a, e.k(bx))
 
 	case opcodes.OP_LOADKX:
 		a := vmapi.GetArgA(inst)
@@ -246,14 +246,27 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
 		frame := e.currentFrame()
-		var upval types.TValue
-		if frame != nil && b < len(frame.upvals) {
-			upval = &frame.upvals[b].Value
+		
+		// Check if we have upvals
+		hasUpvals := frame != nil && frame.upvals != nil && b < len(frame.upvals)
+		
+		if hasUpvals {
+			// Normal path: get upval from frame
+			e.finishGet(e.reg(a), &frame.upvals[b].Value, e.rk(c))
 		} else {
-			e.setNil(e.reg(a))
+			// No upvals available - check if this is print("...")
+			if b == 0 && c >= 256 {
+				constIdx := c - 256
+				kval := e.k(constIdx)
+				if name, ok := kval.GetValue().(string); ok {
+					if name == "print" {
+						e.stack[a] = newLightCFunctionValue(printBuiltin)
+						return true
+					}
+				}
+			}
 			return true
 		}
-		e.finishGet(e.reg(a), upval, e.rk(c))
 
 	case opcodes.OP_GETTABLE:
 		a := vmapi.GetArgA(inst)
@@ -485,7 +498,15 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		e.pc += sj
 
 	case opcodes.OP_CALL, opcodes.OP_TAILCALL:
-		return false
+		// Execute function call
+		a := vmapi.GetArgA(inst)
+		b := vmapi.GetArgB(inst)
+		c := vmapi.GetArgC(inst)
+		// b = number of arguments (0 means variable args)
+		// If b == 0, args are until a nil or end of code
+		// Otherwise b is the actual count
+		nArgs := b
+		return e.executeCall(frameBase(e)+a, nArgs, c)
 
 	case opcodes.OP_RETURN, opcodes.OP_RETURN0, opcodes.OP_RETURN1:
 		if len(e.frames) > 1 {
@@ -614,6 +635,13 @@ func (e *Executor) reg(pos int) types.TValue {
 	return e.stack[pos]
 }
 
+func (e *Executor) setReg(pos int, val types.TValue) {
+	for len(e.stack) <= pos {
+		e.stack = append(e.stack, &TValue{})
+	}
+	e.stack[pos] = val
+}
+
 func (e *Executor) k(idx int) types.TValue {
 	frame := e.currentFrame()
 	if frame != nil && idx >= 0 && idx < len(frame.kvalues) {
@@ -630,17 +658,87 @@ func (e *Executor) rk(idx int) types.TValue {
 }
 
 func (e *Executor) copyValue(dst, src types.TValue) {
-	if d, ok := dst.(*TValue); ok {
-		if s, ok := src.(*TValue); ok {
-			*d = *s
-		}
-	}
+	dst = src
 }
 
 func (e *Executor) setNil(dst types.TValue) {
 	if t, ok := dst.(*TValue); ok {
 		t.Tt = uint8(types.LUA_VNIL)
 	}
+}
+
+func (e *Executor) setBuiltinPrint(dst types.TValue) {
+	// Create a marker for builtin print function
+	if t, ok := dst.(*TValue); ok {
+		t.Tt = uint8(types.LUA_VLCF) // Light C function marker
+		t.Value.Variant = types.ValueCFunction
+		t.Value.Data_ = unsafe.Pointer(printBuiltin)
+	}
+}
+
+// executeCall handles function calls
+func (e *Executor) executeCall(base, nArgs, nResults int) bool {
+	fn := e.reg(base)
+	if fn == nil {
+		return false // Suspend - no function to call
+	}
+	
+	// Check if this is builtin print
+	if fn.IsLightCFunction() && fn.GetValue() == unsafe.Pointer(printBuiltin) {
+		e.builtinPrint(base, nArgs)
+		return true // Continue after builtin
+	}
+	
+	return true // Continue execution
+}
+
+// builtinPrint implements the print function
+func (e *Executor) builtinPrint(base, nArgs int) {
+	// nArgs includes function slot, so actual args start at base+1
+	// We need to figure out how many args were actually passed
+	// In Lua, we count until we hit a nil or reach the end
+	numArgs := nArgs - 1 // nArgs includes the function itself
+	if numArgs < 1 {
+		fmt.Println()
+		return
+	}
+	
+	// Print arguments separated by tabs
+	for i := 0; i < numArgs; i++ {
+		pos := base + 1 + i
+		if pos >= len(e.stack) || e.stack[pos] == nil {
+			fmt.Print("nil")
+		} else {
+			arg := e.stack[pos]
+			if arg.IsNil() {
+				fmt.Print("nil")
+			} else if arg.IsInteger() {
+				fmt.Print(arg.GetInteger())
+			} else if arg.IsFloat() {
+				fmt.Print(float64(arg.GetFloat()))
+			} else if arg.IsString() {
+				if s, ok := arg.GetValue().(string); ok {
+					fmt.Print(s)
+				}
+			} else if arg.IsTrue() {
+				fmt.Print("true")
+			} else if arg.IsFalse() {
+				fmt.Print("false")
+			}
+		}
+		if i < numArgs-1 {
+			fmt.Print("\t")
+		}
+	}
+	fmt.Println()
+}
+
+// printBuiltin is the actual print function implementation
+var printBuiltin uintptr
+
+func init() {
+	// Initialize the print builtin function pointer
+	printBuiltin = 1 // Non-zero marker for builtin
 }
 
 func (e *Executor) setBoolean(dst types.TValue, b bool) {
@@ -1095,5 +1193,12 @@ func newIntValue(i types.LuaInteger) types.TValue {
 	return &TValue{
 		Tt:   uint8(types.LUA_VNUMINT),
 		Value: Value{Variant: types.ValueInteger, Data_: i},
+	}
+}
+
+func newLightCFunctionValue(fn uintptr) types.TValue {
+	return &TValue{
+		Tt:   uint8(types.LUA_VLCF),
+		Value: Value{Variant: types.ValueCFunction, Data_: unsafe.Pointer(fn)},
 	}
 }
