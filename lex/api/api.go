@@ -38,7 +38,7 @@ const (
 	TOKEN_UNTIL
 	TOKEN_WHILE
 
-	// Multi-char operators
+	// Multi-char operators (iota from TOKEN_IDIV=27)
 	TOKEN_IDIV   // //
 	TOKEN_CONCAT // ..
 	TOKEN_DOTS   // ...
