@@ -298,6 +298,7 @@ func (l *lexer) skipSepForClose(sep int) bool {
 	if l.current() != ']' {
 		return false
 	}
+	savedPos := l.pos
 	l.advance() // skip past the ']'
 
 	count := 0
@@ -311,8 +312,8 @@ func (l *lexer) skipSepForClose(sep int) bool {
 		return true
 	}
 
-	// No match — restore position
-	l.pos -= 1 + count // undo advances
+	// No match — restore position to before the ']'
+	l.pos = savedPos
 	return false
 }
 
@@ -339,12 +340,8 @@ func (l *lexer) readLongString(sep int) string {
 		if c == ']' {
 			// Check for closing delimiter
 			if l.skipSepForClose(sep) {
-				// Closing delimiter found!
-				s := sb.String()
-				if len(s) > 0 {
-					return s[1:]
-				}
-				return ""
+				// Closing delimiter found! skipSepForClose already consumed it.
+				return sb.String()
 			}
 			// Not a closing delimiter, treat ']' as content.
 			sb.WriteByte(byte(c))
