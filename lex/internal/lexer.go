@@ -276,23 +276,21 @@ func (l *lexer) skipSep() (int, bool) {
 	// Save position of opening bracket
 	savedPos := l.pos
 	l.advance() // move past opening bracket
-	
+
 	count := 0
-	// Count '=' signs WITHOUT advancing past the closing bracket
+	// Count '=' signs
 	for l.current() == '=' {
 		l.advance()
 		count++
 	}
-	
-	
-	// Check if closing bracket matches
+
+	// Match: closing bracket is the SAME bracket type
 	if l.current() == start {
-		// Found matching closing bracket - advance past it
-		l.advance()
+		l.advance() // consume the closing bracket
 		return count + 2, true
 	}
-	
-	// No match - restore to opening bracket
+
+	// No match — restore to opening bracket
 	l.pos = savedPos
 	if start == '[' && count == 0 {
 		// [[ without ]] - return 1 for single [
@@ -323,6 +321,7 @@ func (l *lexer) skipSepForClose(sep int) bool {
 
 	// Match only if '=' count matches exactly AND closing ']' follows.
 	if l.current() == ']' && count+2 == sep {
+		l.advance() // consume the closing ']' so lexer continues past it
 		return true
 	}
 
