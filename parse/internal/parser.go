@@ -8,6 +8,7 @@ import (
 	lexapi "github.com/akzj/go-lua/lex/api"
 	lexpackage "github.com/akzj/go-lua/lex"
 	parseapi "github.com/akzj/go-lua/parse/api"
+	typesapi "github.com/akzj/go-lua/types/api"
 )
 
 // =============================================================================
@@ -505,7 +506,7 @@ func (p *parser) parseStatement() bool {
 		// Control flow - ends block
 		return false
 
-	case lexapi.TOKEN_END, lexapi.TOKEN_EOS, lexapi.TOKEN_ELSEIF, lexapi.TOKEN_ELSE:
+	case lexapi.TOKEN_END, lexapi.TOKEN_EOS, lexapi.TOKEN_ELSEIF, lexapi.TOKEN_ELSE, lexapi.TOKEN_UNTIL:
 		// End markers - ends block
 		return false
 
@@ -521,19 +522,73 @@ func (p *parser) parseStatement() bool {
 
 func (p *parser) parseIf() {
 	p.next() // consume 'if'
-	// For basic test: condition is just true/nil literal
-	// Create dummy condition
-	cond := &trueExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-	// Skip to 'then'
-	for !p.peek(lexapi.TOKEN_THEN) {
-		p.next()
+	
+	// Save parent block reference before parsing nested blocks
+	parentBlock := p.block
+	
+	// Parse condition
+	cond, err := p.parseExpr()
+	if err != nil {
+		return
+	}
+	
+	if !p.peek(lexapi.TOKEN_THEN) {
+		p.errorAt(p.current(), "'then' expected")
+		return
 	}
 	p.next() // consume 'then'
-	// Create then block
-	thenBlock := &blockImpl{line: p.current().Line, column: p.current().Column, stats: []astapi.StatNode{}}
-	// Skip to 'end'
-	for !p.peek(lexapi.TOKEN_END) {
-		p.next()
+	
+	// Parse then block
+	thenBlock, err := p.parseBlock()
+	p.block = parentBlock // Restore parent block reference
+	if err != nil {
+		return
+	}
+	
+	// Handle elseif/else chain
+	var elseBlock astapi.Block = nil
+	
+	for p.peek(lexapi.TOKEN_ELSEIF) {
+		// Parse elseif block
+		p.next() // consume 'elseif'
+		elseIfCond, err := p.parseExpr()
+		if err != nil {
+			return
+		}
+		if !p.peek(lexapi.TOKEN_THEN) {
+			p.errorAt(p.current(), "'then' expected")
+			return
+		}
+		p.next() // consume 'then'
+		elseIfBlock, err := p.parseBlock()
+		if err != nil {
+			return
+		}
+		// Create nested if for elseif
+		nestedIf := &ifStat{
+			baseNode: baseNode{line: p.current().Line, column: p.current().Column},
+			condition: elseIfCond,
+			thenBlock: elseIfBlock,
+			elseBlock: elseBlock, // chain to previous elseBlock
+		}
+		elseBlock = &blockImpl{
+			line:   p.current().Line,
+			column: p.current().Column,
+			stats:  []astapi.StatNode{nestedIf},
+		}
+	}
+	
+	if p.peek(lexapi.TOKEN_ELSE) {
+		p.next() // consume 'else'
+		elseBlock, err = p.parseBlock()
+		if err != nil {
+			return
+		}
+	}
+	
+	if !p.peek(lexapi.TOKEN_END) {
+		p.errorAt(p.current(), "'end' expected")
+		return
 	}
 	p.next() // consume 'end'
 	
@@ -541,9 +596,61 @@ func (p *parser) parseIf() {
 		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
 		condition: cond,
 		thenBlock: thenBlock,
-		elseBlock: nil,
+		elseBlock: elseBlock,
 	}
-	p.block.stats = append(p.block.stats, stat)
+	// Use saved parent block reference
+		parentBlock.stats = append(parentBlock.stats, stat)
+}
+
+// parseElseIfChain handles elseif/else clauses after the then block
+func (p *parser) parseElseIfChain() (astapi.Block, error) {
+	block := &blockImpl{
+		line:   p.current().Line,
+		column: p.current().Column,
+		stats:  []astapi.StatNode{},
+	}
+	
+	for p.peek(lexapi.TOKEN_ELSEIF) || p.peek(lexapi.TOKEN_ELSE) {
+		if p.peek(lexapi.TOKEN_ELSEIF) {
+			p.next() // consume 'elseif'
+			cond, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if !p.peek(lexapi.TOKEN_THEN) {
+				p.errorAt(p.current(), "'then' expected")
+				return nil, p.errorAt(p.current(), "'then' expected")
+			}
+			p.next() // consume 'then'
+			elseIfBlock, err := p.parseBlock()
+			if err != nil {
+				return nil, err
+			}
+			// Create nested if statement for elseif
+			nestedIf := &ifStat{
+				baseNode: baseNode{line: p.current().Line, column: p.current().Column},
+				condition: cond,
+				thenBlock: elseIfBlock,
+				elseBlock: nil,
+			}
+			block.stats = append(block.stats, nestedIf)
+			continue
+		}
+		if p.peek(lexapi.TOKEN_ELSE) {
+			p.next() // consume 'else'
+			elseBlock, err := p.parseBlock()
+			if err != nil {
+				return nil, err
+			}
+			block.stats = append(block.stats, &doStat{
+				baseNode: baseNode{line: p.current().Line, column: p.current().Column},
+				block:    elseBlock,
+			})
+			break
+		}
+	}
+	
+	return block, nil
 }
 
 // =============================================================================
@@ -552,22 +659,42 @@ func (p *parser) parseIf() {
 
 func (p *parser) parseWhile() {
 	p.next() // consume 'while'
-	cond := &trueExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-	for !p.peek(lexapi.TOKEN_DO) {
-		p.next()
+	
+	// Save parent block reference
+	parentBlock := p.block
+	
+	// Parse condition
+	cond, err := p.parseExpr()
+	if err != nil {
+		return
+	}
+	
+	if !p.peek(lexapi.TOKEN_DO) {
+		p.errorAt(p.current(), "'do' expected")
+		return
 	}
 	p.next() // consume 'do'
-	body := &blockImpl{line: p.current().Line, column: p.current().Column, stats: []astapi.StatNode{}}
-	for !p.peek(lexapi.TOKEN_END) {
-		p.next()
+	
+	// Parse body block
+	body, err := p.parseBlock()
+	p.block = parentBlock // Restore parent block reference
+	if err != nil {
+		return
+	}
+	
+	if !p.peek(lexapi.TOKEN_END) {
+		p.errorAt(p.current(), "'end' expected")
+		return
 	}
 	p.next() // consume 'end'
+	
 	stat := &whileStat{
 		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
 		condition: cond,
 		block: body,
 	}
-	p.block.stats = append(p.block.stats, stat)
+	// Use saved parent block reference
+	parentBlock.stats = append(parentBlock.stats, stat)
 }
 
 // =============================================================================
@@ -576,16 +703,29 @@ func (p *parser) parseWhile() {
 
 func (p *parser) parseDo() {
 	p.next() // consume 'do'
-	body := &blockImpl{line: p.current().Line, column: p.current().Column, stats: []astapi.StatNode{}}
-	for !p.peek(lexapi.TOKEN_END) {
-		p.next()
+	
+	// Save parent block reference
+	parentBlock := p.block
+	
+	// Parse body block
+	body, err := p.parseBlock()
+	p.block = parentBlock // Restore parent block reference
+	if err != nil {
+		return
+	}
+	
+	if !p.peek(lexapi.TOKEN_END) {
+		p.errorAt(p.current(), "'end' expected")
+		return
 	}
 	p.next() // consume 'end'
+	
 	stat := &doStat{
 		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
 		block: body,
 	}
-	p.block.stats = append(p.block.stats, stat)
+	// Use saved parent block reference
+	parentBlock.stats = append(parentBlock.stats, stat)
 }
 
 // =============================================================================
@@ -595,51 +735,128 @@ func (p *parser) parseDo() {
 
 func (p *parser) parseFor() {
 	p.next() // consume 'for'
+	
+	nameTok := p.current()
+	if !p.peek(lexapi.TOKEN_NAME) {
+		p.errorAt(p.current(), "variable name expected")
+		return
+	}
 	name := p.current().Value
-	p.next() // skip var name
+	p.next()
+	
+	// Save parent block reference
+	parentBlock := p.block
 
 	// Check if numeric or generic for
 	if p.peek(lexapi.TOKEN_ASSIGN) {
 		// Numeric for: for name = start, stop [, step] do body end
-		p.next() // skip '='
-		// Skip to 'do'
-		for !p.peek(lexapi.TOKEN_DO) {
-			p.next()
+		p.next() // consume '='
+		
+		start, err := p.parseExpr()
+		if err != nil {
+			return
+		}
+		
+		if !p.peek(lexapi.TOKEN_COMMA) {
+			p.errorAt(p.current(), "',' expected")
+			return
+		}
+		p.next() // consume ','
+		
+		stop, err := p.parseExpr()
+		if err != nil {
+			return
+		}
+		
+		var step astapi.ExpNode = nil
+		if p.peek(lexapi.TOKEN_COMMA) {
+			p.next() // consume ','
+			step, err = p.parseExpr()
+			if err != nil {
+				return
+			}
+		}
+		
+		if !p.peek(lexapi.TOKEN_DO) {
+			p.errorAt(p.current(), "'do' expected")
+			return
 		}
 		p.next() // consume 'do'
-		body := &blockImpl{line: p.current().Line, column: p.current().Column, stats: []astapi.StatNode{}}
-		for !p.peek(lexapi.TOKEN_END) {
-			p.next()
+		
+		body, err := p.parseBlock()
+		p.block = parentBlock // Restore parent block reference
+		if err != nil {
+			return
+		}
+		
+		if !p.peek(lexapi.TOKEN_END) {
+			p.errorAt(p.current(), "'end' expected")
+			return
 		}
 		p.next() // consume 'end'
+		
 		stat := &forNumStat{
-			baseNode: baseNode{line: p.current().Line, column: p.current().Column},
+			baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
 			name: name,
-			start: &integerExp{baseNode: baseNode{line: 0, column: 0}, value: 1},
-			stop: &integerExp{baseNode: baseNode{line: 0, column: 0}, value: 10},
-			step: nil,
+			start: start,
+			stop: stop,
+			step: step,
 			block: body,
 		}
-		p.block.stats = append(p.block.stats, stat)
+		// Use saved parent block reference
+		parentBlock.stats = append(parentBlock.stats, stat)
 	} else {
 		// Generic for: for names in exprs do body end
-		// Skip to 'do'
-		for !p.peek(lexapi.TOKEN_DO) {
+		var names []string
+		names = append(names, name)
+		
+		for p.peek(lexapi.TOKEN_COMMA) {
+			p.next() // consume ','
+			if !p.peek(lexapi.TOKEN_NAME) {
+				p.errorAt(p.current(), "variable name expected")
+				return
+			}
+			names = append(names, p.current().Value)
 			p.next()
+		}
+		
+		if !p.peek(lexapi.TOKEN_IN) {
+			p.errorAt(p.current(), "'in' expected")
+			return
+		}
+		p.next() // consume 'in'
+		
+		exprs, err := p.parseExprList()
+		if err != nil {
+			return
+		}
+		
+		if !p.peek(lexapi.TOKEN_DO) {
+			p.errorAt(p.current(), "'do' expected")
+			return
 		}
 		p.next() // consume 'do'
-		body := &blockImpl{line: p.current().Line, column: p.current().Column, stats: []astapi.StatNode{}}
-		for !p.peek(lexapi.TOKEN_END) {
-			p.next()
+		
+		body, err := p.parseBlock()
+		p.block = parentBlock // Restore parent block reference
+		if err != nil {
+			return
+		}
+		
+		if !p.peek(lexapi.TOKEN_END) {
+			p.errorAt(p.current(), "'end' expected")
+			return
 		}
 		p.next() // consume 'end'
+		
 		stat := &forInStat{
-			baseNode: baseNode{line: p.current().Line, column: p.current().Column},
-			names: []string{name},
-			exprs: []astapi.ExpNode{&nameExp{baseNode: baseNode{line: 0, column: 0}, name: "pairs"}},
+			baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+			names: names,
+			exprs: exprs,
 			block: body,
 		}
-		p.block.stats = append(p.block.stats, stat)
+		// Use saved parent block reference
+		parentBlock.stats = append(parentBlock.stats, stat)
 	}
 }
 
@@ -649,18 +866,36 @@ func (p *parser) parseFor() {
 
 func (p *parser) parseRepeat() {
 	p.next() // consume 'repeat'
-	body := &blockImpl{line: p.current().Line, column: p.current().Column, stats: []astapi.StatNode{}}
-	for !p.peek(lexapi.TOKEN_UNTIL) {
-		p.next()
+	
+	// Save parent block reference
+	parentBlock := p.block
+	
+	// Parse body block
+	body, err := p.parseBlock()
+	p.block = parentBlock // Restore parent block reference
+	if err != nil {
+		return
 	}
-	p.next() // consume 'until', skip condition
-	cond := &trueExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
+	
+	if !p.peek(lexapi.TOKEN_UNTIL) {
+		p.errorAt(p.current(), "'until' expected")
+		return
+	}
+	p.next() // consume 'until'
+	
+	// Parse condition
+	cond, err := p.parseExpr()
+	if err != nil {
+		return
+	}
+	
 	stat := &repeatStat{
 		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
 		block: body,
 		condition: cond,
 	}
-	p.block.stats = append(p.block.stats, stat)
+	// Use saved parent block reference
+	parentBlock.stats = append(parentBlock.stats, stat)
 }
 
 // =============================================================================
@@ -669,20 +904,95 @@ func (p *parser) parseRepeat() {
 
 func (p *parser) parseFunctionDef(isLocal bool) {
 	p.next() // consume 'function' (or skip 'local function')
+	
+	// Save parent block reference
+	parentBlock := p.block
+	
+	// Parse function name
 	name := p.current().Value
-	p.next() // skip function name
-	// Skip parameters and body to 'end'
-	for !p.peek(lexapi.TOKEN_END) {
-		p.next()
+	nameTok := p.current()
+	p.next()
+	
+	// Parse parameters
+	if !p.peek(lexapi.TOKEN_LPAREN) {
+		p.errorAt(p.current(), "'(' expected")
+		return
+	}
+	p.next() // consume '('
+	
+	// Skip to ')' - for stub, we don't need to parse parameters
+	// Fixed: don't consume token after closing paren
+	depth := 1
+	for {
+		if p.peek(lexapi.TOKEN_LPAREN) {
+			depth++
+			p.next()
+		} else if p.peek(lexapi.TOKEN_RPAREN) {
+			depth--
+			p.next() // consume ')'
+			if depth == 0 {
+				break // stop after consuming ')'
+			}
+		} else if p.peek(lexapi.TOKEN_EOS) {
+			break
+		} else {
+			p.next()
+		}
+	}
+	
+	if p.peek(lexapi.TOKEN_EOS) || p.current().Type == lexapi.TOKEN_EOS {
+		p.errorAt(p.current(), "'(' expected")
+		return
+	}
+	
+	// Parse function body block
+	// Save outer block reference since parseBlock will set p.block = nil
+	savedBlock := p.block
+	body, err := p.parseBlock()
+	p.block = savedBlock // Restore outer block reference
+	if err != nil {
+		return
+	}
+	
+	
+	if !p.peek(lexapi.TOKEN_END) {
+		p.errorAt(p.current(), "'end' expected")
+		return
 	}
 	p.next() // consume 'end'
+	
 	stat := &globalFuncStat{
-		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
-		name: name,
-		func_: nil,
+		baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+		name:     name,
+		func_: &funcDefImpl{
+			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
+			isLocal:   false,
+			params:    []string{},
+			varArg:    false,
+			block:     body,
+			lastLine:  nameTok.Line,
+		},
 	}
-	p.block.stats = append(p.block.stats, stat)
+	parentBlock.stats = append(parentBlock.stats, stat)
 }
+
+// funcDefImpl is a stub FuncDef implementation
+type funcDefImpl struct {
+	baseNode
+	isLocal bool
+	params  []string
+	varArg  bool
+	block   astapi.Block
+	lastLine int
+}
+
+func (f *funcDefImpl) IsLocal() bool              { return f.isLocal }
+func (f *funcDefImpl) Line() int                 { return f.line }
+func (f *funcDefImpl) LastLine() int             { return f.lastLine }
+func (f *funcDefImpl) GetParams() []string       { return f.params }
+func (f *funcDefImpl) IsVarArg() bool            { return f.varArg }
+func (f *funcDefImpl) GetBlock() astapi.Block    { return f.block }
+func (f *funcDefImpl) Proto() *typesapi.Proto    { return nil }
 
 // =============================================================================
 // Local Function: local function <name> '(' [params] ')' <block> end
@@ -691,19 +1001,76 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 func (p *parser) parseLocalFunction() {
 	p.next() // consume 'local'
 	p.next() // consume 'function'
+	
+	// Save parent block reference
+	parentBlock := p.block
+	
+	// Parse function name
 	name := p.current().Value
-	p.next() // skip function name
-	// Skip parameters and body to 'end'
-	for !p.peek(lexapi.TOKEN_END) {
-		p.next()
+	nameTok := p.current()
+	p.next()
+	
+	// Parse parameters
+	if !p.peek(lexapi.TOKEN_LPAREN) {
+		p.errorAt(p.current(), "'(' expected")
+		return
+	}
+	p.next() // consume '('
+	
+	// Skip to ')' - for stub, we don't need to parse parameters
+	// Fixed: don't consume token after closing paren
+	depth := 1
+	for {
+		if p.peek(lexapi.TOKEN_LPAREN) {
+			depth++
+			p.next()
+		} else if p.peek(lexapi.TOKEN_RPAREN) {
+			depth--
+			p.next() // consume ')'
+			if depth == 0 {
+				break // stop after consuming ')'
+			}
+		} else if p.peek(lexapi.TOKEN_EOS) {
+			break
+		} else {
+			p.next()
+		}
+	}
+	
+	if p.peek(lexapi.TOKEN_EOS) || p.current().Type == lexapi.TOKEN_EOS {
+		p.errorAt(p.current(), "'(' expected")
+		return
+	}
+	
+	// Parse function body block
+	// Save outer block reference since parseBlock will set p.block = nil
+	savedBlock := p.block
+	body, err := p.parseBlock()
+	p.block = savedBlock // Restore outer block reference
+	if err != nil {
+		return
+	}
+	
+	
+	if !p.peek(lexapi.TOKEN_END) {
+		p.errorAt(p.current(), "'end' expected")
+		return
 	}
 	p.next() // consume 'end'
+	
 	stat := &localFuncStat{
-		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
-		name: name,
-		func_: nil,
+		baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+		name:     name,
+		func_: &funcDefImpl{
+			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
+			isLocal:   false,
+			params:    []string{},
+			varArg:    false,
+			block:     body,
+			lastLine:  nameTok.Line,
+		},
 	}
-	p.block.stats = append(p.block.stats, stat)
+		parentBlock.stats = append(parentBlock.stats, stat)
 }
 
 // =============================================================================
@@ -718,33 +1085,14 @@ func (p *parser) parseLocalVar() {
 
 	// Check for assignment
 	if p.peek(lexapi.TOKEN_ASSIGN) {
-		p.next()
-		// Parse expression
-		var expr astapi.ExpNode
-		switch p.current().Type {
-		case lexapi.TOKEN_INTEGER:
-			var val int64
-			fmt.Sscanf(p.current().Value, "%d", &val)
-			expr = &integerExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: val}
-			p.next()
-		case lexapi.TOKEN_NUMBER:
-			var val float64
-			fmt.Sscanf(p.current().Value, "%f", &val)
-			expr = &floatExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: val}
-			p.next()
-		case lexapi.TOKEN_STRING:
-			expr = &stringExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: p.current().Value}
-			p.next()
-		case lexapi.TOKEN_NIL:
-			expr = &nilExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		case lexapi.TOKEN_TRUE:
-			expr = &trueExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
-		case lexapi.TOKEN_FALSE:
-			expr = &falseExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}}
-			p.next()
+		p.next() // consume '='
+		
+		// Parse expression using full expression parser
+		expr, err := p.parseExpr()
+		if err != nil {
+			return
 		}
+		
 		stat := &localVarStat{
 			baseNode: baseNode{line: tok.Line, column: tok.Column},
 			names:    []string{name},
@@ -1077,14 +1425,119 @@ func (p *parser) parseUnary() (astapi.ExpNode, error) {
 }
 
 func (p *parser) parsePrimary() (astapi.ExpNode, error) {
+	// Parse the first part (prefix)
+	var expr astapi.ExpNode
+	var err error
+
+
 	switch p.current().Type {
 	case lexapi.TOKEN_NAME:
 		name := p.current().Value
 		tok := p.current()
 		p.next()
-		// Check for index or field access
-		if p.peek(lexapi.TOKEN_LBRACK) {
+		expr = &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}
+
+	case lexapi.TOKEN_LPAREN:
+		p.next()
+		// Check for empty parentheses "()"
+		if p.peek(lexapi.TOKEN_RPAREN) {
 			p.next()
+			expr = &tableConstructor{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, arrayFields: []astapi.ExpNode{}, recordFields: nil}
+		} else {
+			exp, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				return nil, p.errorAt(p.current(), "expected ')'")
+			}
+			p.next()
+			expr = exp
+		}
+
+	case lexapi.TOKEN_NIL:
+		tok := p.current()
+		p.next()
+		expr = &nilExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}
+
+	case lexapi.TOKEN_TRUE:
+		tok := p.current()
+		p.next()
+		expr = &trueExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}
+
+	case lexapi.TOKEN_FALSE:
+		tok := p.current()
+		p.next()
+		expr = &falseExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}
+
+	case lexapi.TOKEN_INTEGER:
+		tok := p.current()
+		p.next()
+		var val int64
+		fmt.Sscanf(tok.Value, "%d", &val)
+		expr = &integerExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}
+
+	case lexapi.TOKEN_NUMBER:
+		tok := p.current()
+		p.next()
+		var val float64
+		fmt.Sscanf(tok.Value, "%f", &val)
+		expr = &floatExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}
+
+	case lexapi.TOKEN_STRING:
+		tok := p.current()
+		p.next()
+		expr = &stringExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: tok.Value}
+
+	case lexapi.TOKEN_DOTS:
+		tok := p.current()
+		p.next()
+		expr = &varargExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}
+
+	case lexapi.TOKEN_LBRACE:
+		return p.parseTableConstructor()
+
+	default:
+		return nil, p.errorAt(p.current(), "unexpected symbol in expression")
+	}
+
+	// Handle suffixes: function calls, index access, field access
+	// Loop to handle chained operations like table.concat({})
+	for {
+		if p.peek(lexapi.TOKEN_LPAREN) {
+			// Function call: expr(args)
+			p.next() // consume '('
+			var args []astapi.ExpNode
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				args, err = p.parseExprList()
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				return nil, p.errorAt(p.current(), "expected ')'")
+			}
+			p.next() // consume ')'
+			expr = &funcCall{
+				baseNode:   baseNode{line: p.current().Line, column: p.current().Column},
+				func_:      expr,
+				args_:      args,
+				numResults:  1,
+			}
+		} else if p.peek(lexapi.TOKEN_DOT) {
+			// Field access: expr.field
+			p.next() // consume '.'
+			fieldName := p.current().Value
+			fieldTok := p.current()
+			p.next()
+			expr = &indexExpr{
+				table:    expr,
+				key:      &stringExp{baseNode: baseNode{line: fieldTok.Line, column: fieldTok.Column}, value: fieldName},
+				baseNode: baseNode{line: fieldTok.Line, column: fieldTok.Column},
+			}
+		} else if p.peek(lexapi.TOKEN_LBRACK) {
+			// Index access: expr[index]
+			p.next() // consume '['
 			index, err := p.parseExpr()
 			if err != nil {
 				return nil, err
@@ -1092,74 +1545,53 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 			if !p.peek(lexapi.TOKEN_RBRACK) {
 				return nil, p.errorAt(p.current(), "expected ']'")
 			}
+			p.next() // consume ']'
+			expr = &indexExpr{
+				table:     expr,
+				key:       index,
+				baseNode:  baseNode{line: p.current().Line, column: p.current().Column},
+			}
+		} else if p.peek(lexapi.TOKEN_COLON) {
+			// Method call: expr:method(args)
+			p.next() // consume ':'
+			methodName := p.current().Value
+			methodTok := p.current()
 			p.next()
-			return &indexExpr{table: &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}, key: index, baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
+			// Build obj.method expression
+			methodExpr := &indexExpr{
+				table:    expr,
+				key:      &stringExp{baseNode: baseNode{line: methodTok.Line, column: methodTok.Column}, value: methodName},
+				baseNode: baseNode{line: methodTok.Line, column: methodTok.Column},
+			}
+			// Now parse arguments
+			if !p.peek(lexapi.TOKEN_LPAREN) {
+				return nil, p.errorAt(p.current(), "expected '(' after method name")
+			}
+			p.next() // consume '('
+			var args []astapi.ExpNode
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				args, err = p.parseExprList()
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				return nil, p.errorAt(p.current(), "expected ')'")
+			}
+			p.next() // consume ')'
+			expr = &funcCall{
+				baseNode:   baseNode{line: methodTok.Line, column: methodTok.Column},
+				func_:      methodExpr,
+				args_:      args,
+				numResults:  1,
+			}
+		} else {
+			// No more suffixes
+			break
 		}
-		if p.peek(lexapi.TOKEN_DOT) {
-			p.next()
-			fieldName := p.current().Value
-			fieldTok := p.current()
-			p.next()
-			return &indexExpr{
-				table: &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
-				key:   &stringExp{baseNode: baseNode{line: fieldTok.Line, column: fieldTok.Column}, value: fieldName},
-				baseNode: baseNode{line: tok.Line, column: tok.Column},
-			}, nil
-		}
-		return &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}, nil
-	case lexapi.TOKEN_LPAREN:
-		p.next()
-		// Check for empty parentheses "()"
-		if p.peek(lexapi.TOKEN_RPAREN) {
-			p.next()
-			return &tableConstructor{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, arrayFields: []astapi.ExpNode{}, recordFields: nil}, nil
-		}
-		exp, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		if !p.peek(lexapi.TOKEN_RPAREN) {
-			return nil, p.errorAt(p.current(), "expected ')'")
-		}
-		p.next()
-		return exp, nil
-	case lexapi.TOKEN_NIL:
-		tok := p.current()
-		p.next()
-		return &nilExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
-	case lexapi.TOKEN_TRUE:
-		tok := p.current()
-		p.next()
-		return &trueExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
-	case lexapi.TOKEN_FALSE:
-		tok := p.current()
-		p.next()
-		return &falseExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
-	case lexapi.TOKEN_INTEGER:
-		tok := p.current()
-		p.next()
-		var val int64
-		fmt.Sscanf(tok.Value, "%d", &val)
-		return &integerExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}, nil
-	case lexapi.TOKEN_NUMBER:
-		tok := p.current()
-		p.next()
-		var val float64
-		fmt.Sscanf(tok.Value, "%f", &val)
-		return &floatExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}, nil
-	case lexapi.TOKEN_STRING:
-		tok := p.current()
-		p.next()
-		return &stringExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: tok.Value}, nil
-	case lexapi.TOKEN_DOTS:
-		tok := p.current()
-		p.next()
-		return &varargExp{baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
-	case lexapi.TOKEN_LBRACE:
-		return p.parseTableConstructor()
-	default:
-		return nil, p.errorAt(p.current(), "unexpected symbol in expression")
 	}
+
+	return expr, nil
 }
 
 func (p *parser) parseTableConstructor() (astapi.ExpNode, error) {
@@ -1170,10 +1602,64 @@ func (p *parser) parseTableConstructor() (astapi.ExpNode, error) {
 		arrayFields:  []astapi.ExpNode{},
 		recordFields: []struct{ Key, Value astapi.ExpNode }{},
 	}
-	// Skip table contents for basic test
+
+	// Parse table fields until '}'
 	for !p.peek(lexapi.TOKEN_RBRACE) && !p.peek(lexapi.TOKEN_EOS) {
-		p.next()
+		// Check for field separator or end
+		if p.peek(lexapi.TOKEN_COMMA) || p.peek(lexapi.TOKEN_SEMICOLON) {
+			p.next() // consume separator
+			// Check for immediate '}' after separator
+			if p.peek(lexapi.TOKEN_RBRACE) {
+				break
+			}
+			continue
+		}
+
+		// Check for '[' which indicates explicit key: [expr] = value
+		if p.peek(lexapi.TOKEN_LBRACK) {
+			p.next() // consume '['
+			key, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if !p.peek(lexapi.TOKEN_RBRACK) {
+				return nil, p.errorAt(p.current(), "expected ']'")
+			}
+			p.next() // consume ']'
+			if !p.peek(lexapi.TOKEN_ASSIGN) {
+				return nil, p.errorAt(p.current(), "expected '='")
+			}
+			p.next() // consume '='
+			value, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			tc.AddRecordField(key, value)
+			continue
+		}
+
+		// Check for name followed by '=' which indicates record field: name = value
+		if p.peek(lexapi.TOKEN_NAME) && p.peekNext(lexapi.TOKEN_ASSIGN) {
+			keyName := p.current().Value
+			keyTok := p.current()
+			p.next() // consume name
+			p.next() // consume '='
+			value, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			tc.AddRecordField(&stringExp{baseNode: baseNode{line: keyTok.Line, column: keyTok.Column}, value: keyName}, value)
+			continue
+		}
+
+		// Otherwise it's an array field
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		tc.AddArrayField(expr)
 	}
+
 	if p.peek(lexapi.TOKEN_RBRACE) {
 		p.next()
 	}
