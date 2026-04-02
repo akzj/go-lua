@@ -69,13 +69,17 @@ var (
 	NewTValueInteger       = impl.NewTValueInteger
 	NewTValueFloat         = impl.NewTValueFloat
 	NewTValueLightUserData = impl.NewTValueLightUserData
+	NewTValueString        = impl.NewTValueString
+	NewTValueLightCFunction = impl.NewTValueLightCFunction
 	NewValueGC             = impl.NewValueGC
+	NewTValueLightCFunctionFn = impl.NewTValueLightCFunction
 	NewValuePointer        = impl.NewValuePointer
 	NewValueCFunction      = impl.NewValueCFunction
 	NewValueInteger        = impl.NewValueInteger
 	NewValueFloat          = impl.NewValueFloat
 	NewTable               = impl.NewTable
 	NewString              = impl.NewString
+	NewDoStringMarker      = impl.NewDoStringMarker
 )
 
 // Utility functions

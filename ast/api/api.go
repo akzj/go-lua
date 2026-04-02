@@ -30,6 +30,8 @@ type ExpNode interface {
 	// IsConstant returns true if this is a compile-time constant.
 	// Why not just check specific types? Parser needs uniform check.
 	IsConstant() bool
+	// Kind returns the expression kind for code generation.
+	Kind() ExpKind
 }
 
 // =============================================================================
@@ -50,14 +52,21 @@ const (
 	EXP_KINTEGER             // VKINT - integer constant
 	EXP_KFLOAT               // VKFLT - float constant
 	EXP_KSTRING              // VKSTR - string constant
+	EXP_NONRELOC             // VNONRELOC - expression in fixed register
 	EXP_LOCAL                // VLOCAL - local variable
 	EXP_VARARG               // VVARGVAR - vararg parameter
 	EXP_GLOBAL               // VGLOBAL - global variable
 	EXP_UPVAL                // VUPVAL - upvalue variable
+	EXP_CONST                // VCONST - compile-time constant
 	EXP_INDEXED              // VINDEXED - indexed variable
+	EXP_VARARG_IND           // VVARGIND - indexed vararg
+	EXP_INDEX_UPVAL          // VINDEXUP - indexed upvalue
+	EXP_INDEX_INT            // VINDEXI - indexed with constant integer
+	EXP_INDEX_STR            // VINDEXSTR - indexed with literal string
 	EXP_JMP                  // VJMP - test/comparison jump
 	EXP_RELOC                // VRELOC - relocatable expression
 	EXP_CALL                 // VCALL - function call
+	EXP_VARARG_EXP           // VVARARG - vararg expression
 )
 
 // ExpDesc describes a potentially delayed expression.
@@ -75,8 +84,15 @@ type ExpDesc interface {
 	Info() int
 	SetInfo(int)
 	// Table returns table register and key register for VINDEXED.
+	// For VINDEXUP: tableReg is upval index, keyReg is key's K index.
+	// For VINDEXI: keyReg is the constant integer value.
+	// For VINDEXSTR: keyReg is the key's K index.
 	Table() (tableReg int, keyReg int)
 	SetTable(tableReg, keyReg int)
+	// KeyIsString returns true if the key is a string constant.
+	// Used for VINDEXED, VINDEXSTR to distinguish from integer keys.
+	KeyIsString() bool
+	SetKeyIsString(bool)
 	// TrueJump returns the patch list for "exit when true".
 	TrueJump() int
 	SetTrueJump(int)
@@ -96,6 +112,8 @@ type StatNode interface {
 	// IsScopeEnd returns true if this statement ends a scope.
 	// Used for local variable lifetime tracking.
 	IsScopeEnd() bool
+	// Kind returns the statement kind for code generation.
+	Kind() StatKind
 }
 
 // =============================================================================
@@ -248,7 +266,7 @@ const (
 // Chunk represents a complete Lua chunk (file or string).
 type Chunk interface {
 	// Block returns the chunk's block.
-	Block() *Block
+	Block() Block
 	// SourceName returns the source name.
 	SourceName() string
 }

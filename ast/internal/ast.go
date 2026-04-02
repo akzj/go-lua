@@ -130,6 +130,8 @@ type BinopExp struct {
 func (e *BinopExp) IsConstant() bool {
 	return e.Left.IsConstant() && e.Right.IsConstant()
 }
+func (e *BinopExp) Kind() api.ExpKind { return api.EXP_RELOC }
+func (e *BinopExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
 // UnopExp represents unary operation.
 type UnopExp struct {
@@ -141,6 +143,8 @@ type UnopExp struct {
 func (e *UnopExp) IsConstant() bool {
 	return e.Exp.IsConstant()
 }
+func (e *UnopExp) Kind() api.ExpKind { return api.EXP_RELOC }
+func (e *UnopExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
 // =============================================================================
 // Table Constructor
@@ -175,6 +179,8 @@ func (t *TableConstructorImpl) IsConstant() bool {
 	}
 	return true
 }
+func (t *TableConstructorImpl) Kind() api.ExpKind { return api.EXP_RELOC }
+func (t *TableConstructorImpl) Position() (int, int) { return t.BaseNode.Line, t.BaseNode.Column }
 
 // =============================================================================
 // Function Call
@@ -192,6 +198,8 @@ func (f *FuncCallImpl) Func() api.ExpNode         { return f.Func_ }
 func (f *FuncCallImpl) Args() []api.ExpNode       { return f.Args_ }
 func (f *FuncCallImpl) NumResults() int           { return f.NumResults_ }
 func (f *FuncCallImpl) IsConstant() bool         { return false }
+func (f *FuncCallImpl) Kind() api.ExpKind        { return api.EXP_CALL }
+func (f *FuncCallImpl) Position() (int, int)    { return f.BaseNode.Line, f.BaseNode.Column }
 
 // =============================================================================
 // Function Definition

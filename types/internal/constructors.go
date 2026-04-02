@@ -52,3 +52,23 @@ func NewTValueFloat(n api.LuaNumber) api.TValue {
 func NewTValueLightUserData(p unsafe.Pointer) api.TValue {
 	return &TValue{Value: Value{Variant: api.ValuePointer, Data_: p}, Tt: uint8(api.LUA_VLIGHTUSERDATA)}
 }
+
+func NewTValueString(s string) api.TValue {
+	return &TValue{Value: Value{Variant: api.ValueGC, Data_: s}, Tt: uint8(api.Ctb(int(api.LUA_VSHRSTR)))}
+}
+
+func NewTValueLightCFunction(fn unsafe.Pointer) api.TValue {
+	return &TValue{Value: Value{Variant: api.ValueCFunction, Data_: fn}, Tt: uint8(api.LUA_VLCF)}
+}
+
+// NewDoStringMarker creates a marker TValue for DoString closures.
+// The marker encodes a registry ID that can be used to look up the prototype.
+func NewDoStringMarker(id int) api.TValue {
+	return &TValue{
+		Value: Value{
+			Variant: api.ValuePointer,
+			Data_:   id,
+		},
+		Tt: uint8(api.LUA_VLIGHTUSERDATA),
+	}
+}
