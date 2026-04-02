@@ -112,7 +112,7 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 	}
 	
 	// Add function name to constants
-	nameIdx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstString, Str: funcName})
+	nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
 	
 	// Process arguments
 	args := call.Args()
@@ -138,24 +138,24 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 // addArgConstant adds an argument as a constant
 func (fs *FuncState) addArgConstant(arg astapi.ExpNode) {
 	if s, ok := arg.(interface{ GetValue() string }); ok {
-		fs.addConstant(&bcapi.Constant{Type: bcapi.ConstString, Str: s.GetValue()})
+		fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
 	} else if i, ok := arg.(interface{ GetValue() int64 }); ok {
-		fs.addConstant(&bcapi.Constant{Type: bcapi.ConstInteger, Int: i.GetValue()})
+		fs.addConstant(&Constant{Type: ConstInteger, Int: i.GetValue()})
 	} else if f, ok := arg.(interface{ GetValue() float64 }); ok {
-		fs.addConstant(&bcapi.Constant{Type: bcapi.ConstFloat, Float: f.GetValue()})
+		fs.addConstant(&Constant{Type: ConstFloat, Float: f.GetValue()})
 	}
 }
 
 // addArgLoad emits code to load an argument into a register
 func (fs *FuncState) addArgLoad(arg astapi.ExpNode, reg int) {
 	if s, ok := arg.(interface{ GetValue() string }); ok {
-		idx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstString, Str: s.GetValue()})
+		idx := fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
 		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
 	} else if i, ok := arg.(interface{ GetValue() int64 }); ok {
-		idx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstInteger, Int: i.GetValue()})
+		idx := fs.addConstant(&Constant{Type: ConstInteger, Int: i.GetValue()})
 		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
 	} else if f, ok := arg.(interface{ GetValue() float64 }); ok {
-		idx := fs.addConstant(&bcapi.Constant{Type: bcapi.ConstFloat, Float: f.GetValue()})
+		idx := fs.addConstant(&Constant{Type: ConstFloat, Float: f.GetValue()})
 		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
 	} else {
 		fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
@@ -345,36 +345,61 @@ func encodeAsBx(opcode, a, sbx int) uint32 {
 // =============================================================================
 
 // addConstant adds a constant to the constant table.
-func (fs *FuncState) addConstant(c *bcapi.Constant) int {
+func (fs *FuncState) addConstant(c *Constant) int {
 	// Simple linear search for now
 	for i, k := range fs.Proto.k {
-		if k.Type != c.Type {
+		if k.Type != bcapi.ConstantType(c.Type) {
 			continue
 		}
 		switch c.Type {
-		case bcapi.ConstNil:
+		case ConstNil:
 			return i
-		case bcapi.ConstInteger:
+		case ConstInteger:
 			if k.Int == c.Int {
 				return i
 			}
-		case bcapi.ConstFloat:
+		case ConstFloat:
 			if k.Float == c.Float {
 				return i
 			}
-		case bcapi.ConstString:
+		case ConstString:
 			if k.Str == c.Str {
 				return i
 			}
-		case bcapi.ConstBool:
+		case ConstBool:
 			if k.Int == c.Int {
 				return i
 			}
 		}
 	}
 	idx := len(fs.Proto.k)
-	fs.Proto.k = append(fs.Proto.k, c)
+	fs.Proto.k = append(fs.Proto.k, &bcapi.Constant{
+		Type:  bcapi.ConstantType(c.Type),
+		Int:   c.Int,
+		Float: c.Float,
+		Str:   c.Str,
+	})
 	return idx
+}
+
+// equals compares two constants for equality.
+func (c *Constant) equals(other *Constant) bool {
+	if c.Type != other.Type {
+		return false
+	}
+	switch c.Type {
+	case ConstNil:
+		return true
+	case ConstInteger:
+		return c.Int == other.Int
+	case ConstFloat:
+		return c.Float == other.Float
+	case ConstString:
+		return c.Str == other.Str
+	case ConstBool:
+		return c.Int == other.Int
+	}
+	return false
 }
 
 // NewConstInteger creates an integer constant.
