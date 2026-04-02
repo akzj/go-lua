@@ -20,6 +20,10 @@ type lexer struct {
 	// Lookahead token cache
 	lookaheadToken api.Token
 	lookaheadValid bool
+
+	// Step counter to prevent infinite loops (max 10M chars)
+	stepCount int
+	maxSteps  int
 }
 
 // NewLexer creates a new lexer for the given source.
@@ -29,6 +33,7 @@ func NewLexer(source, sourceName string) api.Lexer {
 		sourceName: sourceName,
 		line:       1,
 		column:     1,
+		maxSteps:   10_000_000, // 10M chars max to prevent infinite loops
 	}
 }
 
@@ -62,6 +67,13 @@ func (l *lexer) current() int {
 
 // advance moves to the next byte.
 func (l *lexer) advance() {
+	// Guard against infinite loops
+	l.stepCount++
+	if l.stepCount > l.maxSteps {
+		l.Error("lexer: maximum steps exceeded (possible infinite loop)")
+		return
+	}
+
 	if l.pos >= len(l.source) {
 		return
 	}
@@ -110,6 +122,11 @@ func isHexDigit(c int) bool {
 // skipWhitespace skips spaces, tabs, form feeds, and newlines.
 func (l *lexer) skipWhitespace() {
 	for {
+		// Guard against infinite loops
+		if l.stepCount > l.maxSteps {
+			l.Error("lexer: maximum steps exceeded (possible infinite loop)")
+			return
+		}
 		c := l.current()
 		switch c {
 		case ' ', '\t', '\f', '\v', '\n', '\r':
@@ -120,19 +137,29 @@ func (l *lexer) skipWhitespace() {
 	}
 }
 
-// inclinenumber handles newline incrementing.
+// inclinenumber increments line counter and resets column.
+// Called when positioned AT a newline character (the newline has NOT been
+// skipped yet by advance). Handles paired CRLF/LFLR sequences by skipping
+// the second character, then increments line.
+// Does NOT call advance() - the caller must advance past the newline.
 func (l *lexer) inclinenumber() {
-	c := l.current()
-	if c == '\n' || c == '\r' {
-		l.advance()
-		// Handle \r\n or \n\r
-		nc := l.current()
-		if (c == '\r' && nc == '\n') || (c == '\n' && nc == '\r') {
-			l.advance()
+	// Check for paired CRLF or LFLR sequences
+	// When this is called, we are AT the newline char (not past it)
+	if l.pos < len(l.source) {
+		c := l.source[l.pos]
+		if l.pos+1 < len(l.source) {
+			nc := l.source[l.pos+1]
+			// Skip second char of CRLF (\r\n) or LFLR (\n\r)
+			if (c == '\r' && nc == '\n') || (c == '\n' && nc == '\r') {
+				l.pos += 2 // skip both chars of the pair
+				l.line++
+				l.column = 1
+				return
+			}
 		}
-		l.line++
-		l.column = 1
 	}
+	// Single newline - advance past it
+	l.advance()
 }
 
 // checkNext1 checks if current char equals c and advances if so.
@@ -150,6 +177,11 @@ func (l *lexer) readIdentifier() (string, int) {
 	startColumn := l.column
 	l.advance() // consume first character
 	for {
+		// Guard against infinite loops
+		if l.stepCount > l.maxSteps {
+			l.Error("lexer: maximum steps exceeded")
+			return string(l.source[startPos:l.pos]), startColumn
+		}
 		c := l.current()
 		if isAlphaNumeric(c) {
 			l.advance()
@@ -196,17 +228,21 @@ func (l *lexer) skipComment() {
 
 	if l.current() == '[' {
 		// Long comment [[...]] or [=[...]=] etc.
-		l.advance() // skip '['
-		sep := l.skipSep()
+		// skipSep expects to start at '[', don't advance here
+		sep, _ := l.skipSep()
 		if sep >= 2 {
-			// Valid long comment
-			l.readLongString(nil, sep)
+			// Valid long comment - discard the content
+			l.readLongString(sep)
 			return
 		}
 	}
 
 	// Short comment - skip to end of line
 	for {
+		// Guard against infinite loops
+		if l.stepCount > l.maxSteps {
+			return
+		}
 		c := l.current()
 		if c == -1 || c == '\n' || c == '\r' {
 			return
@@ -215,51 +251,106 @@ func (l *lexer) skipComment() {
 	}
 }
 
-// skipSep returns the number of '=' signs between brackets plus 2.
-func (l *lexer) skipSep() int {
+// skipSep returns the separator level (count of '=' + 2) and whether a matching
+// closing bracket was found. When no match is found, position is restored to
+// the original bracket so it can be reprocessed.
+func (l *lexer) skipSep() (int, bool) {
+	start := l.current()
+	if start != '[' && start != ']' {
+		return 0, false
+	}
+	// Save position of opening bracket
+	savedPos := l.pos
+	l.advance() // move past opening bracket
+	
+	count := 0
+	// Count '=' signs WITHOUT advancing past the closing bracket
+	for l.current() == '=' {
+		l.advance()
+		count++
+	}
+	
+	
+	// Check if closing bracket matches
+	if l.current() == start {
+		// Found matching closing bracket - advance past it
+		l.advance()
+		return count + 2, true
+	}
+	
+	// No match - restore to opening bracket
+	l.pos = savedPos
+	if start == '[' && count == 0 {
+		// [[ without ]] - return 1 for single [
+		return 1, false
+	}
+	return 0, false
+}
+
+// skipSepForClose is like skipSep but used inside readLongString.
+// It checks if the current position starts a closing delimiter.
+// Returns the sep level if matched (and advances past it).
+// Returns 0 if not matched (position restored).
+func (l *lexer) skipSepForClose() int {
 	start := l.current()
 	if start != '[' && start != ']' {
 		return 0
 	}
-	l.advance()
+	savedPos := l.pos
+	l.advance() // skip past the first bracket
+
 	count := 0
 	for l.current() == '=' {
 		l.advance()
 		count++
 	}
+
 	if l.current() == start {
+		// Match! skipSep advances past the closing bracket, so we're done.
+		// Just consume the closing bracket (already advanced in skipSep).
 		return count + 2
 	}
-	return 0 // unmatched
+
+	// No match — restore position
+	l.pos = savedPos
+	return 0
 }
 
-// readLongString reads a long string [[...]] or [=[...]=].
-func (l *lexer) readLongString(seminfo *api.Token, sep int) {
-	// Already consumed [[ or [= etc, just skip the second bracket
-	l.advance()
+// Called after skipSep(), position is at the second bracket already.
+// Returns the string content, stripping opening and closing delimiters.
+func (l *lexer) readLongString(sep int) string {
+	var sb strings.Builder
 
-	// Skip initial newline
+	// Determine delimiter string based on sep level
+	// sep = 2 for [[, sep = 3 for [=[, etc.
+	// Write opening delimiter(s) to buffer first
+	for i := 0; i < sep; i++ {
+		sb.WriteByte('[')
+	}
+
+	// Skip initial newline (Lua skips it but doesn't add '\n' to content)
 	c := l.current()
 	if c == '\n' || c == '\r' {
 		l.inclinenumber()
 	}
 
-	var sb strings.Builder
 	for {
-		c := l.current()
+		c = l.current()
 		if c == -1 {
 			l.Error("unfinished long string")
-			return
+			return ""
 		}
 
 		if c == ']' {
-			if l.skipSep() == sep {
-				l.advance() // skip closing ]
-				if seminfo != nil {
-					seminfo.Value = sb.String()
-				}
-				return
+			// Check for closing delimiter
+			if l.skipSepForClose() == sep {
+				// Closing delimiter found!
+				// Buffer has [sep content]. 
+				// Skip opening sep chars, return rest.
+				s := sb.String()
+				return s[sep:]
 			}
+			// Not a closing delimiter, treat ']' as content.
 			sb.WriteByte(byte(c))
 			l.advance()
 			continue
@@ -268,15 +359,12 @@ func (l *lexer) readLongString(seminfo *api.Token, sep int) {
 		if c == '\n' || c == '\r' {
 			sb.WriteByte('\n')
 			l.inclinenumber()
-			continue
+		} else {
+			sb.WriteByte(byte(c))
+			l.advance()
 		}
-
-		sb.WriteByte(byte(c))
-		l.advance()
 	}
 }
-
-// readNumber reads a numeric literal.
 func (l *lexer) readNumber() (string, api.TokenType) {
 	start := l.pos
 	hasDecimal := false
@@ -304,11 +392,23 @@ func (l *lexer) readNumber() (string, api.TokenType) {
 			} else if c == '.' {
 				hasDecimal = true
 				l.advance()
+				// Handle case where . comes right after 0x (e.g., 0x.1 or 0x.F)
 				for isHexDigit(l.current()) {
 					l.advance()
 				}
+				// Check for exponent after decimal part
+				if c := l.current(); c == 'p' || c == 'P' {
+					l.advance()
+					if l.current() == '+' || l.current() == '-' {
+						l.advance()
+					}
+					for isHexDigit(l.current()) {
+						l.advance()
+					}
+				}
 				break
 			} else if c == 'p' || c == 'P' {
+				hasDecimal = true // p implies fractional part
 				l.advance()
 				if l.current() == '+' || l.current() == '-' {
 					l.advance()
@@ -357,12 +457,20 @@ func (l *lexer) readNumber() (string, api.TokenType) {
 
 	// Try to parse to determine integer vs number
 	if isHex {
-		_, err := strconv.ParseInt(numStr, 0, 64)
+		if hasDecimal {
+			// Hex floats - Go's ParseFloat only supports hex floats with p/P exponent
+			// For hex floats without exponent (like 0xF0.0 or 0x.FFFF), we validate format manually
+			// Valid format: 0x[0-9a-fA-F]*\.?[0-9a-fA-F]+
+			if !isValidHexFloat(numStr) {
+				l.Error("malformed number")
+			}
+			return numStr, api.TOKEN_NUMBER
+		}
+		// Pure hex integer (no decimal, no exponent)
+		// Use ParseUint for full 64-bit unsigned range - Lua allows arbitrarily large hex integers
+		_, err := strconv.ParseUint(numStr, 0, 64)
 		if err != nil {
 			l.Error("malformed number")
-		}
-		if hasDecimal {
-			return numStr, api.TOKEN_NUMBER
 		}
 		return numStr, api.TOKEN_INTEGER
 	}
@@ -390,6 +498,11 @@ func (l *lexer) readString() string {
 
 	var sb strings.Builder
 	for {
+		// Guard against infinite loops
+		if l.stepCount > l.maxSteps {
+			l.Error("lexer: maximum steps exceeded")
+			return ""
+		}
 		c := l.current()
 		if c == -1 {
 			l.Error("unfinished string")
@@ -416,6 +529,14 @@ func (l *lexer) readString() string {
 				sb.WriteByte('\t')
 			case 'r':
 				sb.WriteByte('\r')
+			case 'a':
+				sb.WriteByte('\a')
+			case 'b':
+				sb.WriteByte('\b')
+			case 'f':
+				sb.WriteByte('\f')
+			case 'v':
+				sb.WriteByte('\v')
 			case '\\':
 				sb.WriteByte('\\')
 			case '"':
@@ -423,17 +544,35 @@ func (l *lexer) readString() string {
 			case '\'':
 				sb.WriteByte('\'')
 			case 'x':
+				// Lua \xNN escape: exactly two hex digits
 				l.advance()
-				h1 := l.readHexDigit()
-				h2 := l.readHexDigit()
+				c1 := l.current()
+				if !isHexDigit(c1) {
+					l.Error("invalid escape sequence")
+					return sb.String()
+				}
+				l.advance()
+				c2 := l.current()
+				if !isHexDigit(c2) {
+					l.Error("invalid escape sequence")
+					return sb.String()
+				}
+				l.advance()
+				h1 := hexToInt(c1)
+				h2 := hexToInt(c2)
 				sb.WriteByte(byte((h1 << 4) | h2))
+				continue
 			case 'z':
+				// \z skips whitespace including newlines (Lua 5.3+)
 				l.advance()
-				for isSpace(l.current()) {
-					if l.current() == '\n' || l.current() == '\r' {
+				for {
+					c := l.current()
+					if c == '\n' || c == '\r' {
 						l.inclinenumber()
-					} else {
+					} else if isSpace(c) {
 						l.advance()
+					} else {
+						break
 					}
 				}
 				continue
@@ -443,7 +582,10 @@ func (l *lexer) readString() string {
 					l.Error("invalid escape sequence")
 				}
 				l.advance()
-				r := l.readUnicodeEscape()
+				r, ok := l.readUnicodeEscape()
+				if !ok {
+					l.Error("invalid escape sequence")
+				}
 				if l.current() != '}' {
 					l.Error("invalid escape sequence")
 				}
@@ -453,9 +595,13 @@ func (l *lexer) readString() string {
 			case -1:
 				l.Error("unfinished string")
 				return ""
+			case '\n', '\r': // Line continuation (backslash at end of line)
+				l.inclinenumber()
+				continue
 			default:
 				if c >= '0' && c <= '9' {
-					l.pos--
+					// c is already the digit after the backslash (we advanced past \)
+					// Don't backup - just call readDecimalEscape which will read from current pos
 					r := l.readDecimalEscape()
 					sb.WriteByte(byte(r))
 					continue
@@ -476,26 +622,52 @@ func (l *lexer) readHexDigit() int {
 	c := l.current()
 	if isHexDigit(c) {
 		l.advance()
-		if c >= 'a' && c <= 'f' {
-			return c - 'a' + 10
-		}
-		if c >= 'A' && c <= 'F' {
-			return c - 'A' + 10
-		}
-		return c - '0'
+		return hexToInt(c)
 	}
 	l.Error("invalid escape sequence")
 	return 0
 }
 
-// readUnicodeEscape reads \u{XXX}.
-func (l *lexer) readUnicodeEscape() int {
-	r := 0
-	for isHexDigit(l.current()) {
-		l.advance()
-		r = r*16 + l.readHexDigit()
+// hexToInt converts a hex character to its integer value.
+func hexToInt(c int) int {
+	if c >= '0' && c <= '9' {
+		return c - '0'
 	}
-	return r
+	if c >= 'a' && c <= 'f' {
+		return c - 'a' + 10
+	}
+	if c >= 'A' && c <= 'F' {
+		return c - 'A' + 10
+	}
+	return 0
+}
+
+// readUnicodeEscape reads \u{XXX}.
+// Returns the Unicode code point and whether it was valid.
+func (l *lexer) readUnicodeEscape() (int, bool) {
+	r := 0
+	for {
+		c := l.current()
+		if !isHexDigit(c) {
+			break
+		}
+		d, ok := l.readHexDigitOK()
+		if !ok {
+			return 0, false
+		}
+		r = r*16 + d
+	}
+	return r, true
+}
+
+// readHexDigitOK reads a single hex digit and advances, returning (value, ok).
+func (l *lexer) readHexDigitOK() (int, bool) {
+	c := l.current()
+	if isHexDigit(c) {
+		l.advance()
+		return hexToInt(c), true
+	}
+	return 0, false
 }
 
 // readDecimalEscape reads \ddd.
@@ -514,6 +686,50 @@ func (l *lexer) readDecimalEscape() int {
 		l.Error("decimal escape too large")
 	}
 	return r
+}
+
+// isValidHexFloat validates a hex float literal.
+// Lua hex floats: 0x[0-9a-fA-F]*\.?[0-9a-fA-F]+([pP][+-]?[0-9a-fA-F]+)?
+// Must have at least one hex digit somewhere (before or after the dot).
+func isValidHexFloat(s string) bool {
+	if len(s) < 3 || (s[0] != '0' && (s[1] != 'x' && s[1] != 'X')) {
+		return false
+	}
+	hasDigit := false
+	i := 2 // skip "0x" or "0X"
+	// Read hex digits before decimal
+	for i < len(s) && isHexDigit(int(s[i])) {
+		hasDigit = true
+		i++
+	}
+	// Check for decimal
+	if i < len(s) && s[i] == '.' {
+		i++
+		// Read hex digits after decimal
+		if !hasDigit {
+			// Must have at least one digit before OR after decimal
+			for i < len(s) && isHexDigit(int(s[i])) {
+				hasDigit = true
+				i++
+			}
+		} else {
+			// Read digits after decimal (may be zero)
+			for i < len(s) && isHexDigit(int(s[i])) {
+				i++
+			}
+		}
+	}
+	// Check for exponent (p/P)
+	if i < len(s) && (s[i] == 'p' || s[i] == 'P') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		for i < len(s) && isHexDigit(int(s[i])) {
+			i++
+		}
+	}
+	return hasDigit && i == len(s)
 }
 
 // isSpace reports whether byte is whitespace (not newline).
@@ -543,49 +759,21 @@ func (l *lexer) lexToken() api.Token {
 		}
 		return api.Token{Type: api.TOKEN_MINUS, Line: line, Column: column}
 	case '[':
-		sep := l.skipSep()
+		// Save column BEFORE skipSep advances the position
+		line2, column2 := l.saveColumn()
+		sep, _ := l.skipSep()
 		if sep >= 2 {
-			line2, column2 := l.saveColumn()
-			var sb strings.Builder
-			// Read long string
-			l.advance() // skip opening bracket
-			// Skip initial newline
-			if l.current() == '\n' || l.current() == '\r' {
-				l.inclinenumber()
-			}
-			for {
-				c := l.current()
-				if c == -1 {
-					l.Error("unfinished long string")
-					return api.Token{}
-				}
-				if c == ']' {
-					if l.skipSep() == sep {
-						l.advance() // skip closing ]
-						return api.Token{Type: api.TOKEN_STRING, Value: sb.String(), Line: line2, Column: column2}
-					}
-					sb.WriteByte(byte(c))
-					l.advance()
-					continue
-				}
-				if c == '\n' || c == '\r' {
-					sb.WriteByte('\n')
-					l.inclinenumber()
-					continue
-				}
-				sb.WriteByte(byte(c))
-				l.advance()
-			}
+			// Valid long string [[...]] or [=[...]=] etc.
+			value := l.readLongString(sep)
+			return api.Token{Type: api.TOKEN_STRING, Value: value, Line: line2, Column: column2}
 		}
 		if sep == 0 {
-			// [=... missing second bracket
-			// Check if this is just a regular '['
-			if l.current() == '=' {
-				// Invalid
-				l.advance()
-				return api.Token{Type: api.TOKEN_LBRACK, Line: line, Column: column}
-			}
+			// [=... without matching ]=...
+			l.Error("invalid long string delimiter")
 		}
+		// sep == 1: [[ without matching ]]
+		// Return single TOKEN_LBRACK
+		l.advance() // Consume the '[' character
 		return api.Token{Type: api.TOKEN_LBRACK, Line: line, Column: column}
 	case '=':
 		l.advance()

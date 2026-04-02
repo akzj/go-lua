@@ -7,9 +7,40 @@ import (
 )
 
 func TestExpKind(t *testing.T) {
-	// Test that exp kinds are in expected order
+	// Test that exp kinds are in expected order (iota)
+	if api.EXP_VOID != 0 {
+		t.Errorf("EXP_VOID should be 0, got %d", api.EXP_VOID)
+	}
 	if api.EXP_NIL != 1 {
 		t.Errorf("EXP_NIL should be 1, got %d", api.EXP_NIL)
+	}
+	if api.EXP_TRUE != 2 {
+		t.Errorf("EXP_TRUE should be 2, got %d", api.EXP_TRUE)
+	}
+	if api.EXP_FALSE != 3 {
+		t.Errorf("EXP_FALSE should be 3, got %d", api.EXP_FALSE)
+	}
+	if api.EXP_K != 4 {
+		t.Errorf("EXP_K should be 4, got %d", api.EXP_K)
+	}
+	if api.EXP_KINTEGER != 5 {
+		t.Errorf("EXP_KINTEGER should be 5, got %d", api.EXP_KINTEGER)
+	}
+	if api.EXP_KFLOAT != 6 {
+		t.Errorf("EXP_KFLOAT should be 6, got %d", api.EXP_KFLOAT)
+	}
+	if api.EXP_KSTRING != 7 {
+		t.Errorf("EXP_KSTRING should be 7, got %d", api.EXP_KSTRING)
+	}
+	// New kinds from lua-master
+	if api.EXP_NONRELOC != 8 {
+		t.Errorf("EXP_NONRELOC should be 8, got %d", api.EXP_NONRELOC)
+	}
+	if api.EXP_VARARG != 10 {
+		t.Errorf("EXP_VARARG should be 10, got %d", api.EXP_VARARG)
+	}
+	if api.EXP_VARARG_EXP != 22 {
+		t.Errorf("EXP_VARARG_EXP should be 22, got %d", api.EXP_VARARG_EXP)
 	}
 }
 
@@ -140,6 +171,16 @@ func TestExpDescImpl(t *testing.T) {
 	tReg, kReg := desc.Table()
 	if tReg != 3 || kReg != 4 {
 		t.Errorf("Table() = (%d, %d), want (3, 4)", tReg, kReg)
+	}
+
+	desc.SetKeyIsString(true)
+	if !desc.KeyIsString() {
+		t.Error("KeyIsString() should be true after SetKeyIsString(true)")
+	}
+
+	desc.SetKeyIsString(false)
+	if desc.KeyIsString() {
+		t.Error("KeyIsString() should be false after SetKeyIsString(false)")
 	}
 
 	desc.SetTrueJump(100)
