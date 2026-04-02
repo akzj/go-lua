@@ -471,8 +471,10 @@ func (p *parser) parseBlock() (astapi.Block, error) {
 	}
 	p.block = block
 
-	for p.parseStatement() {
-		// continue until no more statements
+	for !p.peek(lexapi.TOKEN_THEN) && !p.peek(lexapi.TOKEN_END) && !p.peek(lexapi.TOKEN_EOS) && !p.peek(lexapi.TOKEN_ELSEIF) && !p.peek(lexapi.TOKEN_ELSE) && !p.peek(lexapi.TOKEN_UNTIL) && !p.peek(lexapi.TOKEN_BREAK) && !p.peek(lexapi.TOKEN_RETURN) {
+		if !p.parseStatement() {
+			break
+		}
 	}
 
 	// Handle return statement at end of block
@@ -1256,111 +1258,335 @@ func (p *parser) parseGlobal() {
 // =============================================================================
 
 func (p *parser) parseAssignmentOrCall() bool {
-	name := p.current().Value
-	tok := p.current()
-	p.next()
+	// Check if this looks like a valid expression start
+	switch p.current().Type {
+	case lexapi.TOKEN_NAME, lexapi.TOKEN_INTEGER, lexapi.TOKEN_NUMBER, lexapi.TOKEN_STRING,
+		lexapi.TOKEN_LPAREN, lexapi.TOKEN_LBRACE, lexapi.TOKEN_NIL, lexapi.TOKEN_TRUE,
+		lexapi.TOKEN_FALSE, lexapi.TOKEN_MINUS, lexapi.TOKEN_NOT, lexapi.TOKEN_DOTS:
+		// Valid expression start
+	default:
+		// Not a valid expression - return false to let caller handle block end
+		return false
+	}
 
-	// Check what follows the name
-	if p.peek(lexapi.TOKEN_LPAREN) {
-		// Function call: name(args)
-		p.next() // consume '('
-		// Check for empty call: name()
-		if p.peek(lexapi.TOKEN_RPAREN) {
-			p.next()
+	// For TOKEN_NAME, check if this is a function call or expression statement
+	if p.current().Type == lexapi.TOKEN_NAME {
+		name := p.current().Value
+		tok := p.current()
+		
+		// Check if this is a function call: name(args) or name"string" or name{...}
+		if p.peek(lexapi.TOKEN_LPAREN) {
+			// Function call: name(args)
+			p.next() // consume '('
+			if p.peek(lexapi.TOKEN_RPAREN) {
+				p.next()
+				stat := &expressionStat{
+					baseNode: baseNode{line: tok.Line, column: tok.Column},
+					expr: &funcCall{
+						baseNode:     baseNode{line: tok.Line, column: tok.Column},
+						func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+						args_:        []astapi.ExpNode{},
+						numResults:   1,
+					},
+				}
+				p.block.stats = append(p.block.stats, stat)
+				return true
+			}
+			args, err := p.parseExprList()
+			if err != nil {
+				return false
+			}
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				return false
+			}
+			p.next() // consume ')'
 			stat := &expressionStat{
 				baseNode: baseNode{line: tok.Line, column: tok.Column},
 				expr: &funcCall{
 					baseNode:     baseNode{line: tok.Line, column: tok.Column},
 					func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
-					args_:        []astapi.ExpNode{},
+					args_:        args,
 					numResults:   1,
 				},
 			}
 			p.block.stats = append(p.block.stats, stat)
 			return true
 		}
-		// Parse argument list
-		args, err := p.parseExprList()
-		if err != nil {
-			return false
+
+		// String argument without parentheses: print "hello"
+		if p.peek(lexapi.TOKEN_STRING) {
+			strVal := p.current().Value
+			strTok := p.current()
+			p.next()
+			stat := &expressionStat{
+				baseNode: baseNode{line: tok.Line, column: tok.Column},
+				expr: &funcCall{
+					baseNode:     baseNode{line: tok.Line, column: tok.Column},
+					func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+					args_:        []astapi.ExpNode{&stringExp{baseNode: baseNode{line: strTok.Line, column: strTok.Column}, value: strVal}},
+					numResults:   1,
+				},
+			}
+			p.block.stats = append(p.block.stats, stat)
+			return true
 		}
-		if !p.peek(lexapi.TOKEN_RPAREN) {
-			return false
+
+		// Table argument: print {1, 2, 3}
+		if p.peek(lexapi.TOKEN_LBRACE) {
+			table, err := p.parseTableConstructor()
+			if err != nil {
+				return false
+			}
+			stat := &expressionStat{
+				baseNode: baseNode{line: tok.Line, column: tok.Column},
+				expr: &funcCall{
+					baseNode:     baseNode{line: tok.Line, column: tok.Column},
+					func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
+					args_:        []astapi.ExpNode{table},
+					numResults:   1,
+				},
+			}
+			p.block.stats = append(p.block.stats, stat)
+			return true
 		}
-		p.next() // consume ')'
+
+		// Assignment: x = expr
+		if p.peek(lexapi.TOKEN_ASSIGN) {
+			p.next()
+			expr, err := p.parseExpr()
+			if err != nil {
+				return false
+			}
+			stat := &assignStat{
+				baseNode: baseNode{line: tok.Line, column: tok.Column},
+				vars:     []astapi.ExpNode{&nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}},
+				exprs:    []astapi.ExpNode{expr},
+			}
+			p.block.stats = append(p.block.stats, stat)
+			return true
+		}
+
+		// Expression statement with name: a + b, a == b, a.b, etc.
+		// Consume the name and start building expression
+		p.next() // consume name
+		left := &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}
+		
+		// Check if there's a suffix (method call, index, etc.)
+		expr := p.handleSuffixLoop(left)
+		
+		// Check for binary operators after the expression
+		expr = p.handleBinaryOps(expr, tok.Line, tok.Column)
 		
 		stat := &expressionStat{
 			baseNode: baseNode{line: tok.Line, column: tok.Column},
-			expr: &funcCall{
-				baseNode:     baseNode{line: tok.Line, column: tok.Column},
-				func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
-				args_:        args,
-				numResults:   1,
-			},
+			expr:     expr,
 		}
 		p.block.stats = append(p.block.stats, stat)
 		return true
 	}
 
-	// Assignment: x = expr
-	if p.peek(lexapi.TOKEN_ASSIGN) {
-		p.next()
+	// For non-name expressions (literals, unary, etc.)
+	// Parse full expression
+	expr, err := p.parseExpr()
+	if err != nil {
+		return false
+	}
+	stat := &expressionStat{
+		baseNode: baseNode{line: p.current().Line, column: p.current().Column},
+		expr:     expr,
+	}
+	p.block.stats = append(p.block.stats, stat)
+	return true
+}
+
+// handleSuffixLoop handles method calls, indexing, and function calls on expressions.
+// After parsing a primary expression, we loop to handle suffixes like:
+// - .method() (method call)
+// - [index] (table indexing)
+// - (args) (function call with parens)
+// - "string" (function call with string arg)
+func (p *parser) handleSuffixLoop(expr astapi.ExpNode) astapi.ExpNode {
+	for {
+		switch p.current().Type {
+		case lexapi.TOKEN_DOT:
+			// Table field access: expr.field
+			p.next() // consume '.'
+			if p.current().Type != lexapi.TOKEN_NAME {
+				return expr
+			}
+			fieldName := p.current().Value
+			fieldTok := p.current()
+			p.next()
+			expr = &indexExpr{
+				baseNode: baseNode{line: fieldTok.Line, column: fieldTok.Column},
+				table:    expr,
+				key:      &stringExp{baseNode: baseNode{line: fieldTok.Line, column: fieldTok.Column}, value: fieldName},
+			}
+		case lexapi.TOKEN_LBRACK:
+			// Table indexing: expr[key]
+			p.next() // consume '['
+			key, err := p.parseExpr()
+			if err != nil {
+				return expr
+			}
+			if !p.peek(lexapi.TOKEN_RBRACK) {
+				return expr
+			}
+			p.next() // consume ']'
+			expr = &indexExpr{
+				baseNode: baseNode{line: p.current().Line, column: p.current().Column},
+				table:    expr,
+				key:      key,
+			}
+		case lexapi.TOKEN_COLON:
+			// Method call: expr:method(args) -> expr.method(self, args)
+			p.next() // consume ':'
+			if p.current().Type != lexapi.TOKEN_NAME {
+				return expr
+			}
+			methodName := p.current().Value
+			methodTok := p.current()
+			p.next()
+			// Build: expr.method(self, args)
+			var args []astapi.ExpNode
+			args = append(args, expr) // self
+			if p.peek(lexapi.TOKEN_LPAREN) {
+				p.next() // consume '('
+				if !p.peek(lexapi.TOKEN_RPAREN) {
+					argList, err := p.parseExprList()
+					if err == nil {
+						args = append(args, argList...)
+					}
+				}
+				if p.peek(lexapi.TOKEN_RPAREN) {
+					p.next() // consume ')'
+				}
+			} else if p.peek(lexapi.TOKEN_STRING) {
+				args = append(args, &stringExp{baseNode: baseNode{line: p.current().Line, column: p.current().Column}, value: p.current().Value})
+				p.next()
+			} else if p.peek(lexapi.TOKEN_LBRACE) {
+				table, _ := p.parseTableConstructor()
+				if table != nil {
+					args = append(args, table)
+				}
+			}
+			expr = &funcCall{
+				baseNode:   baseNode{line: methodTok.Line, column: methodTok.Column},
+				func_:      &indexExpr{baseNode: baseNode{line: methodTok.Line, column: methodTok.Column}, table: expr, key: &stringExp{baseNode: baseNode{line: methodTok.Line, column: methodTok.Column}, value: methodName}},
+				args_:      args,
+				numResults: 1,
+			}
+		case lexapi.TOKEN_LPAREN:
+			// Function call: expr(args)
+			p.next() // consume '('
+			var args []astapi.ExpNode
+			if !p.peek(lexapi.TOKEN_RPAREN) {
+				args, _ = p.parseExprList()
+			}
+			if p.peek(lexapi.TOKEN_RPAREN) {
+				p.next() // consume ')'
+			}
+			expr = &funcCall{
+				baseNode:   baseNode{line: p.current().Line, column: p.current().Column},
+				func_:      expr,
+				args_:      args,
+				numResults: 1,
+			}
+		case lexapi.TOKEN_STRING:
+			// Function call with string arg: expr "string"
+			strVal := p.current().Value
+			strTok := p.current()
+			p.next()
+			expr = &funcCall{
+				baseNode:   baseNode{line: strTok.Line, column: strTok.Column},
+				func_:      expr,
+				args_:      []astapi.ExpNode{&stringExp{baseNode: baseNode{line: strTok.Line, column: strTok.Column}, value: strVal}},
+				numResults: 1,
+			}
+		case lexapi.TOKEN_LBRACE:
+			// Function call with table arg: expr {1, 2, 3}
+			table, _ := p.parseTableConstructor()
+			if table != nil {
+				expr = &funcCall{
+					baseNode:   baseNode{line: p.current().Line, column: p.current().Column},
+					func_:      expr,
+					args_:      []astapi.ExpNode{table},
+					numResults: 1,
+				}
+			}
+		default:
+			// No more suffixes
+			return expr
+		}
+	}
+}
+
+// handleBinaryOps handles binary operators after an expression.
+// Returns the combined expression or the original if no operator found.
+func (p *parser) handleBinaryOps(left astapi.ExpNode, line, column int) astapi.ExpNode {
+	for {
+		var op astapi.BinopKind
+		var isBinary bool
 		
-		// Parse expression using full expression parser (handles binary ops)
-		expr, err := p.parseExpr()
+		switch p.current().Type {
+		case lexapi.TOKEN_PLUS:
+			op = astapi.BINOP_ADD
+			isBinary = true
+		case lexapi.TOKEN_MINUS:
+			op = astapi.BINOP_SUB
+			isBinary = true
+		case lexapi.TOKEN_MUL:
+			op = astapi.BINOP_MUL
+			isBinary = true
+		case lexapi.TOKEN_DIV:
+			op = astapi.BINOP_DIV
+			isBinary = true
+		case lexapi.TOKEN_EQ:
+			op = astapi.BINOP_EQ
+			isBinary = true
+		case lexapi.TOKEN_NE:
+			op = astapi.BINOP_NE
+			isBinary = true
+		case lexapi.TOKEN_LT:
+			op = astapi.BINOP_LT
+			isBinary = true
+		case lexapi.TOKEN_LE:
+			op = astapi.BINOP_LE
+			isBinary = true
+		case lexapi.TOKEN_GT:
+			op = astapi.BINOP_GT
+			isBinary = true
+		case lexapi.TOKEN_GE:
+			op = astapi.BINOP_GE
+			isBinary = true
+		case lexapi.TOKEN_AND:
+			op = astapi.BINOP_AND
+			isBinary = true
+		case lexapi.TOKEN_OR:
+			op = astapi.BINOP_OR
+			isBinary = true
+		default:
+			isBinary = false
+		}
+		
+		if !isBinary {
+			return left
+		}
+		
+		tok := p.current()
+		p.next() // consume operator
+		right, err := p.parseExpr()
 		if err != nil {
-			return false
+			return left
 		}
 		
-		stat := &assignStat{
+		left = &binopExp{
+			op:       op,
+			left:     left,
+			right:    right,
 			baseNode: baseNode{line: tok.Line, column: tok.Column},
-			vars:     []astapi.ExpNode{&nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}},
-			exprs:    []astapi.ExpNode{expr},
 		}
-		p.block.stats = append(p.block.stats, stat)
-		return true
 	}
-
-	// String argument without parentheses: print "hello"
-	if p.peek(lexapi.TOKEN_STRING) {
-		strVal := p.current().Value
-		strTok := p.current()
-		p.next()
-		
-		stat := &expressionStat{
-			baseNode: baseNode{line: tok.Line, column: tok.Column},
-			expr: &funcCall{
-				baseNode:     baseNode{line: tok.Line, column: tok.Column},
-				func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
-				args_:        []astapi.ExpNode{&stringExp{baseNode: baseNode{line: strTok.Line, column: strTok.Column}, value: strVal}},
-				numResults:   1,
-			},
-		}
-		p.block.stats = append(p.block.stats, stat)
-		return true
-	}
-
-	// Table argument: print {1, 2, 3}
-	if p.peek(lexapi.TOKEN_LBRACE) {
-		table, err := p.parseTableConstructor()
-		if err != nil {
-			return false
-		}
-		
-		stat := &expressionStat{
-			baseNode: baseNode{line: tok.Line, column: tok.Column},
-			expr: &funcCall{
-				baseNode:     baseNode{line: tok.Line, column: tok.Column},
-				func_:        &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name},
-				args_:        []astapi.ExpNode{table},
-				numResults:   1,
-			},
-		}
-		p.block.stats = append(p.block.stats, stat)
-		return true
-	}
-
-	return false
 }
 
 // =============================================================================
@@ -1727,6 +1953,30 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 
 	default:
 		return nil, p.errorAt(p.current(), "unexpected symbol in expression")
+	}
+
+	// For literals (true, false, nil, numbers, strings), return immediately
+	// Only prefix expressions (NAME, LPAREN) can have suffixes
+	if _, ok := expr.(*trueExp); ok {
+		return expr, nil
+	}
+	if _, ok := expr.(*falseExp); ok {
+		return expr, nil
+	}
+	if _, ok := expr.(*nilExp); ok {
+		return expr, nil
+	}
+	if _, ok := expr.(*integerExp); ok {
+		return expr, nil
+	}
+	if _, ok := expr.(*floatExp); ok {
+		return expr, nil
+	}
+	if _, ok := expr.(*stringExp); ok {
+		return expr, nil
+	}
+	if _, ok := expr.(*varargExp); ok {
+		return expr, nil
 	}
 
 	// Handle suffixes: function calls, index access, field access
