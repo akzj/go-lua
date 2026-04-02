@@ -464,6 +464,9 @@ func (f *funcCall) GetNumResults() int           { return f.numResults }
 // parseBlock parses a block: statement* [return]?
 // Block ends at END/BREAK/RETURN or end of input.
 func (p *parser) parseBlock() (astapi.Block, error) {
+	// Save outer block reference since parseBlock will set p.block = nil
+	outerBlock := p.block
+	
 	block := &blockImpl{
 		line:   p.current().Line,
 		column: p.current().Column,
@@ -471,6 +474,9 @@ func (p *parser) parseBlock() (astapi.Block, error) {
 	}
 	p.block = block
 
+	// NOTE: TOKEN_END, TOKEN_ELSEIF, TOKEN_ELSE, TOKEN_UNTIL must be in the loop
+	// condition to stop parsing when these tokens are encountered. Otherwise,
+	// parseStatement() gets called with these tokens and fails.
 	for !p.peek(lexapi.TOKEN_THEN) && !p.peek(lexapi.TOKEN_END) && !p.peek(lexapi.TOKEN_EOS) && !p.peek(lexapi.TOKEN_ELSEIF) && !p.peek(lexapi.TOKEN_ELSE) && !p.peek(lexapi.TOKEN_UNTIL) && !p.peek(lexapi.TOKEN_BREAK) && !p.peek(lexapi.TOKEN_RETURN) {
 		if !p.parseStatement() {
 			break
@@ -482,7 +488,8 @@ func (p *parser) parseBlock() (astapi.Block, error) {
 		block.returnExp = p.parseReturn()
 	}
 
-	p.block = nil
+	// Restore outer block reference
+	p.block = outerBlock
 	return block, nil
 }
 
@@ -1240,6 +1247,8 @@ func (p *parser) parseGlobal() {
 	// Check for '*' export-all modifier: global <const> * or global *
 	if p.peek(lexapi.TOKEN_MUL) {
 		p.next() // consume '*'
+		// global <const> * declares all following globals as const
+		// We just record it as a special declaration (no specific stat needed for "*")
 		if p.peek(lexapi.TOKEN_ASSIGN) {
 			p.next()
 			_, err := p.parseExprList()
@@ -1257,20 +1266,24 @@ func (p *parser) parseGlobal() {
 			nameTok := p.current()
 			p.next()
 			
+			var exprs []astapi.ExpNode
 			if p.peek(lexapi.TOKEN_ASSIGN) {
 				p.next()
-				exprs, err := p.parseExprList()
+				var err error
+				exprs, err = p.parseExprList()
 				if err != nil {
 					return
 				}
-				stat := &globalVarStat{
-					baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
-					name:     name,
-					isConst:  isConst,
-					exprs:    exprs,
-				}
-				parentBlock.stats = append(parentBlock.stats, stat)
 			}
+			
+			// Always add stat - even without assignment (declares global without value)
+			stat := &globalVarStat{
+				baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+				name:     name,
+				isConst:  isConst,
+				exprs:    exprs,
+			}
+			parentBlock.stats = append(parentBlock.stats, stat)
 		}
 		
 		if !p.peek(lexapi.TOKEN_COMMA) {
@@ -1300,7 +1313,8 @@ func (p *parser) parseAssignmentOrCall() bool {
 	if p.current().Type == lexapi.TOKEN_NAME {
 		name := p.current().Value
 		tok := p.current()
-		
+		p.next() // consume name
+
 		// Check if this is a function call: name(args) or name"string" or name{...}
 		if p.peek(lexapi.TOKEN_LPAREN) {
 			// Function call: name(args)
@@ -1377,33 +1391,32 @@ func (p *parser) parseAssignmentOrCall() bool {
 			return true
 		}
 
-		// Assignment: x = expr
+		// Handle assignment and expression statement with potential suffixes
+		// Build left side expression
+		var left astapi.ExpNode = &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}
+
+		// Handle any suffixes (field access, indexing) first
+		left = p.handleSuffixLoop(left)
+
+		// Assignment: x = expr or t.x = expr
 		if p.peek(lexapi.TOKEN_ASSIGN) {
-			p.next()
+			p.next() // consume '='
 			expr, err := p.parseExpr()
 			if err != nil {
 				return false
 			}
 			stat := &assignStat{
 				baseNode: baseNode{line: tok.Line, column: tok.Column},
-				vars:     []astapi.ExpNode{&nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}},
+				vars:     []astapi.ExpNode{left},
 				exprs:    []astapi.ExpNode{expr},
 			}
 			p.block.stats = append(p.block.stats, stat)
 			return true
 		}
 
-		// Expression statement with name: a + b, a == b, a.b, etc.
-		// Consume the name and start building expression
-		p.next() // consume name
-		left := &nameExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, name: name}
-		
-		// Check if there's a suffix (method call, index, etc.)
-		expr := p.handleSuffixLoop(left)
-		
-		// Check for binary operators after the expression
-		expr = p.handleBinaryOps(expr, tok.Line, tok.Column)
-		
+		// Expression statement: a + b, a == b, etc.
+		expr := p.handleBinaryOps(left, tok.Line, tok.Column)
+
 		stat := &expressionStat{
 			baseNode: baseNode{line: tok.Line, column: tok.Column},
 			expr:     expr,
@@ -1718,7 +1731,10 @@ func (p *parser) parseComparison() (astapi.ExpNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	for p.current().Type >= lexapi.TOKEN_LT && p.current().Type <= lexapi.TOKEN_NE {
+	// Use explicit token checks instead of range — TOKEN_NE=230 overlaps with keywords like TOKEN_THEN=220, TOKEN_TRUE=221
+	for p.current().Type == lexapi.TOKEN_LT || p.current().Type == lexapi.TOKEN_GT ||
+		p.current().Type == lexapi.TOKEN_LE || p.current().Type == lexapi.TOKEN_GE ||
+		p.current().Type == lexapi.TOKEN_EQ || p.current().Type == lexapi.TOKEN_NE {
 		op := p.mapComparisonOp(p.current().Type)
 		tok := p.current()
 		p.next()
