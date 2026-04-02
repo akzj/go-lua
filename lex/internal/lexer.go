@@ -120,7 +120,21 @@ func isHexDigit(c int) bool {
 }
 
 // skipWhitespace skips spaces, tabs, form feeds, and newlines.
+// Also handles shebang lines (# at position 0) as in Lua 5.5.
 func (l *lexer) skipWhitespace() {
+	// Lua 5.5: if '#' appears at the very start of the file, treat the
+	// entire line as a shebang comment (e.g. "#!/usr/bin/env lua").
+	if l.pos == 0 && l.current() == '#' {
+		l.advance() // skip '#'
+		for {
+			c := l.current()
+			if c == -1 || c == '\n' || c == '\r' {
+				break
+			}
+			l.advance()
+		}
+	}
+
 	for {
 		// Guard against infinite loops
 		if l.stepCount > l.maxSteps {
