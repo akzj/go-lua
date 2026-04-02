@@ -13,8 +13,8 @@ type TokenType int
 
 // Reserved keywords and operators (FIRST_RESERVED = 0)
 const (
-	// Keywords
-	TOKEN_AND TokenType = iota
+	// Keywords — start at 200 to avoid collision with ASCII single-char tokens (max 126)
+	TOKEN_AND TokenType = 200 + iota
 	TOKEN_BREAK
 	TOKEN_DO
 	TOKEN_ELSE
@@ -116,14 +116,20 @@ func (tt TokenType) IsSingleChar() bool {
 func TokenTypeName(tt TokenType) string {
 	names := []string{
 		"and", "break", "do", "else", "elseif",
-		"end", "false", "for", "function", "global", "goto", "if",
-		"in", "local", "nil", "not", "or", "repeat",
+		"end", "false", "for", "function", "global", "goto", "const",
+		"if", "in", "local", "nil", "not", "or", "repeat",
 		"return", "then", "true", "until", "while",
 		"//", "..", "...", "==", ">=", "<=", "~=",
 		"<<", ">>", "::", "<eof>", "<number>", "<integer>", "<name>", "<string>",
 	}
-	if int(tt) < len(names) {
-		return names[tt]
+	// Keywords start at 200
+	idx := int(tt) - 200
+	if idx >= 0 && idx < len(names) {
+		return names[idx]
+	}
+	// Single-char tokens
+	if int(tt) > 0 && int(tt) < 256 {
+		return string(rune(tt))
 	}
 	return "<unknown>"
 }
