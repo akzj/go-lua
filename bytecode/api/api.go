@@ -1,7 +1,5 @@
 // Package api defines the bytecode compiler interface.
 // NO dependencies - pure interface definitions.
-//
-// Reference: lua-master/lcode.c (1972 lines)
 package api
 
 import (
@@ -29,7 +27,30 @@ type Prototype interface {
 	IsVararg() bool
 	// MaxStackSize returns the maximum stack size needed.
 	MaxStackSize() uint8
+	// GetCode returns the instruction list.
+	GetCode() []uint32
+	// GetConstants returns the constant list.
+	GetConstants() []*Constant
 }
+
+// Constant represents a compile-time constant value.
+type Constant struct {
+	Type  ConstantType
+	Int   int64
+	Float float64
+	Str   string
+}
+
+// ConstantType identifies the type of a constant.
+type ConstantType uint8
+
+const (
+	ConstNil ConstantType = iota
+	ConstInteger
+	ConstFloat
+	ConstString
+	ConstBool
+)
 
 // Compiler converts AST (ast.Chunk) to bytecode (Prototype).
 type Compiler interface {

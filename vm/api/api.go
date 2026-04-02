@@ -87,7 +87,11 @@ func GetArgB(inst Instruction) int {
 }
 
 func GetArgC(inst Instruction) int {
-	return int(inst >> api.POS_C & api.MAXARG_C)
+	c := int(inst >> api.POS_C & api.MAXARG_C)
+	if (inst >> api.POS_k & 1) == 1 {
+		c += 256
+	}
+	return c
 }
 
 func GetArgBx(inst Instruction) int {
