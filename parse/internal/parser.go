@@ -1211,13 +1211,33 @@ func (p *parser) parseGlobal() {
 	
 	parentBlock := p.block
 	
-	// Check for modifiers
-	isConst := p.peek(lexapi.TOKEN_CONST)
-	if isConst {
+	// Check for Lua 5.5 <const> attribute syntax: global <const> ...
+	isConst := false
+	if p.peek(lexapi.TOKEN_LT) {
+		p.next() // consume '<'
+		// Expect 'const' keyword (as NAME) or 'close'
+		if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "const" {
+			isConst = true
+			p.next() // consume 'const'
+		} else if p.peek(lexapi.TOKEN_NAME) && p.current().Value == "close" {
+			// Lua 5.4 <close> attribute - just consume
+			p.next() // consume 'close'
+		} else {
+			p.errorAt(p.current(), "expected 'const' or 'close'")
+			return
+		}
+		if !p.peek(lexapi.TOKEN_GT) {
+			p.errorAt(p.current(), "expected '>'")
+			return
+		}
+		p.next() // consume '>'
+	} else if p.peek(lexapi.TOKEN_CONST) {
+		// Lua 5.4 "global const" syntax
+		isConst = true
 		p.next() // consume 'const'
 	}
 	
-	// Check for '*' export-all modifier: global * = expr
+	// Check for '*' export-all modifier: global <const> * or global *
 	if p.peek(lexapi.TOKEN_MUL) {
 		p.next() // consume '*'
 		if p.peek(lexapi.TOKEN_ASSIGN) {
@@ -1230,26 +1250,33 @@ func (p *parser) parseGlobal() {
 		return
 	}
 	
-	// Regular global var = expr
-	if p.peek(lexapi.TOKEN_NAME) {
-		name := p.current().Value
-		nameTok := p.current()
-		p.next()
-		
-		if p.peek(lexapi.TOKEN_ASSIGN) {
+	// Parse comma-separated name list: global a, b, c [= exprs]
+	for {
+		if p.peek(lexapi.TOKEN_NAME) {
+			name := p.current().Value
+			nameTok := p.current()
 			p.next()
-			exprs, err := p.parseExprList()
-			if err != nil {
-				return
+			
+			if p.peek(lexapi.TOKEN_ASSIGN) {
+				p.next()
+				exprs, err := p.parseExprList()
+				if err != nil {
+					return
+				}
+				stat := &globalVarStat{
+					baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
+					name:     name,
+					isConst:  isConst,
+					exprs:    exprs,
+				}
+				parentBlock.stats = append(parentBlock.stats, stat)
 			}
-			stat := &globalVarStat{
-				baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
-				name:     name,
-				isConst:  isConst,
-				exprs:    exprs,
-			}
-			parentBlock.stats = append(parentBlock.stats, stat)
 		}
+		
+		if !p.peek(lexapi.TOKEN_COMMA) {
+			break
+		}
+		p.next() // consume ','
 	}
 }
 
