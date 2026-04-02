@@ -53,6 +53,8 @@ type IntegerExp struct {
 }
 
 func (e *IntegerExp) IsConstant() bool { return true }
+func (e *IntegerExp) Kind() api.ExpKind { return api.EXP_KINTEGER }
+func (e *IntegerExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
 // FloatExp represents floating-point literal.
 type FloatExp struct {
@@ -69,6 +71,8 @@ type StringExp struct {
 }
 
 func (e *StringExp) IsConstant() bool { return true }
+func (e *StringExp) Kind() api.ExpKind { return api.EXP_KSTRING }
+func (e *StringExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
 // VarargExp represents vararg expression (...).
 type VarargExp struct {
@@ -84,6 +88,8 @@ type NameExp struct {
 }
 
 func (e *NameExp) IsConstant() bool { return false }
+func (e *NameExp) Kind() api.ExpKind { return api.EXP_LOCAL }
+func (e *NameExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
 // =============================================================================
 // Expression Descriptor (for parser use)
@@ -92,28 +98,31 @@ func (e *NameExp) IsConstant() bool { return false }
 // ExpDescImpl is the concrete implementation of ExpDesc.
 type ExpDescImpl struct {
 	BaseNode
-	Kind_      api.ExpKind
-	Reg_       int
-	Info_      int
-	TableReg_  int
-	KeyReg_    int
-	TrueJump_  int
-	FalseJump_ int
+	Kind_        api.ExpKind
+	Reg_         int
+	Info_        int
+	TableReg_    int
+	KeyReg_      int
+	KeyIsString_ bool
+	TrueJump_    int
+	FalseJump_   int
 }
 
-func (e *ExpDescImpl) Kind() api.ExpKind       { return e.Kind_ }
-func (e *ExpDescImpl) SetKind(k api.ExpKind)   { e.Kind_ = k }
-func (e *ExpDescImpl) Reg() int                 { return e.Reg_ }
-func (e *ExpDescImpl) SetReg(r int)             { e.Reg_ = r }
-func (e *ExpDescImpl) Info() int                { return e.Info_ }
-func (e *ExpDescImpl) SetInfo(i int)            { e.Info_ = i }
-func (e *ExpDescImpl) Table() (int, int)       { return e.TableReg_, e.KeyReg_ }
-func (e *ExpDescImpl) SetTable(t, k int)       { e.TableReg_, e.KeyReg_ = t, k }
-func (e *ExpDescImpl) TrueJump() int            { return e.TrueJump_ }
-func (e *ExpDescImpl) SetTrueJump(j int)        { e.TrueJump_ = j }
-func (e *ExpDescImpl) FalseJump() int          { return e.FalseJump_ }
-func (e *ExpDescImpl) SetFalseJump(j int)      { e.FalseJump_ = j }
-func (e *ExpDescImpl) IsConstant() bool         { return false }
+func (e *ExpDescImpl) Kind() api.ExpKind         { return e.Kind_ }
+func (e *ExpDescImpl) SetKind(k api.ExpKind)     { e.Kind_ = k }
+func (e *ExpDescImpl) Reg() int                  { return e.Reg_ }
+func (e *ExpDescImpl) SetReg(r int)              { e.Reg_ = r }
+func (e *ExpDescImpl) Info() int                 { return e.Info_ }
+func (e *ExpDescImpl) SetInfo(i int)             { e.Info_ = i }
+func (e *ExpDescImpl) Table() (int, int)         { return e.TableReg_, e.KeyReg_ }
+func (e *ExpDescImpl) SetTable(t, k int)         { e.TableReg_, e.KeyReg_ = t, k }
+func (e *ExpDescImpl) KeyIsString() bool         { return e.KeyIsString_ }
+func (e *ExpDescImpl) SetKeyIsString(b bool)     { e.KeyIsString_ = b }
+func (e *ExpDescImpl) TrueJump() int             { return e.TrueJump_ }
+func (e *ExpDescImpl) SetTrueJump(j int)         { e.TrueJump_ = j }
+func (e *ExpDescImpl) FalseJump() int            { return e.FalseJump_ }
+func (e *ExpDescImpl) SetFalseJump(j int)        { e.FalseJump_ = j }
+func (e *ExpDescImpl) IsConstant() bool           { return false }
 
 // =============================================================================
 // Binary/Unary Expression
@@ -314,6 +323,7 @@ type ReturnStat struct {
 }
 
 func (s *ReturnStat) IsScopeEnd() bool { return true }
+func (s *ReturnStat) Kind() api.StatKind { return api.STAT_RETURN }
 
 // BreakStat represents break statement.
 type BreakStat struct {
