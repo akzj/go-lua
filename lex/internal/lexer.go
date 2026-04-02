@@ -287,17 +287,18 @@ func (l *lexer) skipSep() (int, bool) {
 	return 0, false
 }
 
-// skipSepForClose is like skipSep but used inside readLongString.
-// It checks if the current position starts a closing delimiter.
+// skipSepForClose is used inside readLongString to find the closing delimiter.
+// It looks for ']' followed by '=' signs and another ']'.
 // Returns the sep level if matched (and advances past it).
 // Returns 0 if not matched (position restored).
-func (l *lexer) skipSepForClose() int {
-	start := l.current()
-	if start != '[' && start != ']' {
-		return 0
+// skipSepForClose checks if current position starts a closing delimiter for the given sep.
+// It looks for ']' followed by '=' signs and another ']'.
+// Returns true if the closing delimiter matches the expected sep.
+func (l *lexer) skipSepForClose(sep int) bool {
+	if l.current() != ']' {
+		return false
 	}
-	savedPos := l.pos
-	l.advance() // skip past the first bracket
+	l.advance() // skip past the ']'
 
 	count := 0
 	for l.current() == '=' {
@@ -305,15 +306,14 @@ func (l *lexer) skipSepForClose() int {
 		count++
 	}
 
-	if l.current() == start {
-		// Match! skipSep advances past the closing bracket, so we're done.
-		// Just consume the closing bracket (already advanced in skipSep).
-		return count + 2
+	// Match only if '=' count matches exactly AND closing ']' follows.
+	if l.current() == ']' && count+2 == sep {
+		return true
 	}
 
 	// No match — restore position
-	l.pos = savedPos
-	return 0
+	l.pos -= 1 + count // undo advances
+	return false
 }
 
 // Called after skipSep(), position is at the second bracket already.
@@ -323,11 +323,6 @@ func (l *lexer) readLongString(sep int) string {
 
 	// Determine delimiter string based on sep level
 	// sep = 2 for [[, sep = 3 for [=[, etc.
-	// Write opening delimiter(s) to buffer first
-	for i := 0; i < sep; i++ {
-		sb.WriteByte('[')
-	}
-
 	// Skip initial newline (Lua skips it but doesn't add '\n' to content)
 	c := l.current()
 	if c == '\n' || c == '\r' {
@@ -343,12 +338,13 @@ func (l *lexer) readLongString(sep int) string {
 
 		if c == ']' {
 			// Check for closing delimiter
-			if l.skipSepForClose() == sep {
+			if l.skipSepForClose(sep) {
 				// Closing delimiter found!
-				// Buffer has [sep content]. 
-				// Skip opening sep chars, return rest.
 				s := sb.String()
-				return s[sep:]
+				if len(s) > 0 {
+					return s[1:]
+				}
+				return ""
 			}
 			// Not a closing delimiter, treat ']' as content.
 			sb.WriteByte(byte(c))
@@ -467,9 +463,9 @@ func (l *lexer) readNumber() (string, api.TokenType) {
 			return numStr, api.TOKEN_NUMBER
 		}
 		// Pure hex integer (no decimal, no exponent)
-		// Use ParseUint for full 64-bit unsigned range - Lua allows arbitrarily large hex integers
-		_, err := strconv.ParseUint(numStr, 0, 64)
-		if err != nil {
+		// Lua allows arbitrarily large hex integers, so validate FORMAT only
+		// Valid format: 0x[0-9a-fA-F]+
+		if !isValidHexInt(numStr) {
 			l.Error("malformed number")
 		}
 		return numStr, api.TOKEN_INTEGER
@@ -730,6 +726,26 @@ func isValidHexFloat(s string) bool {
 		}
 	}
 	return hasDigit && i == len(s)
+}
+
+// isValidHexInt validates a hex integer literal format.
+// Lua hex integers: 0x[0-9a-fA-F]+
+// Must have at least one hex digit after 0x.
+func isValidHexInt(s string) bool {
+	if len(s) < 3 || s[0] != '0' || (s[1] != 'x' && s[1] != 'X') {
+		return false
+	}
+	// Must have at least one hex digit
+	if !isHexDigit(int(s[2])) {
+		return false
+	}
+	// All remaining chars must be hex digits
+	for i := 3; i < len(s); i++ {
+		if !isHexDigit(int(s[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 // isSpace reports whether byte is whitespace (not newline).
