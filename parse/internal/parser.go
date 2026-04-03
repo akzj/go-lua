@@ -198,6 +198,8 @@ type localFuncStat struct {
 
 func (s *localFuncStat) IsScopeEnd() bool   { return false }
 func (s *localFuncStat) Kind() astapi.StatKind { return astapi.STAT_LOCAL_FUNC }
+func (s *localFuncStat) GetFuncDef() astapi.FuncDef { return s.func_ }
+func (s *localFuncStat) GetName() string { return s.name }
 
 // globalFuncStat implements global function declaration.
 type globalFuncStat struct {
@@ -208,6 +210,8 @@ type globalFuncStat struct {
 
 func (s *globalFuncStat) IsScopeEnd() bool   { return true }
 func (s *globalFuncStat) Kind() astapi.StatKind { return astapi.STAT_GLOBAL_FUNC }
+func (s *globalFuncStat) GetFuncDef() astapi.FuncDef { return s.func_ }
+func (s *globalFuncStat) GetName() string { return s.name }
 
 // returnStat implements return statement.
 type returnStat struct {
@@ -372,6 +376,8 @@ type indexExpr struct {
 
 func (e *indexExpr) IsConstant() bool { return false }
 func (e *indexExpr) Kind() astapi.ExpKind { return astapi.EXP_INDEXED }
+func (e *indexExpr) GetTable() astapi.ExpNode { return e.table }
+func (e *indexExpr) GetKey() astapi.ExpNode { return e.key }
 
 // integerExp implements integer literal.
 type integerExp struct {
@@ -434,6 +440,11 @@ func (e *binopExp) IsConstant() bool {
 	return e.left.IsConstant() && e.right.IsConstant()
 }
 func (e *binopExp) Kind() astapi.ExpKind { return astapi.EXP_CALL } // relocatable after emit
+
+// Accessor methods for binary expression
+func (e *binopExp) GetOp() astapi.BinopKind  { return e.op }
+func (e *binopExp) GetLeft() astapi.ExpNode  { return e.left }
+func (e *binopExp) GetRight() astapi.ExpNode { return e.right }
 
 // unopExp implements unary operation.
 type unopExp struct {
@@ -1109,19 +1120,19 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 	parentBlock.stats = append(parentBlock.stats, stat)
 }
 
-// funcDefImpl is a stub FuncDef implementation
+// funcDefImpl is a FuncDef implementation
 type funcDefImpl struct {
 	baseNode
-	isLocal bool
-	params  []string
-	varArg  bool
-	block   astapi.Block
+	isLocal  bool
+	params   []string
+	varArg   bool
+	block    astapi.Block
 	lastLine int
 }
 
 // ExpNode implementation for anonymous functions
 func (f *funcDefImpl) IsConstant() bool { return false }
-func (f *funcDefImpl) Kind() astapi.ExpKind { return astapi.EXP_CALL } // Use EXP_CALL as placeholder
+func (f *funcDefImpl) Kind() astapi.ExpKind { return astapi.EXP_FUNC }
 
 func (f *funcDefImpl) IsLocal() bool              { return f.isLocal }
 func (f *funcDefImpl) Line() int                 { return f.line }

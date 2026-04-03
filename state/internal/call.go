@@ -195,9 +195,9 @@ func (L *LuaState) callCFunction(fn typesapi.TValue, nArgs, nResults int) {
 func (L *LuaState) getOrCreateExecutor() vm.VMFrameManager {
 	if L.executor == nil {
 		L.executor = vm.NewVMFrameManager()
-		// Share the stack with executor
-		L.executor.SetStack(L.stack)
 	}
+	// Always sync stack to executor to ensure latest state
+	L.executor.SetStack(L.stack)
 	return L.executor
 }
 

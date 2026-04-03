@@ -39,8 +39,8 @@ func TestExpKind(t *testing.T) {
 	if api.EXP_VARARG != 10 {
 		t.Errorf("EXP_VARARG should be 10, got %d", api.EXP_VARARG)
 	}
-	if api.EXP_VARARG_EXP != 22 {
-		t.Errorf("EXP_VARARG_EXP should be 22, got %d", api.EXP_VARARG_EXP)
+	if api.EXP_VARARG_EXP != 23 {
+		t.Errorf("EXP_VARARG_EXP should be 23, got %d", api.EXP_VARARG_EXP)
 	}
 }
 
@@ -52,12 +52,74 @@ func TestStatKind(t *testing.T) {
 }
 
 func TestBinopKind(t *testing.T) {
-	// Test that binop kinds are in expected order
+	// Test that binop kinds are in Lua 5.5 order (matching lua-master/lcode.h)
 	if api.BINOP_ADD != 0 {
 		t.Errorf("BINOP_ADD should be 0, got %d", api.BINOP_ADD)
 	}
-	if api.BINOP_CONCAT != 17 {
-		t.Errorf("BINOP_CONCAT should be 17, got %d", api.BINOP_CONCAT)
+	// Arithmetic: ADD(0), SUB(1), MUL(2), MOD(3), POW(4), DIV(5), IDIV(6)
+	if api.BINOP_SUB != 1 {
+		t.Errorf("BINOP_SUB should be 1, got %d", api.BINOP_SUB)
+	}
+	if api.BINOP_MUL != 2 {
+		t.Errorf("BINOP_MUL should be 2, got %d", api.BINOP_MUL)
+	}
+	if api.BINOP_MOD != 3 {
+		t.Errorf("BINOP_MOD should be 3, got %d", api.BINOP_MOD)
+	}
+	if api.BINOP_POW != 4 {
+		t.Errorf("BINOP_POW should be 4, got %d", api.BINOP_POW)
+	}
+	if api.BINOP_DIV != 5 {
+		t.Errorf("BINOP_DIV should be 5, got %d", api.BINOP_DIV)
+	}
+	if api.BINOP_IDIV != 6 {
+		t.Errorf("BINOP_IDIV should be 6, got %d", api.BINOP_IDIV)
+	}
+	// Bitwise: BAND(7), BOR(8), BXOR(9), SHL(10), SHR(11)
+	if api.BINOP_BAND != 7 {
+		t.Errorf("BINOP_BAND should be 7, got %d", api.BINOP_BAND)
+	}
+	if api.BINOP_BOR != 8 {
+		t.Errorf("BINOP_BOR should be 8, got %d", api.BINOP_BOR)
+	}
+	if api.BINOP_BXOR != 9 {
+		t.Errorf("BINOP_BXOR should be 9, got %d", api.BINOP_BXOR)
+	}
+	if api.BINOP_SHL != 10 {
+		t.Errorf("BINOP_SHL should be 10, got %d", api.BINOP_SHL)
+	}
+	if api.BINOP_SHR != 11 {
+		t.Errorf("BINOP_SHR should be 11, got %d", api.BINOP_SHR)
+	}
+	// Concat: CONCAT(12)
+	if api.BINOP_CONCAT != 12 {
+		t.Errorf("BINOP_CONCAT should be 12, got %d", api.BINOP_CONCAT)
+	}
+	// Comparison: EQ(13), LT(14), LE(15), NE(16), GT(17), GE(18)
+	if api.BINOP_EQ != 13 {
+		t.Errorf("BINOP_EQ should be 13, got %d", api.BINOP_EQ)
+	}
+	if api.BINOP_LT != 14 {
+		t.Errorf("BINOP_LT should be 14, got %d", api.BINOP_LT)
+	}
+	if api.BINOP_LE != 15 {
+		t.Errorf("BINOP_LE should be 15, got %d", api.BINOP_LE)
+	}
+	if api.BINOP_NE != 16 {
+		t.Errorf("BINOP_NE should be 16, got %d", api.BINOP_NE)
+	}
+	if api.BINOP_GT != 17 {
+		t.Errorf("BINOP_GT should be 17, got %d", api.BINOP_GT)
+	}
+	if api.BINOP_GE != 18 {
+		t.Errorf("BINOP_GE should be 18, got %d", api.BINOP_GE)
+	}
+	// Logical: AND(19), OR(20)
+	if api.BINOP_AND != 19 {
+		t.Errorf("BINOP_AND should be 19, got %d", api.BINOP_AND)
+	}
+	if api.BINOP_OR != 20 {
+		t.Errorf("BINOP_OR should be 20, got %d", api.BINOP_OR)
 	}
 }
 

@@ -65,6 +65,7 @@ const (
 	EXP_INDEX_STR            // VINDEXSTR - indexed with literal string
 	EXP_JMP                  // VJMP - test/comparison jump
 	EXP_RELOC                // VRELOC - relocatable expression
+	EXP_FUNC                 // VFUNCTION - function definition
 	EXP_CALL                 // VCALL - function call
 	EXP_VARARG_EXP           // VVARARG - vararg expression
 )
@@ -185,6 +186,12 @@ type FuncDef interface {
 	Line() int
 	// LastLine returns the line of the 'end' keyword.
 	LastLine() int
+	// GetParams returns the parameter names.
+	GetParams() []string
+	// IsVarArg returns true if the function uses varargs.
+	IsVarArg() bool
+	// GetBlock returns the function body block.
+	GetBlock() Block
 	// Proto returns the function prototype.
 	// Why return typesapi.Proto? Function body compilation produces Proto.
 	Proto() *typesapi.Proto
@@ -230,27 +237,27 @@ type FuncCall interface {
 type BinopKind int
 
 const (
-	BINOP_ADD BinopKind = iota //
-	BINOP_SUB                   //
-	BINOP_MUL                   //
-	BINOP_DIV                   //
-	BINOP_IDIV                  //
-	BINOP_MOD                   //
-	BINOP_POW                   //
-	BINOP_AND                   //
-	BINOP_OR                    //
-	BINOP_LT                    //
-	BINOP_GT                    //
-	BINOP_LE                    //
-	BINOP_GE                    //
-	BINOP_NE                    //
-	BINOP_EQ                    //
-	BINOP_SHL                   // << shift left
-	BINOP_SHR                   // >> shift right
-	BINOP_BAND                  // & bitwise and
-	BINOP_BOR                   // | bitwise or
-	BINOP_BXOR                  // ~ bitwise xor
-	BINOP_CONCAT                //
+	BINOP_ADD BinopKind = iota // 0
+	BINOP_SUB                   // 1
+	BINOP_MUL                   // 2
+	BINOP_MOD                   // 3
+	BINOP_POW                   // 4
+	BINOP_DIV                   // 5
+	BINOP_IDIV                  // 6
+	BINOP_BAND                  // 7
+	BINOP_BOR                   // 8
+	BINOP_BXOR                  // 9
+	BINOP_SHL                   // 10
+	BINOP_SHR                   // 11
+	BINOP_CONCAT                // 12 - string concat (Lua 5.5)
+	BINOP_EQ                    // 13
+	BINOP_LT                    // 14
+	BINOP_LE                    // 15
+	BINOP_NE                    // 16
+	BINOP_GT                    // 17
+	BINOP_GE                    // 18
+	BINOP_AND                   // 19
+	BINOP_OR                    // 20
 )
 
 // UnopKind represents unary operators.
