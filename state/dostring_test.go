@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+var stdout = os.Stdout
+
 // TestDoString_PrintHello tests that DoString can execute print('hello').
 func TestDoString_PrintHello(t *testing.T) {
 	err := DoString("print('hello')")

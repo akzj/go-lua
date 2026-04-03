@@ -107,25 +107,55 @@ func (t *TValue) GetInteger() types.LuaInteger { return t.Value.GetInteger() }
 func (t *TValue) GetFloat() types.LuaNumber    { return t.Value.GetFloat() }
 func (t *TValue) GetPointer() unsafe.Pointer   { return t.Value.GetPointer() }
 
+// extractVariantAndData extracts variant and data from a types.TValue interface
+func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
+	// Handle nil interface
+	if v == nil {
+		return types.ValueGC, nil
+	}
+	if v.IsInteger() {
+		return types.ValueInteger, v.GetInteger()
+	}
+	if v.IsFloat() {
+		return types.ValueFloat, v.GetFloat()
+	}
+	if v.IsNil() {
+		return types.ValueGC, nil
+	}
+	if v.IsTrue() {
+		return types.ValueGC, true
+	}
+	if v.IsFalse() {
+		return types.ValueGC, false
+	}
+	if v.IsTable() {
+		return types.ValueGC, v.GetGC()
+	}
+	if v.IsLightCFunction() {
+		return types.ValueCFunction, v.GetPointer()
+	}
+	return types.ValueGC, v.GetValue()
+}
+
 // =============================================================================
 // VM Executor
 // =============================================================================
 
 type Executor struct {
-	stack     []types.TValue       // Value stack
+	stack     []TValue              // Value stack (concrete internal type)
 	code      []opcodes.Instruction // Bytecode instructions
-	kvalues   []types.TValue       // Constants (K values)
+	kvalues   []TValue              // Constants (K values)
 	pc        int
 	err       error
 	frames    []*Frame
 }
 
 type Frame struct {
-	Closure  types.TValue
+	Closure  *TValue
 	base     int
 	prev     *Frame
 	savedPC  int
-	kvalues  []types.TValue
+	kvalues  []TValue
 	upvals   []*UpVal
 }
 
@@ -142,7 +172,7 @@ func (f *Frame) Top() int                     { return f.base }
 
 func NewExecutor() vmapi.VMExecutor {
 	return &Executor{
-		stack:  make([]types.TValue, 32),
+		stack:  make([]TValue, 32),
 		frames: make([]*Frame, 0),
 	}
 }
@@ -260,7 +290,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 				kval := e.k(constIdx)
 				if name, ok := kval.GetValue().(string); ok {
 					if name == "print" {
-						e.stack[a] = newLightCFunctionValue(printBuiltin)
+							tv := newLightCFunctionValue(printBuiltin)
+		e.stack[a] = *tv
 						return true
 					}
 				}
@@ -628,67 +659,64 @@ func (e *Executor) currentFrame() *Frame {
 	return e.frames[len(e.frames)-1]
 }
 
-func (e *Executor) reg(pos int) types.TValue {
+func (e *Executor) reg(pos int) *TValue {
 	for len(e.stack) <= pos {
-		e.stack = append(e.stack, &TValue{})
+		e.stack = append(e.stack, TValue{})
 	}
-	return e.stack[pos]
+	return &e.stack[pos]
 }
 
-func (e *Executor) setReg(pos int, val types.TValue) {
+func (e *Executor) setReg(pos int, val *TValue) {
 	for len(e.stack) <= pos {
-		e.stack = append(e.stack, &TValue{})
+		e.stack = append(e.stack, TValue{})
 	}
-	e.stack[pos] = val
+	e.stack[pos] = *val
 }
 
-func (e *Executor) k(idx int) types.TValue {
+func (e *Executor) k(idx int) *TValue {
 	frame := e.currentFrame()
 	if frame != nil && idx >= 0 && idx < len(frame.kvalues) {
-		return frame.kvalues[idx]
+		return &frame.kvalues[idx]
 	}
 	return &TValue{}
 }
 
-func (e *Executor) rk(idx int) types.TValue {
+func (e *Executor) rk(idx int) *TValue {
 	if idx <= opcodes.MAXINDEXRK {
 		return e.reg(frameBase(e) + idx)
 	}
 	return e.k(idx - opcodes.MAXINDEXRK - 1)
 }
 
-func (e *Executor) copyValue(dst, src types.TValue) {
-	dst = src
+func (e *Executor) copyValue(dst, src *TValue) {
+	*dst = *src
 }
 
-func (e *Executor) setNil(dst types.TValue) {
-	if t, ok := dst.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VNIL)
-	}
+func (e *Executor) setNil(dst *TValue) {
+	dst.Tt = uint8(types.LUA_VNIL)
 }
 
-func (e *Executor) setBuiltinPrint(dst types.TValue) {
+func (e *Executor) setBuiltinPrint(dst *TValue) {
 	// Create a marker for builtin print function
-	if t, ok := dst.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VLCF) // Light C function marker
-		t.Value.Variant = types.ValueCFunction
-		t.Value.Data_ = unsafe.Pointer(printBuiltin)
-	}
+	dst.Tt = uint8(types.LUA_VLCF) // Light C function marker
+	dst.Value.Variant = types.ValueCFunction
+	dst.Value.Data_ = unsafe.Pointer(printBuiltin)
 }
 
 // executeCall handles function calls
 func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	fn := e.reg(base)
-	if fn == nil {
+
+	if fn.IsNil() {
 		return false // Suspend - no function to call
 	}
-	
+
 	// Check if this is builtin print
 	if fn.IsLightCFunction() && fn.GetValue() == unsafe.Pointer(printBuiltin) {
 		e.builtinPrint(base, nArgs)
 		return true // Continue after builtin
 	}
-	
+
 	return true // Continue execution
 }
 
@@ -706,10 +734,10 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 	// Print arguments separated by tabs
 	for i := 0; i < numArgs; i++ {
 		pos := base + 1 + i
-		if pos >= len(e.stack) || e.stack[pos] == nil {
+		if pos >= len(e.stack) {
 			fmt.Print("nil")
 		} else {
-			arg := e.stack[pos]
+			arg := &e.stack[pos]
 			if arg.IsNil() {
 				fmt.Print("nil")
 			} else if arg.IsInteger() {
@@ -741,47 +769,37 @@ func init() {
 	printBuiltin = 1 // Non-zero marker for builtin
 }
 
-func (e *Executor) setBoolean(dst types.TValue, b bool) {
-	if t, ok := dst.(*TValue); ok {
-		if b {
-			t.Tt = uint8(types.LUA_VTRUE)
-		} else {
-			t.Tt = uint8(types.LUA_VFALSE)
-		}
+func (e *Executor) setBoolean(dst *TValue, b bool) {
+	if b {
+		dst.Tt = uint8(types.LUA_VTRUE)
+	} else {
+		dst.Tt = uint8(types.LUA_VFALSE)
 	}
 }
 
-func (e *Executor) setInteger(dst types.TValue, i types.LuaInteger) {
-	if t, ok := dst.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VNUMINT)
-		t.Value.Variant = types.ValueInteger
-		t.Value.Data_ = i
-	}
+func (e *Executor) setInteger(dst *TValue, i types.LuaInteger) {
+	dst.Tt = uint8(types.LUA_VNUMINT)
+	dst.Value.Variant = types.ValueInteger
+	dst.Value.Data_ = i
 }
 
-func (e *Executor) setFloat(dst types.TValue, n types.LuaNumber) {
-	if t, ok := dst.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VNUMFLT)
-		t.Value.Variant = types.ValueFloat
-		t.Value.Data_ = n
-	}
+func (e *Executor) setFloat(dst *TValue, n types.LuaNumber) {
+	dst.Tt = uint8(types.LUA_VNUMFLT)
+	dst.Value.Variant = types.ValueFloat
+	dst.Value.Data_ = n
 }
 
-func (e *Executor) setString(dst types.TValue, s string) {
-	if t, ok := dst.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VNIL)
-	}
+func (e *Executor) setString(dst *TValue, s string) {
+	dst.Tt = uint8(types.LUA_VNIL)
 }
 
-func (e *Executor) setTable(dst types.TValue, tbl tableapi.TableInterface) {
-	if t, ok := dst.(*TValue); ok {
-		t.Tt = uint8(types.Ctb(int(types.LUA_VTABLE)))
-		t.Value.Variant = types.ValueGC
-		t.Value.Data_ = tbl
-	}
+func (e *Executor) setTable(dst *TValue, tbl tableapi.TableInterface) {
+	dst.Tt = uint8(types.Ctb(int(types.LUA_VTABLE)))
+	dst.Value.Variant = types.ValueGC
+	dst.Value.Data_ = tbl
 }
 
-func (e *Executor) getTable(tval types.TValue) tableapi.TableInterface {
+func (e *Executor) getTable(tval *TValue) tableapi.TableInterface {
 	if tval.IsTable() {
 		if impl, ok := tval.GetValue().(tableapi.TableInterface); ok {
 			return impl
@@ -790,7 +808,7 @@ func (e *Executor) getTable(tval types.TValue) tableapi.TableInterface {
 	return nil
 }
 
-func (e *Executor) toString(tval types.TValue) string {
+func (e *Executor) toString(tval *TValue) string {
 	if tval.IsInteger() {
 		return fmt.Sprintf("%d", tval.GetInteger())
 	}
@@ -800,19 +818,28 @@ func (e *Executor) toString(tval types.TValue) string {
 	return ""
 }
 
-func (e *Executor) finishGet(ra, t, key types.TValue) {
+func (e *Executor) finishGet(ra, t, key *TValue) {
 	if !t.IsTable() {
 		e.setNil(ra)
 		return
 	}
 	if tbl := e.getTable(t); tbl != nil {
-		e.copyValue(ra, tbl.Get(key))
+		result := tbl.Get(key)
+		if rv, ok := result.(*TValue); ok {
+			e.copyValue(ra, rv)
+		} else {
+			// Wrap interface in concrete
+			variant, data := extractVariantAndData(result)
+			ra.Tt = uint8(result.GetTag())
+			ra.Value.Variant = variant
+			ra.Value.Data_ = data
+		}
 	} else {
 		e.setNil(ra)
 	}
 }
 
-func (e *Executor) finishSet(t, key, value types.TValue) {
+func (e *Executor) finishSet(t, key, value *TValue) {
 	if !t.IsTable() {
 		return
 	}
@@ -840,7 +867,7 @@ func (e *Executor) opArithI(inst opcodes.Instruction, iop func(a, b types.LuaInt
 	} else if rb.IsFloat() {
 		e.setFloat(ra, fop(rb.GetFloat(), types.LuaNumber(sc)))
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opArith(inst opcodes.Instruction, iop func(a, b types.LuaInteger) types.LuaInteger, fop func(a, b types.LuaNumber) types.LuaNumber) {
@@ -855,7 +882,7 @@ func (e *Executor) opArith(inst opcodes.Instruction, iop func(a, b types.LuaInte
 	} else {
 		e.setFloat(ra, fop(getFloat(rb), getFloat(rc)))
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opArithK(inst opcodes.Instruction, iop func(a, b types.LuaInteger) types.LuaInteger, fop func(a, b types.LuaNumber) types.LuaNumber) {
@@ -870,7 +897,7 @@ func (e *Executor) opArithK(inst opcodes.Instruction, iop func(a, b types.LuaInt
 	} else {
 		e.setFloat(ra, fop(getFloat(rb), getFloat(kc)))
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opArithfK(inst opcodes.Instruction, fop func(a, b types.LuaNumber) types.LuaNumber) {
@@ -879,7 +906,7 @@ func (e *Executor) opArithfK(inst opcodes.Instruction, fop func(a, b types.LuaNu
 	c := vmapi.GetArgC(inst)
 	ra := e.reg(a)
 	e.setFloat(ra, fop(getFloat(e.reg(frameBase(e)+b)), getFloat(e.k(c))))
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opArithf(inst opcodes.Instruction, fop func(a, b types.LuaNumber) types.LuaNumber) {
@@ -888,7 +915,7 @@ func (e *Executor) opArithf(inst opcodes.Instruction, fop func(a, b types.LuaNum
 	c := vmapi.GetArgC(inst)
 	ra := e.reg(a)
 	e.setFloat(ra, fop(getFloat(e.reg(frameBase(e)+b)), getFloat(e.reg(frameBase(e)+c))))
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opBitwise(inst opcodes.Instruction, op func(a, b types.LuaInteger) types.LuaInteger) {
@@ -901,7 +928,7 @@ func (e *Executor) opBitwise(inst opcodes.Instruction, op func(a, b types.LuaInt
 	if rb.IsInteger() && rc.IsInteger() {
 		e.setInteger(ra, op(rb.GetInteger(), rc.GetInteger()))
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opBitwiseK(inst opcodes.Instruction, op func(a, b types.LuaInteger) types.LuaInteger) {
@@ -914,7 +941,7 @@ func (e *Executor) opBitwiseK(inst opcodes.Instruction, op func(a, b types.LuaIn
 	if rb.IsInteger() && kc.IsInteger() {
 		e.setInteger(ra, op(rb.GetInteger(), kc.GetInteger()))
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opShiftI(inst opcodes.Instruction, left bool) {
@@ -935,7 +962,7 @@ func (e *Executor) opShiftI(inst opcodes.Instruction, left bool) {
 			e.setInteger(ra, ib>>types.LuaInteger(sc))
 		}
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opShift(inst opcodes.Instruction, left bool) {
@@ -954,7 +981,7 @@ func (e *Executor) opShift(inst opcodes.Instruction, left bool) {
 			e.setInteger(ra, ib>>ic)
 		}
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 func (e *Executor) opUnary(inst opcodes.Instruction, iop func(v types.LuaInteger) types.LuaInteger, fop func(v types.LuaNumber) types.LuaNumber) {
@@ -967,7 +994,7 @@ func (e *Executor) opUnary(inst opcodes.Instruction, iop func(v types.LuaInteger
 	} else if rb.IsFloat() {
 		e.setFloat(ra, fop(rb.GetFloat()))
 	}
-	e.pc++
+	// Note: pc++ removed - executeNext() already increments pc
 }
 
 // =============================================================================
@@ -1038,7 +1065,7 @@ func (e *Executor) compareImmGE(inst opcodes.Instruction) {
 	}
 }
 
-func (e *Executor) lessThan(a, b types.TValue) bool {
+func (e *Executor) lessThan(a, b *TValue) bool {
 	if a.IsInteger() && b.IsInteger() {
 		return a.GetInteger() < b.GetInteger()
 	}
@@ -1058,7 +1085,7 @@ func (e *Executor) lessEqual(a, b types.TValue) bool {
 	return false
 }
 
-func (e *Executor) equalValues(a, b types.TValue) bool {
+func (e *Executor) equalValues(a, b *TValue) bool {
 	if a.IsNil() && b.IsNil() {
 		return true
 	}
@@ -1077,7 +1104,7 @@ func (e *Executor) equalValues(a, b types.TValue) bool {
 	return false
 }
 
-func (e *Executor) lessThanInt(a types.TValue, b int) bool {
+func (e *Executor) lessThanInt(a *TValue, b int) bool {
 	if a.IsInteger() {
 		return a.GetInteger() < types.LuaInteger(b)
 	}
@@ -1087,7 +1114,7 @@ func (e *Executor) lessThanInt(a types.TValue, b int) bool {
 	return false
 }
 
-func (e *Executor) lessEqualInt(a types.TValue, b int) bool {
+func (e *Executor) lessEqualInt(a *TValue, b int) bool {
 	if a.IsInteger() {
 		return a.GetInteger() <= types.LuaInteger(b)
 	}
@@ -1097,7 +1124,7 @@ func (e *Executor) lessEqualInt(a types.TValue, b int) bool {
 	return false
 }
 
-func (e *Executor) greaterThanInt(a types.TValue, b int) bool {
+func (e *Executor) greaterThanInt(a *TValue, b int) bool {
 	if a.IsInteger() {
 		return a.GetInteger() > types.LuaInteger(b)
 	}
@@ -1107,7 +1134,7 @@ func (e *Executor) greaterThanInt(a types.TValue, b int) bool {
 	return false
 }
 
-func (e *Executor) greaterEqualInt(a types.TValue, b int) bool {
+func (e *Executor) greaterEqualInt(a *TValue, b int) bool {
 	if a.IsInteger() {
 		return a.GetInteger() >= types.LuaInteger(b)
 	}
@@ -1153,7 +1180,7 @@ func (e *Executor) integerDiv(m, n types.LuaInteger) types.LuaInteger {
 // Value Extractors
 // =============================================================================
 
-func getInt(tval types.TValue) types.LuaInteger {
+func getInt(tval *TValue) types.LuaInteger {
 	if tval.IsInteger() {
 		return tval.GetInteger()
 	}
@@ -1163,7 +1190,7 @@ func getInt(tval types.TValue) types.LuaInteger {
 	return 0
 }
 
-func getFloat(tval types.TValue) types.LuaNumber {
+func getFloat(tval *TValue) types.LuaNumber {
 	if tval.IsInteger() {
 		return types.LuaNumber(tval.GetInteger())
 	}
@@ -1173,30 +1200,26 @@ func getFloat(tval types.TValue) types.LuaNumber {
 	return 0
 }
 
-func setInt(tval types.TValue, i types.LuaInteger) {
-	if t, ok := tval.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VNUMINT)
-		t.Value.Variant = types.ValueInteger
-		t.Value.Data_ = i
-	}
+func setInt(tval *TValue, i types.LuaInteger) {
+	tval.Tt = uint8(types.LUA_VNUMINT)
+	tval.Value.Variant = types.ValueInteger
+	tval.Value.Data_ = i
 }
 
-func setFloat(tval types.TValue, n types.LuaNumber) {
-	if t, ok := tval.(*TValue); ok {
-		t.Tt = uint8(types.LUA_VNUMFLT)
-		t.Value.Variant = types.ValueFloat
-		t.Value.Data_ = n
-	}
+func setFloat(tval *TValue, n types.LuaNumber) {
+	tval.Tt = uint8(types.LUA_VNUMFLT)
+	tval.Value.Variant = types.ValueFloat
+	tval.Value.Data_ = n
 }
 
-func newIntValue(i types.LuaInteger) types.TValue {
+func newIntValue(i types.LuaInteger) *TValue {
 	return &TValue{
 		Tt:   uint8(types.LUA_VNUMINT),
 		Value: Value{Variant: types.ValueInteger, Data_: i},
 	}
 }
 
-func newLightCFunctionValue(fn uintptr) types.TValue {
+func newLightCFunctionValue(fn uintptr) *TValue {
 	return &TValue{
 		Tt:   uint8(types.LUA_VLCF),
 		Value: Value{Variant: types.ValueCFunction, Data_: unsafe.Pointer(fn)},
