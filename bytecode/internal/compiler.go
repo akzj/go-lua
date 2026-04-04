@@ -72,6 +72,8 @@ func (fs *FuncState) compileStat(stat astapi.StatNode) error {
 	switch stat.Kind() {
 	case astapi.STAT_CALL:
 		return fs.compileCallStat(stat)
+	case astapi.STAT_ASSIGN:
+		return fs.compileAssignStat(stat)
 	default:
 		return nil
 	}
@@ -184,7 +186,7 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		
 	} else if name, ok := funcExp.(nameAccess); ok {
 		// Global function call: name(args)
-		funcName := name.Name()
+		funcName := name.GetName()
 		
 		// Reserve R[0] for function
 		funcReg = 0
@@ -335,7 +337,7 @@ func (fs *FuncState) compileSingleAssign(v astapi.ExpNode, e astapi.ExpNode) err
 		fs.freeReg(tableReg)
 	} else if name, ok := v.(nameAccess); ok {
 		// Global assignment: name = v (use SETTABUP to set in _ENV)
-		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name.Name()})
+		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name.GetName()})
 		fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, exprReg)
 	} else {
 		return fs.errorf("unsupported assignment target: %T", v)
@@ -415,7 +417,7 @@ type indexAccess interface {
 
 // nameAccess interface for accessing name expressions
 type nameAccess interface {
-	Name() string
+	GetName() string
 }
 
 // addArgLoad emits code to load an argument into a register

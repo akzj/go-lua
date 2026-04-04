@@ -148,6 +148,7 @@ type Executor struct {
 	pc        int
 	err       error
 	frames    []*Frame
+	globalEnv tableapi.TableInterface // Global environment table for variable lookups
 }
 
 type Frame struct {
@@ -175,6 +176,11 @@ func NewExecutor() vmapi.VMExecutor {
 		stack:  make([]TValue, 32),
 		frames: make([]*Frame, 0),
 	}
+}
+
+// SetGlobalEnv sets the global environment table for the executor
+func (e *Executor) SetGlobalEnv(env tableapi.TableInterface) {
+	e.globalEnv = env
 }
 
 func (e *Executor) Execute(inst opcodes.Instruction) bool {
@@ -283,20 +289,25 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if hasUpvals {
 			// Normal path: get upval from frame
 			e.finishGet(e.reg(a), &frame.upvals[b].Value, e.rk(c))
-		} else {
-			// No upvals available - check if this is print("...")
-			if b == 0 && c >= 256 {
-				constIdx := c - 256
-				kval := e.k(constIdx)
-				if name, ok := kval.GetValue().(string); ok {
-					if name == "print" {
-							tv := newLightCFunctionValue(printBuiltin)
-		e.stack[a] = *tv
-						return true
-					}
+		} else if b == 0 && c >= 256 {
+			// No upvals - check if this is print("..."), otherwise use globalEnv
+			constIdx := c - 256
+			kval := e.k(constIdx)
+			if name, ok := kval.GetValue().(string); ok && name == "print" {
+				tv := newLightCFunctionValue(printBuiltin)
+				e.stack[a] = *tv
+			} else if e.globalEnv != nil {
+				// Fallback to globalEnv for other globals (stored as lightuserdata)
+				globalTValue := &TValue{
+					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(&e.globalEnv)},
+					Tt:    uint8(types.LUA_VLIGHTUSERDATA),
 				}
+				e.finishGet(e.reg(a), globalTValue, e.rk(c))
+			} else {
+				e.setNil(e.reg(a))
 			}
-			return true
+		} else {
+			e.setNil(e.reg(a))
 		}
 
 	case opcodes.OP_GETTABLE:
@@ -323,8 +334,16 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
 		frame := e.currentFrame()
-		if frame != nil && a < len(frame.upvals) {
+		hasUpvals := frame != nil && frame.upvals != nil && a < len(frame.upvals)
+		if hasUpvals {
 			e.finishSet(&frame.upvals[a].Value, e.k(b), e.rk(c))
+		} else if e.globalEnv != nil {
+			// Store to globalEnv for global variables
+			globalTValue := &TValue{
+				Value: Value{Variant: types.ValueGC, Data_: e.globalEnv},
+				Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
+			}
+			e.finishSet(globalTValue, e.k(b), e.rk(c))
 		}
 
 	case opcodes.OP_SETTABLE:
@@ -819,6 +838,43 @@ func (e *Executor) toString(tval *TValue) string {
 }
 
 func (e *Executor) finishGet(ra, t, key *TValue) {
+	// Handle lightuserdata (globalEnv pointer stored as LUA_VLIGHTUSERDATA)
+	if t.IsLightUserData() {
+		if ptr := t.GetPointer(); ptr != nil {
+			var tblPtr *tableapi.TableInterface
+			tblPtr = (*tableapi.TableInterface)(ptr)
+			if tbl, ok := (*tblPtr).(tableapi.TableInterface); ok {
+				// Handle nil table gracefully
+				if tbl == nil {
+					e.setNil(ra)
+					return
+				}
+				// Use finishGet's existing table handling via getTable helper
+				// Convert lightuserdata back to a form finishGet understands
+				// by calling getTable which handles the actual lookup
+				tval := &TValue{
+					Value: Value{Variant: types.ValueGC, Data_: tbl},
+					Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
+				}
+				tbl2 := e.getTable(tval)
+				if tbl2 != nil {
+					result := tbl2.Get(key)
+					if rv, ok := result.(*TValue); ok {
+						e.copyValue(ra, rv)
+					} else {
+						variant, data := extractVariantAndData(result)
+						ra.Tt = uint8(result.GetTag())
+						ra.Value.Variant = variant
+						ra.Value.Data_ = data
+					}
+					return
+				}
+			}
+		}
+		e.setNil(ra)
+		return
+	}
+
 	if !t.IsTable() {
 		e.setNil(ra)
 		return
@@ -845,6 +901,7 @@ func (e *Executor) finishSet(t, key, value *TValue) {
 	}
 	if tbl := e.getTable(t); tbl != nil {
 		tbl.Set(key, value)
+	} else {
 	}
 }
 

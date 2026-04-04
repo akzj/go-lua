@@ -7,3 +7,7 @@ package table
 import (
 	_ "github.com/akzj/go-lua/table/internal"
 )
+
+// Lib is exported to force the import of table/internal
+var Lib struct{}
+

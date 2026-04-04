@@ -10,6 +10,7 @@ package api
 
 import (
 	"github.com/akzj/go-lua/opcodes/api"
+	tableapi "github.com/akzj/go-lua/table/api"
 	types "github.com/akzj/go-lua/types/api"
 )
 
@@ -47,6 +48,9 @@ type VMFrameManager interface {
 	
 	// PopFrame pops the current stack frame.
 	PopFrame()
+
+	// SetGlobalEnv sets the global environment table for global variable access.
+	SetGlobalEnv(env tableapi.TableInterface)
 	
 	// CurrentFrame returns the current frame without popping.
 	CurrentFrame() StackFrame
