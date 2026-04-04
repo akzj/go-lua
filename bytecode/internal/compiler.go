@@ -461,6 +461,9 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 		// Global variable: emit GETTABUP to load from upvalue[0]
 		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: e.Name()})
 		fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx+256)
+	case interface{ NumFields() int; NumRecords() int }:
+		// Table constructor: emit NEWTABLE
+		fs.emitABx(int(opcodes.OP_NEWTABLE), destReg, 0)
 	default:
 		fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
 	}
