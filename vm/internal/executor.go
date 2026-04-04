@@ -771,6 +771,16 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 				fmt.Print("true")
 			} else if arg.IsFalse() {
 				fmt.Print("false")
+			} else if arg.IsTable() {
+				// Print table as table: 0xXXXXXXX
+				fmt.Printf("table: %p", arg.GetValue())
+			} else if arg.IsLightUserData() {
+				fmt.Printf("userdata: %p", arg.GetPointer())
+			} else if arg.IsFunction() {
+				fmt.Printf("function: %p", arg.GetValue())
+			} else {
+				// Fallback for other types - print type name
+				fmt.Print("unknown")
 			}
 		}
 		if i < numArgs-1 {
