@@ -91,6 +91,9 @@ func (e *NameExp) IsConstant() bool { return false }
 func (e *NameExp) Kind() api.ExpKind { return api.EXP_LOCAL }
 func (e *NameExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
+// GetName implements the nameAccess interface for global variable access
+func (e *NameExp) GetName() string { return e.Name }
+
 // =============================================================================
 // Expression Descriptor (for parser use)
 // =============================================================================

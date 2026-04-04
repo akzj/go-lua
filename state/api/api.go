@@ -10,6 +10,7 @@
 package api
 
 import (
+	gc "github.com/akzj/go-lua/gc"
 	memapi "github.com/akzj/go-lua/mem/api"
 	tableapi "github.com/akzj/go-lua/table/api"
 	types "github.com/akzj/go-lua/types/api"
@@ -102,6 +103,10 @@ type GlobalState interface {
 	// CurrentThread returns the main thread.
 	// Returns LuaStateInterface to avoid circular dependency with api.LuaState.
 	CurrentThread() LuaStateInterface
+
+	// GC returns the garbage collector interface.
+	// Provides access to GC control operations.
+	GC() gc.GCCollector
 }
 
 // =============================================================================

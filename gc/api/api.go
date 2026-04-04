@@ -9,6 +9,10 @@
 // - GC relies on types (TValue, GCObject), mem (Allocator), vm (VMExecutor)
 package api
 
+import (
+	memapi "github.com/akzj/go-lua/mem/api"
+)
+
 // =============================================================================
 // GC State Constants
 // =============================================================================
@@ -130,6 +134,16 @@ type GCCollector interface {
 	// Start resumes the garbage collector.
 	// Post: GC resumes from where it was stopped
 	Start()
+
+	// AllocateBytes increases the byte counter.
+	// Called by allocator on each allocation.
+	AllocateBytes(bytes uint64)
+
+	// BytesInUse returns approximate bytes currently allocated.
+	BytesInUse() uint64
+
+	// BytesThreshold returns the threshold that triggers next GC.
+	BytesThreshold() uint64
 }
 
 // GCState provides read access to GC state machine.
@@ -274,4 +288,20 @@ func CurrentWhite(currentWhite uint8) uint8 {
 // OtherWhite returns the other white color (dead white).
 func OtherWhite(currentWhite uint8) uint8 {
 	return currentWhite ^ 1
+}
+
+// =============================================================================
+// Factory
+// =============================================================================
+
+// DefaultGCCollector is the default GC collector instance.
+// Initialized by gc/init.go.
+var DefaultGCCollector GCCollector
+
+// NewCollector creates a new garbage collector with the given allocator.
+func NewCollector(alloc memapi.Allocator) GCCollector {
+	if DefaultGCCollector != nil {
+		return DefaultGCCollector
+	}
+	return nil
 }

@@ -2,6 +2,7 @@
 package internal
 
 import (
+	gc "github.com/akzj/go-lua/gc"
 	memapi "github.com/akzj/go-lua/mem/api"
 	"github.com/akzj/go-lua/state/api"
 	tableapi "github.com/akzj/go-lua/table/api"
@@ -13,6 +14,7 @@ type globalState struct {
 	alloc     memapi.Allocator        // Memory allocator
 	registry  tableapi.TableInterface  // Global registry
 	mainThread *LuaState         // Main thread (the one that created this global state)
+	gc        gc.GCCollector     // Garbage collector
 }
 
 func (g *globalState) Allocator() memapi.Allocator {
@@ -25,4 +27,8 @@ func (g *globalState) Registry() tableapi.TableInterface {
 
 func (g *globalState) CurrentThread() api.LuaStateInterface {
 	return g.mainThread
+}
+
+func (g *globalState) GC() gc.GCCollector {
+	return g.gc
 }

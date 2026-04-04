@@ -914,6 +914,24 @@ func (c *Collector) GCMode() int {
 	return c.gckind
 }
 
+// SetPause sets the GC pause percentage.
+// value: pause percentage (100 = wait until memory doubles, 50 = wait until 50% more memory)
+func (c *Collector) SetPause(value int) {
+	if value <= 0 {
+		value = 1
+	}
+	c.genminormul = value
+}
+
+// SetStepMul sets the GC step multiplier.
+// value: step multiplier (100 = normal speed, 200 = twice as fast)
+func (c *Collector) SetStepMul(value int) {
+	if value <= 0 {
+		value = 1
+	}
+	c.genmajormul = value
+}
+
 // FullGCMajor performs a major collection in generational mode.
 func (c *Collector) FullGCMajor() {
 	// Invalidate all ages
