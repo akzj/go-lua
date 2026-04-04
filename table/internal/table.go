@@ -418,22 +418,20 @@ func mainposition(t *Table, key typesapi.TValue) *Node {
 	if key.IsInteger() {
 		return hashint(t, key.GetInteger())
 	}
+	// If hash table has no nodes allocated, return nil
+	if t.Node == nil || sizenode(t) == 0 {
+		return nil
+	}
 	if key.IsFloat() {
 		size := sizenode(t)
-		if size == 0 {
-			return nil
-		}
 		return gnode(t, int(math.Float64bits(float64(key.GetFloat())))%size)
 	}
 	// For other types, use pointer hash
-	size := sizenode(t)
-	if size == 0 {
-		return nil
-	}
 	h := uintptr(0)
 	if key.GetValue() != nil {
 		h = reflect.ValueOf(key.GetValue()).Pointer()
 	}
+	size := sizenode(t)
 	return gnode(t, int(h)&(size-1))
 }
 
@@ -551,6 +549,9 @@ func (ti *TableImpl) Get(key typesapi.TValue) typesapi.TValue {
 	}
 	// Generic get for other types
 	mp := mainposition(ti.tbl, key)
+	if mp == nil {
+		return NewTValueNil()
+	}
 	for {
 		if equalkey(key, mp) {
 			if !isempty(gval(mp)) {
@@ -669,6 +670,16 @@ func (ti *TableImpl) SetMetatable(t typesapi.Table) {
 // newkey inserts a key-value pair into the hash table.
 func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 	mp := mainposition(ti.tbl, key)
+	if mp == nil {
+		// Table has no hash nodes - allocate initial node
+		ti.tbl.Lsizenode = 1
+		nodes := make([]Node, sizenode(ti.tbl))
+		ti.tbl.Node = (*Node)(unsafe.Pointer(&nodes[0]))
+		mp = mainposition(ti.tbl, key)
+		if mp == nil {
+			return
+		}
+	}
 	if isempty(gval(mp)) || isdummy(ti.tbl) {
 		f := ti.getfreepos()
 		if f == nil {

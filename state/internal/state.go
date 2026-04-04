@@ -11,7 +11,10 @@ import (
 	tableapi "github.com/akzj/go-lua/table/api"
 	types "github.com/akzj/go-lua/types/api"
 	"github.com/akzj/go-lua/vm"
+	"github.com/akzj/go-lua/table"
 )
+
+var _ = table.Lib // Force import of table package to trigger table/internal init()
 
 // LuaState is the concrete implementation of LuaStateInterface.
 // Manages a Lua execution state (thread/coroutine).
@@ -32,6 +35,8 @@ type LuaState struct {
 
 // NewLuaState creates a new Lua state.
 // If alloc is nil, uses the default allocator.
+var _ = table.Lib // Force import of table package to trigger table/internal init()
+
 func NewLuaState(alloc memapi.Allocator) *LuaState {
 	// Create GC collector first
 	gcCollector := gc.NewCollector(alloc)

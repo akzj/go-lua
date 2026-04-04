@@ -195,6 +195,8 @@ func (L *LuaState) callCFunction(fn typesapi.TValue, nArgs, nResults int) {
 func (L *LuaState) getOrCreateExecutor() vm.VMFrameManager {
 	if L.executor == nil {
 		L.executor = vm.NewVMFrameManager()
+		// Set the global environment table for global variable access
+		L.executor.SetGlobalEnv(L.global.Registry())
 	}
 	// Always sync stack to executor to ensure latest state
 	L.executor.SetStack(L.stack)
