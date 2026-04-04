@@ -11,6 +11,7 @@ import (
 var _ vmapi.VMFrameManager = (*Executor)(nil)
 
 // NewVMFrameManager implements vmapi.NewVMFrameManager
+// NewVMFrameManager creates a new VM frame manager for integrated execution.
 func NewVMFrameManager() vmapi.VMFrameManager {
 	return &Executor{
 		stack:  make([]TValue, 32),

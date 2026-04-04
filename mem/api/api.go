@@ -55,6 +55,18 @@ type AllocatorConfig struct {
 	// OnOutOfMemory is called when allocation fails and cannot be recovered.
 	// If nil, defaults to panic with "memory allocation error".
 	OnOutOfMemory func()
+
+	// GCCollector is an optional garbage collector to trigger on allocations.
+	// When set, the allocator will call GC step checks after each allocation.
+	// This enables automatic GC triggering for long-running services.
+	// Must implement: AllocateBytes, BytesInUse, BytesThreshold, Step
+	GCCollector interface {
+		AllocateBytes(bytes uint64)
+		BytesInUse() uint64
+		BytesThreshold() uint64
+		Step() bool
+		Start()
+	}
 }
 
 // NewAllocator creates an Allocator with the given configuration.

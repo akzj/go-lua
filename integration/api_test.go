@@ -1,7 +1,7 @@
 // Package integration provides end-to-end integration tests for the Lua VM.
 // These tests verify that public APIs work correctly together.
 //
-// NOTE: DoString() and Require() have TODO implementations.
+// NOTE: Require() has a TODO implementation. DoString() works.
 // TestCall() is implemented below.
 package integration
 
@@ -249,11 +249,12 @@ func TestTypename(t *testing.T) {
 // =============================================================================
 
 // The following features are not yet fully implemented:
+// - Require() - state/dostring.go has panic("TODO: implement Require")
 // - Resume() - state/internal/state.go has panic("TODO: implement Resume")
 // - Yield() - state/internal/state.go has panic("TODO: implement Yield")
-// - DoString() - not implemented
-// - Require() - not implemented
 // - Full Lua closure execution - requires bytecode compiler
+//
+// Note: DoString() is implemented and working (see TestLuaMasterExecution).
 //
 // TestCall verifies the Call function works correctly.
 // Note: Call() requires a Lua closure (bytecode). This test verifies the
@@ -271,4 +272,151 @@ func TestCall(t *testing.T) {
 	
 	L.SetTop(0) // Clear stack
 	L.Call(0, 0) // Should panic - no function to call
+}
+
+// =============================================================================
+// Lua-Master Execution Tests
+// =============================================================================
+
+// TestLuaMasterExecution verifies that code patterns from lua-master/testes
+// can be executed end-to-end through DoString (parse + compile + run).
+//
+// These tests extract and adapt patterns from lua-master/testes/*.lua files
+// that can run with basic Lua primitives (no require, assert, or external globals).
+func TestLuaMasterExecution(t *testing.T) {
+	// Lua-master tests use require, assert, and external globals (T, debug).
+	// We provide minimal helpers to run testable snippets.
+
+	// Provide assert function for tests that need it
+	assertWrapper := `
+assert = function(cond, msg)
+	if not cond then
+		error(msg or "assertion failed!")
+	end
+end
+`
+
+	// Test 1: constructs.lua patterns - operator precedence
+	// From lua-master/testes/constructs.lua: "assert(2^3^2 == 2^(3^2))"
+	t.Run("ConstructsOperatorPrecedence", func(t *testing.T) {
+		code := assertWrapper + `
+x = 2^3^2
+y = 2^(3^2)
+assert(x == y, "power precedence failed")
+assert(2^3*4 == (2^3)*4, "power* precedence failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("ConstructsOperatorPrecedence failed: %v", err)
+		}
+	})
+
+	// Test 2: constructs.lua patterns - arithmetic
+	// From lua-master/testes/constructs.lua patterns
+	t.Run("ConstructsArithmetic", func(t *testing.T) {
+		code := assertWrapper + `
+assert(-3-1-5 == 0+0-9, "subtraction failed")
+assert(2*1+3/3 == 3, "mult/div failed")
+assert(-2^2 == -4, "unary minus with power failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("ConstructsArithmetic failed: %v", err)
+		}
+	})
+
+	// Test 3: literals.lua patterns - string operations
+	// From lua-master/testes/literals.lua: basic string handling
+	t.Run("LiteralsStringBasic", func(t *testing.T) {
+		code := assertWrapper + `
+s = "hello world"
+assert(#s == 11, "string len failed")
+t = "test" .. "ing"
+assert(t == "testing", "concat failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("LiteralsStringBasic failed: %v", err)
+		}
+	})
+
+	// Test 4: closure.lua patterns - basic closures
+	// From lua-master/testes/closure.lua: simple closure
+	t.Run("ClosureBasic", func(t *testing.T) {
+		code := assertWrapper + `
+local function factory()
+	local x = 10
+	return function()
+		return x
+	end
+end
+local getx = factory()
+assert(getx() == 10, "closure failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("ClosureBasic failed: %v", err)
+		}
+	})
+
+	// Test 5: nextvar.lua patterns - table basics
+	// From lua-master/testes/nextvar.lua: table construction
+	t.Run("NextvarTableBasic", func(t *testing.T) {
+		code := assertWrapper + `
+t = {1, 2, 3}
+assert(#t == 3, "table length failed")
+t2 = {a = 1, b = 2}
+assert(t2.a == 1, "record table failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("NextvarTableBasic failed: %v", err)
+		}
+	})
+
+	// Test 6: constructs.lua - control flow
+	t.Run("ConstructsControlFlow", func(t *testing.T) {
+		code := assertWrapper + `
+local count = 0
+for i = 1, 5 do
+	count = count + i
+end
+assert(count == 15, "for loop failed")
+
+local j = 0
+while j < 3 do
+	j = j + 1
+end
+assert(j == 3, "while loop failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("ConstructsControlFlow failed: %v", err)
+		}
+	})
+
+	// Test 7: literals.lua - escape sequences
+	t.Run("LiteralsEscapeSequences", func(t *testing.T) {
+		code := assertWrapper + `
+s = "line1\nline2"
+assert(s == "line1\nline2", "newline escape failed")
+s2 = "tab\there"
+assert(s2 == "tab\there", "tab escape failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("LiteralsEscapeSequences failed: %v", err)
+		}
+	})
+
+	// Test 8: calls.lua patterns - function calls
+	t.Run("CallsFunctionCalls", func(t *testing.T) {
+		code := assertWrapper + `
+local function add(a, b)
+	return a + b
+end
+assert(add(2, 3) == 5, "function call failed")
+local function multi(a, b, c)
+	return a, b, c
+end
+local x, y, z = multi(1, 2, 3)
+assert(x == 1 and y == 2 and z == 3, "multiple returns failed")
+`
+		if err := state.DoString(code); err != nil {
+			t.Errorf("CallsFunctionCalls failed: %v", err)
+		}
+	})
 }

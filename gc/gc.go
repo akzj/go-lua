@@ -4,7 +4,10 @@
 // Reference: lua-master/lgc.c
 package gc
 
-import api "github.com/akzj/go-lua/gc/api"
+import (
+	api "github.com/akzj/go-lua/gc/api"
+	memapi "github.com/akzj/go-lua/mem/api"
+)
 
 // Re-export all public types and interfaces
 type GCCollector = api.GCCollector
@@ -81,3 +84,9 @@ var Novariant      = api.Novariant
 var Ctb            = api.Ctb
 var CurrentWhite   = api.CurrentWhite
 var OtherWhite     = api.OtherWhite
+
+// NewCollector creates a new garbage collector with the given allocator.
+// Re-exported from gc/api for convenience.
+func NewCollector(alloc memapi.Allocator) GCCollector {
+	return api.NewCollector(alloc)
+}
