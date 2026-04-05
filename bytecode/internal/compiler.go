@@ -84,7 +84,11 @@ func (fs *FuncState) compileStat(stat astapi.StatNode) error {
 		return fs.compileGlobalVarStat(stat)
 	case astapi.STAT_RETURN:
 		return fs.compileReturnStat(stat)
-	case astapi.STAT_IF, astapi.STAT_WHILE, astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN, astapi.STAT_BREAK:
+	case astapi.STAT_IF:
+		return fs.compileIfStat(stat)
+	case astapi.STAT_WHILE:
+		return fs.compileWhileStat(stat)
+	case astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN, astapi.STAT_BREAK:
 		return fs.compileBlockStat(stat)
 	default:
 		return fmt.Errorf("unsupported statement kind: %v (type %T)", stat.Kind(), stat)
@@ -432,6 +436,118 @@ func (fs *FuncState) compileReturnStat(stat astapi.StatNode) error {
 	fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
 	
 	return nil
+}
+
+// compileBlock compiles a block of statements
+func (fs *FuncState) compileBlock(block astapi.Block) error {
+	if block == nil {
+		return nil
+	}
+	for _, stat := range block.Stats() {
+		if stat != nil {
+			if err := fs.compileStat(stat); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// compileIfStat compiles if statement: if cond then thenBlock [else elseBlock] end
+func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
+	ifStmt, ok := stat.(interface {
+		GetCondition() astapi.ExpNode
+		GetThenBlock() astapi.Block
+		GetElseBlock() astapi.Block
+	})
+	if !ok {
+		return fs.errorf("invalid if statement")
+	}
+	
+	// Compile condition
+	condReg := fs.allocReg()
+	fs.expToReg(ifStmt.GetCondition(), condReg)
+	
+	// TEST condReg, if false JMP to else
+	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 1)
+	jmpToElse := fs.pc
+	fs.emitAsBx(int(opcodes.OP_JMP), 0, 0) // placeholder
+	
+	// Compile then block
+	if thenBlock := ifStmt.GetThenBlock(); thenBlock != nil {
+		if err := fs.compileBlock(thenBlock); err != nil {
+			return err
+		}
+	}
+	
+	// JMP to end (skip else block)
+	jmpToEnd := fs.pc
+	fs.emitAsBx(int(opcodes.OP_JMP), 0, 0) // placeholder
+	
+	// Patch else jump target
+	fs.patchAsBx(jmpToElse)
+	
+	// Compile else block
+	if elseBlock := ifStmt.GetElseBlock(); elseBlock != nil {
+		if err := fs.compileBlock(elseBlock); err != nil {
+			return err
+		}
+	}
+	
+	// Patch end jump target
+	fs.patchAsBx(jmpToEnd)
+	
+	return nil
+}
+
+// compileWhileStat compiles while statement: while cond do block end
+func (fs *FuncState) compileWhileStat(stat astapi.StatNode) error {
+	whileStmt, ok := stat.(interface {
+		GetCondition() astapi.ExpNode
+		GetBlock() astapi.Block
+	})
+	if !ok {
+		return fs.errorf("invalid while statement")
+	}
+	
+	// Mark loop start position
+	loopStart := fs.pc
+	
+	// Compile condition
+	condReg := fs.allocReg()
+	fs.expToReg(whileStmt.GetCondition(), condReg)
+	
+	// TEST condReg, if false JMP to end
+	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 1)
+	jmpToEnd := fs.pc
+	fs.emitAsBx(int(opcodes.OP_JMP), 0, 0) // placeholder
+	
+	// Compile loop body
+	if block := whileStmt.GetBlock(); block != nil {
+		if err := fs.compileBlock(block); err != nil {
+			return err
+		}
+	}
+	
+	// JMP back to condition
+	fs.emitAsBx(int(opcodes.OP_JMP), 0, loopStart-fs.pc-1)
+	
+	// Patch end jump target
+	fs.patchAsBx(jmpToEnd)
+	
+	return nil
+}
+
+// patchAsBx patches the last AsBx instruction's sBx field to jump to current PC
+func (fs *FuncState) patchAsBx(instrIdx int) {
+	if instrIdx >= 0 && instrIdx < len(fs.Proto.code) {
+		// Get opcode and A from existing instruction
+		oldInst := fs.Proto.code[instrIdx]
+		op := int(oldInst >> 6 & 0xFF)
+		a := int(oldInst >> 14 & 0x1FF)
+		// Re-encode with new sBx
+		fs.Proto.code[instrIdx] = encodeAsBx(op, a, fs.pc-instrIdx-1)
+	}
 }
 
 // compileBlockStat compiles control flow statements (if, while, for, return, break)

@@ -294,6 +294,9 @@ type ifStat struct {
 
 func (s *ifStat) IsScopeEnd() bool   { return false }
 func (s *ifStat) Kind() astapi.StatKind { return astapi.STAT_IF }
+func (s *ifStat) GetCondition() astapi.ExpNode { return s.condition }
+func (s *ifStat) GetThenBlock() astapi.Block { return s.thenBlock }
+func (s *ifStat) GetElseBlock() astapi.Block { return s.elseBlock }
 
 type whileStat struct {
 	baseNode
@@ -303,6 +306,8 @@ type whileStat struct {
 
 func (s *whileStat) IsScopeEnd() bool   { return false }
 func (s *whileStat) Kind() astapi.StatKind { return astapi.STAT_WHILE }
+func (s *whileStat) GetCondition() astapi.ExpNode { return s.condition }
+func (s *whileStat) GetBlock() astapi.Block { return s.block }
 
 type doStat struct {
 	baseNode
