@@ -80,7 +80,11 @@ func (fs *FuncState) compileStat(stat astapi.StatNode) error {
 		return fs.compileGlobalFuncStat(stat)
 	case astapi.STAT_LOCAL_VAR:
 		return fs.compileLocalVarStat(stat)
-	case astapi.STAT_IF, astapi.STAT_WHILE, astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN, astapi.STAT_RETURN, astapi.STAT_BREAK:
+	case astapi.STAT_GLOBAL_VAR:
+		return fs.compileGlobalVarStat(stat)
+	case astapi.STAT_RETURN:
+		return fs.compileReturnStat(stat)
+	case astapi.STAT_IF, astapi.STAT_WHILE, astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN, astapi.STAT_BREAK:
 		return fs.compileBlockStat(stat)
 	default:
 		return fmt.Errorf("unsupported statement kind: %v (type %T)", stat.Kind(), stat)
@@ -274,6 +278,33 @@ func (fs *FuncState) compileGlobalFuncStat(stat astapi.StatNode) error {
 	return nil
 }
 
+// compileGlobalVarStat compiles global variable declaration (Lua 5.4): global name = expr
+func (fs *FuncState) compileGlobalVarStat(stat astapi.StatNode) error {
+	gv, ok := stat.(interface{ GetName() string; GetExprs() []astapi.ExpNode })
+	if !ok {
+		return fs.errorf("invalid global var statement")
+	}
+	
+	name := gv.GetName()
+	exps := gv.GetExprs()
+	
+	// Compile each expression to a register
+	for _, exp := range exps {
+		reg := fs.allocReg()
+		if exp != nil {
+			fs.expToReg(exp, reg)
+		} else {
+			fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+		}
+		// Emit SETTABUP to store in global environment (_ENV is upvalue 0)
+		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
+		fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, reg)
+		fs.freeReg(reg)
+	}
+	
+	return nil
+}
+
 // compileLocalFuncStat compiles local function declaration: local function name(args) body end
 // compileLocalFuncStat compiles local function declaration: local function name(args) body end
 func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
@@ -372,6 +403,33 @@ func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
 			fs.locals.Add(names[i], reg, fs.pc)
 		}
 	}
+	
+	return nil
+}
+
+// compileReturnStat compiles return statement: return expr1, expr2, ...
+func (fs *FuncState) compileReturnStat(stat astapi.StatNode) error {
+	ret, ok := stat.(interface{ GetExprs() []astapi.ExpNode })
+	if !ok {
+		return fs.errorf("invalid return statement")
+	}
+	
+	exps := ret.GetExprs()
+	if exps == nil || len(exps) == 0 {
+		// Return no values
+		fs.emitABC(int(opcodes.OP_RETURN), 0, 1, 0)
+		return nil
+	}
+	
+	// Compile each expression to consecutive registers
+	for _, exp := range exps {
+		reg := fs.allocReg()
+		fs.expToReg(exp, reg)
+	}
+	
+	// Emit RETURN with number of results
+	n := len(exps)
+	fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
 	
 	return nil
 }

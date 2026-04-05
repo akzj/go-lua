@@ -223,6 +223,7 @@ type returnStat struct {
 
 func (s *returnStat) IsScopeEnd() bool   { return true }
 func (s *returnStat) Kind() astapi.StatKind { return astapi.STAT_RETURN }
+func (s *returnStat) GetExprs() []astapi.ExpNode { return s.exprs }
 
 // breakStat implements break statement.
 type breakStat struct {
