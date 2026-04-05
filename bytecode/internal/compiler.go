@@ -74,8 +74,16 @@ func (fs *FuncState) compileStat(stat astapi.StatNode) error {
 		return fs.compileCallStat(stat)
 	case astapi.STAT_ASSIGN:
 		return fs.compileAssignStat(stat)
+	case astapi.STAT_LOCAL_FUNC:
+		return fs.compileLocalFuncStat(stat)
+	case astapi.STAT_GLOBAL_FUNC:
+		return fs.compileGlobalFuncStat(stat)
+	case astapi.STAT_LOCAL_VAR:
+		return fs.compileLocalVarStat(stat)
+	case astapi.STAT_IF, astapi.STAT_WHILE, astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN, astapi.STAT_RETURN, astapi.STAT_BREAK:
+		return fs.compileBlockStat(stat)
 	default:
-		return nil
+		return fmt.Errorf("unsupported statement kind: %v (type %T)", stat.Kind(), stat)
 	}
 }
 
@@ -188,24 +196,31 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		// Global function call: name(args)
 		funcName := name.GetName()
 		
-		// Reserve R[0] for function
-		funcReg = 0
+		// Allocate a fresh register for the function
+		funcReg = fs.allocReg()
 		
 		// Emit GETTABUP R(funcReg), upval[0], K(nameIdx)
 		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
 		fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, 0, nameIdx+256)
 		
-		// Now emit arguments starting at R[1]
+		// Now emit arguments starting at R[funcReg+1]
 		for i, arg := range args {
-			argReg := 1 + i
+			argReg := funcReg + 1 + i
 			fs.expToReg(arg, argReg)
+			if argReg+1 > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(argReg + 1)
+			}
 		}
 		
 		// Update maxstacksize
 		if len(args) > 0 {
-			fs.Proto.maxstacksize = uint8(1 + len(args))
+			if funcReg+1+len(args) > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(funcReg + 1 + len(args))
+			}
 		} else {
-			fs.Proto.maxstacksize = uint8(2)
+			if funcReg+2 > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(funcReg + 2)
+			}
 		}
 		
 		// Emit CALL R(funcReg), nArgs+1, 1
@@ -260,6 +275,7 @@ func (fs *FuncState) compileGlobalFuncStat(stat astapi.StatNode) error {
 }
 
 // compileLocalFuncStat compiles local function declaration: local function name(args) body end
+// compileLocalFuncStat compiles local function declaration: local function name(args) body end
 func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	lf, ok := stat.(interface{ GetFuncDef() astapi.FuncDef })
 	if !ok || lf == nil {
@@ -269,6 +285,12 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	funcDef := lf.GetFuncDef()
 	if funcDef == nil {
 		return fs.errorf("nil FuncDef in local function")
+	}
+	
+	// Get the function name
+	var funcName string
+	if namer, ok := stat.(interface{ GetName() string }); ok {
+		funcName = namer.GetName()
 	}
 	
 	// Compile the function to get its prototype
@@ -286,9 +308,42 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	// Emit CLOSURE to load function into register
 	fs.emitABx(int(opcodes.OP_CLOSURE), reg, funcIdx)
 	
-	// The function is now in register 'reg' - locals are managed by the VM
+	// Register the local variable
+	if funcName != "" {
+		fs.locals.Add(funcName, reg, 0)
+	}
 	
 	return nil
+}
+func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
+	lv, ok := stat.(interface{ GetVars() []string; GetExps() []astapi.ExpNode })
+	if !ok {
+		return fs.errorf("invalid local var statement")
+	}
+	
+// vars := lv.GetVars() // TODO: register local variable names
+	exps := lv.GetExps()
+	
+	// Compile each expression
+	for _, exp := range exps {
+		if exp != nil {
+			fs.expToReg(exp, fs.allocReg())
+		} else {
+			// Nil expression
+			reg := fs.allocReg()
+			fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+		}
+	}
+	
+	// The number of expressions determines how many registers are allocated
+	// The variables are bound to these registers
+	return nil
+}
+
+// compileBlockStat compiles control flow statements (if, while, for, return, break)
+// These require VM-level support, so for now we return an error
+func (fs *FuncState) compileBlockStat(stat astapi.StatNode) error {
+	return fs.errorf("unsupported control flow statement: %v", stat.Kind())
 }
 
 // compileAssignStat compiles assignment statement: var = expr
@@ -458,9 +513,16 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 	case indexAccess:
 		fs.compileIndexExpr(e, destReg)
 	case interface{ Name() string }:
-		// Global variable: emit GETTABUP to load from upvalue[0]
-		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: e.Name()})
-		fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx+256)
+		// First check if it's a local variable
+		name := e.Name()
+		if reg := fs.locals.Find(name); reg >= 0 {
+			// Local variable: emit MOVE to copy from local register
+			fs.emitABC(int(opcodes.OP_MOVE), destReg, reg, 0)
+		} else {
+			// Global variable: emit GETTABUP to load from upvalue[0]
+			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
+			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx+256)
+		}
 	case interface{ NumFields() int; NumRecords() int }:
 		// Table constructor: emit NEWTABLE
 		fs.emitABx(int(opcodes.OP_NEWTABLE), destReg, 0)
@@ -646,6 +708,7 @@ type AbsLineInfo struct {
 // FuncState maintains compilation state for a single function.
 type FuncState struct {
 	Proto *Prototype
+	locals  Locals
 	pc    int
 	Prev  *FuncState
 	C     *Compiler
@@ -654,9 +717,10 @@ type FuncState struct {
 // NewFuncState creates a new FuncState.
 func NewFuncState(c *Compiler, proto *Prototype) *FuncState {
 	return &FuncState{
-		Proto: proto,
-		pc:    0,
-		C:     c,
+		Proto:  proto,
+		locals: NewLocals(),
+		pc:     0,
+		C:      c,
 	}
 }
 
@@ -864,6 +928,16 @@ func (l *Locals) Get(index int) *VarInfo {
 		return nil
 	}
 	return &l.vars[index]
+}
+
+// Find returns the register index for a variable name, or -1 if not found.
+func (l *Locals) Find(name string) int {
+	for i := len(l.vars) - 1; i >= 0; i-- {
+		if l.vars[i].Name == name {
+			return l.vars[i].Reg
+		}
+	}
+	return -1
 }
 
 // Count returns the number of local variables.
