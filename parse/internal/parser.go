@@ -188,6 +188,8 @@ type localVarStat struct {
 
 func (s *localVarStat) IsScopeEnd() bool   { return false }
 func (s *localVarStat) Kind() astapi.StatKind { return astapi.STAT_LOCAL_VAR }
+func (s *localVarStat) GetNames() []string    { return s.names }
+func (s *localVarStat) GetExprs() []astapi.ExpNode { return s.exprs }
 
 // localFuncStat implements local function declaration.
 type localFuncStat struct {
