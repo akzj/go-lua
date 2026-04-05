@@ -316,27 +316,63 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	return nil
 }
 func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
-	lv, ok := stat.(interface{ GetVars() []string; GetExps() []astapi.ExpNode })
-	if !ok {
+	// Use interface to access concrete type fields
+	var names []string
+	var exps []astapi.ExpNode
+	
+	switch lv := stat.(type) {
+	case interface{ GetNames() []string }:
+		names = lv.GetNames()
+	case interface{ Names() []string }:
+		names = lv.Names()
+	}
+	
+	switch lv := stat.(type) {
+	case interface{ GetExprs() []astapi.ExpNode }:
+		exps = lv.GetExprs()
+	case interface{ Exprs() []astapi.ExpNode }:
+		exps = lv.Exprs()
+	}
+	
+	if names == nil && exps == nil {
 		return fs.errorf("invalid local var statement")
 	}
 	
-// vars := lv.GetVars() // TODO: register local variable names
-	exps := lv.GetExps()
+	if names == nil {
+		names = make([]string, len(exps))
+	}
+	if exps == nil {
+		exps = make([]astapi.ExpNode, len(names))
+	}
 	
-	// Compile each expression
-	for _, exp := range exps {
+	// Handle case where names and exps may have different lengths
+	nVars := len(names)
+	nExps := len(exps)
+	
+	// Compile expressions to registers
+	for i, exp := range exps {
+		reg := fs.allocReg()
 		if exp != nil {
-			fs.expToReg(exp, fs.allocReg())
+			fs.expToReg(exp, reg)
 		} else {
 			// Nil expression
-			reg := fs.allocReg()
 			fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+		}
+		// Register the local variable for variables that have corresponding expressions
+		if i < nVars && names[i] != "" {
+			fs.locals.Add(names[i], reg, fs.pc)
 		}
 	}
 	
-	// The number of expressions determines how many registers are allocated
-	// The variables are bound to these registers
+	// Handle extra variables without expressions (local x, y)
+	for i := nExps; i < nVars; i++ {
+		reg := fs.allocReg()
+		fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+		if names[i] != "" {
+			fs.locals.Add(names[i], reg, fs.pc)
+		}
+	}
+	
 	return nil
 }
 
