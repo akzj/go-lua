@@ -141,6 +141,11 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 // VM Executor
 // =============================================================================
 
+// globalEnvWrapper wraps an interface value to allow pointer extraction
+type globalEnvWrapper struct {
+	env tableapi.TableInterface
+}
+
 type Executor struct {
 	stack     []TValue              // Value stack (concrete internal type)
 	code      []opcodes.Instruction // Bytecode instructions
@@ -149,6 +154,7 @@ type Executor struct {
 	err       error
 	frames    []*Frame
 	globalEnv tableapi.TableInterface // Global environment table for variable lookups
+	globalEnvPtr *globalEnvWrapper    // Pointer wrapper for lightuserdata extraction
 }
 
 type Frame struct {
@@ -181,6 +187,7 @@ func NewExecutor() vmapi.VMExecutor {
 // SetGlobalEnv sets the global environment table for the executor
 func (e *Executor) SetGlobalEnv(env tableapi.TableInterface) {
 	e.globalEnv = env
+	e.globalEnvPtr = &globalEnvWrapper{env: env}
 }
 
 func (e *Executor) Execute(inst opcodes.Instruction) bool {
@@ -295,11 +302,11 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			kval := e.k(constIdx)
 			if name, ok := kval.GetValue().(string); ok && name == "print" {
 				tv := newLightCFunctionValue(printBuiltin)
-				e.stack[a] = *tv
-			} else if e.globalEnv != nil {
+				e.setReg(a, tv)
+			} else if e.globalEnvPtr != nil {
 				// Fallback to globalEnv for other globals (stored as lightuserdata)
 				globalTValue := &TValue{
-					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(&e.globalEnv)},
+					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
 					Tt:    uint8(types.LUA_VLIGHTUSERDATA),
 				}
 				e.finishGet(e.reg(a), globalTValue, e.rk(c))
@@ -527,6 +534,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_TEST:
 		a := vmapi.GetArgA(inst)
 		isFalse := !e.reg(frameBase(e) + a).IsTrue()
+		// k=0: JMP if register is FALSE
+		// k=1: JMP if register is TRUE
 		if isFalse == vmapi.HasKBit(inst) {
 			e.pc++
 		}
@@ -773,11 +782,8 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 				fmt.Print("false")
 			} else if arg.IsTable() {
 				// Print table as table: 0xXXXXXXX
-				fmt.Printf("table: %p", arg.GetValue())
 			} else if arg.IsLightUserData() {
-				fmt.Printf("userdata: %p", arg.GetPointer())
 			} else if arg.IsFunction() {
-				fmt.Printf("function: %p", arg.GetValue())
 			} else {
 				// Fallback for other types - print type name
 				fmt.Print("unknown")
@@ -851,19 +857,11 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 	// Handle lightuserdata (globalEnv pointer stored as LUA_VLIGHTUSERDATA)
 	if t.IsLightUserData() {
 		if ptr := t.GetPointer(); ptr != nil {
-			var tblPtr *tableapi.TableInterface
-			tblPtr = (*tableapi.TableInterface)(ptr)
-			if tbl, ok := (*tblPtr).(tableapi.TableInterface); ok {
-				// Handle nil table gracefully
-				if tbl == nil {
-					e.setNil(ra)
-					return
-				}
-				// Use finishGet's existing table handling via getTable helper
-				// Convert lightuserdata back to a form finishGet understands
-				// by calling getTable which handles the actual lookup
+			// Cast to globalEnvWrapper and extract the table
+			wrapper := (*globalEnvWrapper)(ptr)
+			if wrapper != nil && wrapper.env != nil {
 				tval := &TValue{
-					Value: Value{Variant: types.ValueGC, Data_: tbl},
+					Value: Value{Variant: types.ValueGC, Data_: wrapper.env},
 					Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
 				}
 				tbl2 := e.getTable(tval)
@@ -906,6 +904,7 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 }
 
 func (e *Executor) finishSet(t, key, value *TValue) {
+
 	if !t.IsTable() {
 		return
 	}

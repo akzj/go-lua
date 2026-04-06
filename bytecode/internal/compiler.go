@@ -47,9 +47,12 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 	}
 
 	fs := &FuncState{
-		Proto: proto,
-		pc:    0,
-		C:     c,
+		Proto:        proto,
+		pc:           0,
+		C:            c,
+		labelScopes:  []map[string]int{make(map[string]int)},
+		pendingGotos: make(map[string][]int),
+		gotoScopes:   make(map[int]int),
 	}
 
 	// Compile each statement in the block
@@ -59,8 +62,15 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 		}
 	}
 
-	// Add RETURN0 if no return statement
-	if len(proto.code) == 0 {
+	// Check for undefined labels referenced by gotos
+	if len(fs.pendingGotos) > 0 {
+		for labelName := range fs.pendingGotos {
+			return nil, bcapi.NewCompileError(0, 0, "label '%s' not defined", labelName)
+		}
+	}
+
+	// Add RETURN0 at end of function block
+	if len(proto.code) == 0 || (proto.code[len(proto.code)-1]>>6)&0x3F != uint32(opcodes.OP_RETURN0) {
 		fs.emit(int(opcodes.OP_RETURN0), 0, 0, 0)
 	}
 
@@ -88,8 +98,16 @@ func (fs *FuncState) compileStat(stat astapi.StatNode) error {
 		return fs.compileIfStat(stat)
 	case astapi.STAT_WHILE:
 		return fs.compileWhileStat(stat)
+	case astapi.STAT_DO:
+		return fs.compileDoStat(stat)
+	case astapi.STAT_REPEAT:
+		return fs.compileRepeatStat(stat)
 	case astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN, astapi.STAT_BREAK:
 		return fs.compileBlockStat(stat)
+	case astapi.STAT_GOTO:
+		return fs.compileGotoStat(stat)
+	case astapi.STAT_LABEL:
+		return fs.compileLabelStat(stat)
 	default:
 		return fmt.Errorf("unsupported statement kind: %v (type %T)", stat.Kind(), stat)
 	}
@@ -236,7 +254,33 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
 		
 	} else {
-		return fs.errorf("expected nameExp or indexExpr for function, got %T", funcExp)
+		// Fallback: treat as any expression (handles binopExp, etc.)
+		funcReg = fs.allocReg()
+		fs.expToReg(funcExp, funcReg)
+		
+		// Emit arguments
+		for i, arg := range args {
+			argReg := funcReg + 1 + i
+			fs.expToReg(arg, argReg)
+			if argReg+1 > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(argReg + 1)
+			}
+		}
+		
+		// Update maxstacksize
+		if len(args) > 0 {
+			if funcReg+1+len(args) > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(funcReg + 1 + len(args))
+			}
+		} else {
+			if funcReg+2 > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(funcReg + 2)
+			}
+		}
+		
+		// Emit CALL
+		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
+		fs.freeReg(funcReg)
 	}
 	
 	return nil
@@ -463,40 +507,66 @@ func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
 	if !ok {
 		return fs.errorf("invalid if statement")
 	}
-	
+
 	// Compile condition
 	condReg := fs.allocReg()
 	fs.expToReg(ifStmt.GetCondition(), condReg)
-	
-	// TEST condReg, if false JMP to else
-	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 1)
-	jmpToElse := fs.pc
-	fs.emitAsBx(int(opcodes.OP_JMP), 0, 0) // placeholder
-	
-	// Compile then block
+
+	// TEST condReg, if false JMP to else (c=0 means jump if false)
+	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
+	jmpToElseIdx := fs.pc
+	fs.emitSJ(0) // placeholder jump
+
+	// Compile then block with new label scope
 	if thenBlock := ifStmt.GetThenBlock(); thenBlock != nil {
-		if err := fs.compileBlock(thenBlock); err != nil {
+		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
+		err := fs.compileBlock(thenBlock)
+		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		if err != nil {
 			return err
 		}
 	}
-	
+
 	// JMP to end (skip else block)
-	jmpToEnd := fs.pc
-	fs.emitAsBx(int(opcodes.OP_JMP), 0, 0) // placeholder
-	
+	jmpToEndIdx := fs.pc
+	fs.emitSJ(0) // placeholder jump
+
 	// Patch else jump target
-	fs.patchAsBx(jmpToElse)
-	
-	// Compile else block
+	fs.patchSJ(jmpToElseIdx, fs.pc)
+
+	// Compile else block with new label scope
 	if elseBlock := ifStmt.GetElseBlock(); elseBlock != nil {
-		if err := fs.compileBlock(elseBlock); err != nil {
+		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
+		err := fs.compileBlock(elseBlock)
+		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		if err != nil {
 			return err
 		}
 	}
-	
+
 	// Patch end jump target
-	fs.patchAsBx(jmpToEnd)
-	
+	fs.patchSJ(jmpToEndIdx, fs.pc)
+
+	// Ensure we have a return at end of block
+	fs.emit(int(opcodes.OP_RETURN0), 0, 0, 0)
+
+	return nil
+}
+
+// compileDoStat compiles do...end block statement
+func (fs *FuncState) compileDoStat(stat astapi.StatNode) error {
+	doStmt, ok := stat.(interface{ GetBlock() astapi.Block })
+	if !ok {
+		return fs.errorf("invalid do statement")
+	}
+	if block := doStmt.GetBlock(); block != nil {
+		// Push a new label scope for the do...end block
+		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
+		err := fs.compileBlock(block)
+		// Pop the label scope when exiting the block
+		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		return err
+	}
 	return nil
 }
 
@@ -509,32 +579,109 @@ func (fs *FuncState) compileWhileStat(stat astapi.StatNode) error {
 	if !ok {
 		return fs.errorf("invalid while statement")
 	}
-	
+
 	// Mark loop start position
 	loopStart := fs.pc
-	
+
 	// Compile condition
 	condReg := fs.allocReg()
 	fs.expToReg(whileStmt.GetCondition(), condReg)
-	
-	// TEST condReg, if false JMP to end
-	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 1)
-	jmpToEnd := fs.pc
-	fs.emitAsBx(int(opcodes.OP_JMP), 0, 0) // placeholder
-	
-	// Compile loop body
+
+	// TEST condReg, if false JMP to end (c=0 means jump if false)
+	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
+	jmpToEndIdx := fs.pc
+	fs.emitSJ(0) // placeholder jump
+
+	// Save previous pending breaks and loop exit index
+	savedPendingBreaks := fs.pendingBreaks
+	savedLoopExitIdx := fs.loopExitIdx
+	fs.pendingBreaks = make([]int, 0)
+	fs.loopExitIdx = jmpToEndIdx // break jumps will patch to this index
+
+	// Compile loop body with new label scope
 	if block := whileStmt.GetBlock(); block != nil {
-		if err := fs.compileBlock(block); err != nil {
+		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
+		err := fs.compileBlock(block)
+		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		if err != nil {
+			fs.pendingBreaks = savedPendingBreaks
+			fs.loopExitIdx = savedLoopExitIdx
 			return err
 		}
 	}
-	
+
 	// JMP back to condition
-	fs.emitAsBx(int(opcodes.OP_JMP), 0, loopStart-fs.pc-1)
-	
-	// Patch end jump target
-	fs.patchAsBx(jmpToEnd)
-	
+	fs.emitSJ(loopStart - fs.pc - 1)
+
+	// Patch end jump target - this is the loop exit point
+	fs.patchSJ(jmpToEndIdx, fs.pc)
+
+	// Patch all pending break jumps to loop exit
+	for _, breakIdx := range fs.pendingBreaks {
+		fs.patchSJ(breakIdx, fs.pc)
+	}
+
+	// Restore previous pending breaks and loop exit index
+	fs.pendingBreaks = savedPendingBreaks
+	fs.loopExitIdx = savedLoopExitIdx
+
+	return nil
+}
+
+// compileRepeatStat compiles repeat...until statement: repeat block until condition
+// The body executes first, then condition is tested - loop continues while condition is FALSE
+func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
+	repeatStmt, ok := stat.(interface {
+		GetCondition() astapi.ExpNode
+		GetBlock() astapi.Block
+	})
+	if !ok {
+		return fs.errorf("invalid repeat statement")
+	}
+
+	// Mark loop start position
+	loopStart := fs.pc
+
+	// Save previous pending breaks and loop exit index
+	savedPendingBreaks := fs.pendingBreaks
+	savedLoopExitIdx := fs.loopExitIdx
+	fs.pendingBreaks = make([]int, 0)
+	fs.loopExitIdx = -1 // will be set after condition
+
+	// Compile loop body first (repeat...until executes body before testing condition)
+	if block := repeatStmt.GetBlock(); block != nil {
+		if err := fs.compileBlock(block); err != nil {
+			fs.pendingBreaks = savedPendingBreaks
+			fs.loopExitIdx = savedLoopExitIdx
+			return err
+		}
+	}
+
+	// Compile condition
+	condReg := fs.allocReg()
+	fs.expToReg(repeatStmt.GetCondition(), condReg)
+
+	// TEST condReg, if FALSE (c=0) JMP back to loop start
+	// In repeat...until: loop continues while condition is FALSE, exits when TRUE
+	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
+	jmpBackIdx := fs.pc
+	fs.emitSJ(0) // placeholder jump (will be patched to loop start)
+
+	// Set loop exit index for break (after condition check)
+	fs.loopExitIdx = fs.pc
+
+	// Patch jump to go back to loop start
+	fs.patchSJ(jmpBackIdx, loopStart)
+
+	// Patch all pending break jumps to loop exit (exit from condition check)
+	for _, breakIdx := range fs.pendingBreaks {
+		fs.patchSJ(breakIdx, fs.pc)
+	}
+
+	// Restore previous pending breaks and loop exit index
+	fs.pendingBreaks = savedPendingBreaks
+	fs.loopExitIdx = savedLoopExitIdx
+
 	return nil
 }
 
@@ -543,7 +690,7 @@ func (fs *FuncState) patchAsBx(instrIdx int) {
 	if instrIdx >= 0 && instrIdx < len(fs.Proto.code) {
 		// Get opcode and A from existing instruction
 		oldInst := fs.Proto.code[instrIdx]
-		op := int(oldInst >> 6 & 0xFF)
+		op := int(oldInst >> 6 & 0x7F) // Opcode is 7 bits, mask with 0x7F
 		a := int(oldInst >> 14 & 0x1FF)
 		// Re-encode with new sBx
 		fs.Proto.code[instrIdx] = encodeAsBx(op, a, fs.pc-instrIdx-1)
@@ -551,9 +698,334 @@ func (fs *FuncState) patchAsBx(instrIdx int) {
 }
 
 // compileBlockStat compiles control flow statements (if, while, for, return, break)
-// These require VM-level support, so for now we return an error
+// These delegate to specific compile methods based on statement type
 func (fs *FuncState) compileBlockStat(stat astapi.StatNode) error {
-	return fs.errorf("unsupported control flow statement: %v", stat.Kind())
+	switch stat.Kind() {
+	case astapi.STAT_FOR_NUM:
+		return fs.compileForNum(stat)
+	case astapi.STAT_FOR_IN:
+		return fs.compileForIn(stat)
+	case astapi.STAT_BREAK:
+		return fs.compileBreakStat(stat)
+	default:
+		return fs.errorf("unsupported control flow statement: %v", stat.Kind())
+	}
+}
+
+// forNumAccess interface for accessing for-num statement fields
+type forNumAccess interface {
+	GetName() string
+	GetStart() astapi.ExpNode
+	GetStop() astapi.ExpNode
+	GetStep() astapi.ExpNode
+	GetBlock() astapi.Block
+}
+
+// compileForNum compiles numeric for-loop: for var = start, stop [, step] do body end
+// Generates:
+//   LOADK R[A] = limit
+//   LOADK R[A+1] = step
+//   LOADK R[A+2] = init (loop var exposed to user)
+//   FORPREP R[A] -> R[A+2] -= R[A+1]; jump to FORLOOP
+//   [loop body]
+//   FORLOOP R[A] -> R[A+2] += R[A+1]; if in range pc += sBx
+//
+// Lua 5.5 register layout (A points to base):
+//   R[A]   = limit
+//   R[A+1] = step
+//   R[A+2] = var (loop variable exposed to user, FORLOOP updates this)
+//
+// FORPREP: R[A+2] -= R[A+1] (or R[A+2] = init - step), then jump
+// FORLOOP: R[A+2] += R[A+1]; if (step > 0 && idx <= limit) || (step < 0 && idx >= limit) then pc += sBx
+func (fs *FuncState) compileForNum(stat astapi.StatNode) error {
+	forNum, ok := stat.(forNumAccess)
+	if !ok {
+		return fs.errorf("invalid for-num statement")
+	}
+
+	varName := forNum.GetName()
+	startExp := forNum.GetStart()
+	stopExp := forNum.GetStop()
+	stepExp := forNum.GetStep()
+	bodyBlock := forNum.GetBlock()
+
+	// Allocate 3 consecutive registers:
+	// R[baseReg]   = limit
+	// R[baseReg+1] = step
+	// R[baseReg+2] = var (loop variable exposed to user, FORLOOP updates this)
+	baseReg := fs.allocReg()
+	fs.allocReg()
+	fs.allocReg()
+
+	// Update maxstacksize
+	fs.Proto.maxstacksize = uint8(baseReg + 3)
+
+	// Register the loop variable (at R[baseReg+2]) - BEFORE body so it's visible
+	fs.locals.Add(varName, baseReg+2, fs.pc)
+
+	// Compile limit expression to R[baseReg]
+	fs.expToReg(stopExp, baseReg)
+
+	// Compile step expression to R[baseReg+1], or default to 1
+	if stepExp != nil {
+		fs.expToReg(stepExp, baseReg+1)
+	} else {
+		stepIdx := fs.addConstant(&Constant{Type: ConstInteger, Int: 1})
+		fs.emitABx(int(opcodes.OP_LOADK), baseReg+1, stepIdx)
+	}
+
+	// Compile init expression to R[baseReg+2] (var)
+	fs.expToReg(startExp, baseReg+2)
+
+	// Emit FORPREP: R[A+2] -= R[A+1]; jump to FORLOOP
+	forPrepIdx := fs.emitAsBx(int(opcodes.OP_FORPREP), baseReg, 0)
+
+	// Save previous pending breaks and loop exit index
+	savedPendingBreaks := fs.pendingBreaks
+	savedLoopExitIdx := fs.loopExitIdx
+	fs.pendingBreaks = make([]int, 0)
+	// loopExitIdx will be set after FORLOOP
+
+	// Compile loop body with new label scope
+	if bodyBlock != nil {
+		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
+		err := fs.compileBlock(bodyBlock)
+		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		if err != nil {
+			fs.pendingBreaks = savedPendingBreaks
+			fs.loopExitIdx = savedLoopExitIdx
+			return err
+		}
+	}
+
+	// Emit FORLOOP: R[A+2] += R[A+1]; if in range pc += sBx
+	forLoopIdx := fs.emitAsBx(int(opcodes.OP_FORLOOP), baseReg, 0)
+
+	// Patch FORPREP to jump to FORLOOP+1 (instruction after the body)
+	fs.patchAsBxJump(forPrepIdx, forLoopIdx+1)
+
+	// Patch FORLOOP to jump back to FORPREP+1 (right after FORPREP)
+	fs.patchAsBxJump(forLoopIdx, forPrepIdx+1)
+
+	// Set loop exit index and patch pending break jumps
+	fs.loopExitIdx = fs.pc
+	for _, breakIdx := range fs.pendingBreaks {
+		fs.patchSJ(breakIdx, fs.pc)
+	}
+
+	// Restore previous pending breaks and loop exit index
+	fs.pendingBreaks = savedPendingBreaks
+	fs.loopExitIdx = savedLoopExitIdx
+
+	return nil
+}
+
+// forInAccess interface for accessing for-in statement fields
+type forInAccess interface {
+	GetNames() []string
+	GetExprs() []astapi.ExpNode
+	GetBlock() astapi.Block
+}
+
+// compileForIn compiles generic for-loop: for vars in exprs do body end
+// Generates:
+//   TFORPREP A -> pc+=sBx  (create upvalue, jump to TFORCALL)
+//   [loop body]
+//   TFORCALL A -> R[A+4], ... := R[A](R[A+1], R[A+2])
+//   TFORLOOP A -> if R[A+2] ~= nil then R[A]=R[A+2]; pc -= sBx
+func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
+	forIn, ok := stat.(forInAccess)
+	if !ok {
+		return fs.errorf("invalid for-in statement")
+	}
+
+	names := forIn.GetNames()
+	exprs := forIn.GetExprs()
+	bodyBlock := forIn.GetBlock()
+
+	if names == nil || len(names) == 0 {
+		return fs.errorf("for-in requires at least one variable")
+	}
+	if exprs == nil || len(exprs) == 0 {
+		return fs.errorf("for-in requires at least one expression")
+	}
+
+	nVars := len(names)
+	// Layout: R[A] to R[A+nVars-1] = loop variables
+	//         R[A+nVars] = internal (control)
+	//         R[A+nVars+1] = state
+	//         R[A+nVars+2] = iterator function
+	baseReg := fs.allocReg() // R[baseReg] = first loop variable
+
+	// Allocate registers for all variables and internal state
+	for i := 1; i < nVars+3; i++ {
+		fs.allocReg()
+	}
+
+	// Update maxstacksize
+	fs.Proto.maxstacksize = uint8(baseReg + nVars + 3)
+
+	// Compile expression list to registers starting at baseReg+nVars+2
+	// Order: iterator(baseReg+nVars+2), state(baseReg+nVars+1), control(baseReg+nVars)
+	for i, expr := range exprs {
+		reg := baseReg + nVars + 2 + i
+		fs.expToReg(expr, reg)
+	}
+
+	// If fewer expressions than needed (3: iterator, state, control), fill with nil
+	// Actually in Lua 5.5, exprs should provide: func, state, control
+	// If less than 3, remaining slots are filled by the loop
+
+	// Emit TFORPREP: create upvalue for R[A+nVars], jump to TFORCALL
+	tforPrepIdx := fs.emitAsBx(int(opcodes.OP_TFORPREP), baseReg, 0)
+
+	// Emit TFORCALL: call iterator with state and control
+	// TFORCALL A n results: R[A+4..A+3+n] := R[A](R[A+1], R[A+2])
+	// A = baseReg, n = nVars (number of loop variables)
+	fs.emitABC(int(opcodes.OP_TFORCALL), baseReg, nVars, 0)
+
+	// Register loop variables
+	for i, name := range names {
+		fs.locals.Add(name, baseReg+i, fs.pc)
+	}
+
+	// Save previous pending breaks and loop exit index
+	savedPendingBreaks := fs.pendingBreaks
+	savedLoopExitIdx := fs.loopExitIdx
+	fs.pendingBreaks = make([]int, 0)
+	// loopExitIdx will be set after TFORLOOP
+
+	// Compile loop body with new label scope
+	if bodyBlock != nil {
+		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
+		err := fs.compileBlock(bodyBlock)
+		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		if err != nil {
+			fs.pendingBreaks = savedPendingBreaks
+			fs.loopExitIdx = savedLoopExitIdx
+			return err
+		}
+	}
+
+	// Emit TFORLOOP: if control ~= nil then var = control; pc -= sBx
+	tforLoopIdx := fs.emitAsBx(int(opcodes.OP_TFORLOOP), baseReg, 0)
+
+	// Patch TFORPREP to jump to TFORCALL (the instruction after the body + TFORCALL)
+	// TFORPREP jumps forward, TFORLOOP jumps backward
+	// Jump target for TFORPREP = instruction after TFORLOOP
+	fs.patchAsBxJump(tforPrepIdx, tforLoopIdx+1)
+
+	// TFORLOOP jumps back to TFORCALL (right after TFORPREP)
+	fs.patchAsBxJump(tforLoopIdx, tforPrepIdx+1)
+
+	// Set loop exit index and patch pending break jumps
+	fs.loopExitIdx = fs.pc
+	for _, breakIdx := range fs.pendingBreaks {
+		fs.patchSJ(breakIdx, fs.pc)
+	}
+
+	// Restore previous pending breaks and loop exit index
+	fs.pendingBreaks = savedPendingBreaks
+	fs.loopExitIdx = savedLoopExitIdx
+
+	return nil
+}
+
+// compileBreakStat compiles break statement
+func (fs *FuncState) compileBreakStat(stat astapi.StatNode) error {
+	// Check if we're inside a loop (pendingBreaks != nil means we're in a loop)
+	// We use nil check since pendingBreaks is set to make([]int, 0) in loops
+	if fs.pendingBreaks == nil {
+		return fs.errorf("break statement must be inside a loop")
+	}
+	// Emit JMP with 0 offset (will be patched to actual exit)
+	jmpIdx := fs.emitSJ(0)
+	fs.pendingBreaks = append(fs.pendingBreaks, jmpIdx)
+	return nil
+}
+
+// compileGotoStat compiles goto statement: goto label
+// Goto can jump forward (to a label not yet seen) or backward (to an existing label).
+// For forward jumps, we emit a placeholder JMP and patch it when we encounter the label.
+// Labels have block scope - a label is only visible within its block.
+// A goto cannot jump into or out of a block.
+func (fs *FuncState) compileGotoStat(stat astapi.StatNode) error {
+	gt, ok := stat.(interface{ GetName() string })
+	if !ok {
+		return fs.errorf("invalid goto statement")
+	}
+
+	labelName := gt.GetName()
+	currentScope := len(fs.labelScopes) - 1
+
+	// Search only scopes at or above current level (not nested inner scopes)
+	// This prevents jumping into or out of blocks
+	for i := currentScope; i >= 0; i-- {
+		if labelPC, exists := fs.labelScopes[i][labelName]; exists {
+			// Label exists in an accessible scope - emit JMP to that position
+			jmpIdx := fs.emitSJ(0)
+			fs.patchSJ(jmpIdx, labelPC)
+			return nil
+		}
+	}
+
+	// Label not yet seen - emit placeholder JMP and record it for later patching
+	// Store in the current scope
+	jmpIdx := fs.emitSJ(0)
+	fs.pendingGotos[labelName] = append(fs.pendingGotos[labelName], jmpIdx)
+	fs.gotoScopes[jmpIdx] = currentScope
+
+	return nil
+}
+
+// compileLabelStat compiles label statement: ::label::
+// Labels have function-wide scope - no duplicate names allowed anywhere in the function.
+func (fs *FuncState) compileLabelStat(stat astapi.StatNode) error {
+	lbl, ok := stat.(interface{ GetName() string })
+	if !ok {
+		return fs.errorf("invalid label statement")
+	}
+
+	labelName := lbl.GetName()
+	currentScope := len(fs.labelScopes) - 1
+
+	// Check for duplicate label in ALL scopes (labels are function-wide unique)
+	for i := 0; i < len(fs.labelScopes); i++ {
+		if _, exists := fs.labelScopes[i][labelName]; exists {
+			return fs.errorf("label '%s' already defined", labelName)
+		}
+	}
+
+	// Record the label position in the current scope
+	fs.labelScopes[currentScope][labelName] = fs.pc
+
+	// Patch any pending gotos that reference this label
+	// Validate that the goto can reach this label (same or outer scope)
+	if pendingJumps, exists := fs.pendingGotos[labelName]; exists {
+		for _, jmpIdx := range pendingJumps {
+			gotoScope := fs.gotoScopes[jmpIdx]
+			// Goto can only jump to same scope or outer scope (not into inner blocks)
+			if gotoScope < currentScope {
+				return fs.errorf("label '%s' not visible due to scope", labelName)
+			}
+			fs.patchSJ(jmpIdx, fs.pc)
+		}
+		delete(fs.pendingGotos, labelName)
+	}
+
+	return nil
+}
+
+// patchAsBxJump patches the sBx field of an AsBx instruction to jump to targetPC
+func (fs *FuncState) patchAsBxJump(instrIdx int, targetPC int) {
+	if instrIdx >= 0 && instrIdx < len(fs.Proto.code) {
+		oldInst := fs.Proto.code[instrIdx]
+		// Use uint32 throughout to avoid sign issues with int conversion
+		op := int(uint32(oldInst) >> 6 & 0x7F)
+		a := int(uint32(oldInst) >> 14 & 0x1FF)
+		offset := targetPC - instrIdx - 1
+		fs.Proto.code[instrIdx] = encodeAsBx(op, a, offset)
+	}
 }
 
 // compileAssignStat compiles assignment statement: var = expr
@@ -634,9 +1106,12 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 	}
 	
 	nestedFs := &FuncState{
-		Proto: nestedProto,
-		pc:    0,
-		C:     fs.C,
+		Proto:        nestedProto,
+		pc:           0,
+		C:            fs.C,
+		labelScopes:  []map[string]int{make(map[string]int)},
+		pendingGotos: make(map[string][]int),
+		gotoScopes:   make(map[int]int),
 	}
 	
 	// Compile the function body
@@ -719,11 +1194,13 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 		idx := fs.addConstant(&Constant{Type: ConstFloat, Float: e.GetValue()})
 		fs.emitABx(int(opcodes.OP_LOADK), destReg, idx)
 	case binopAccess:
+		// Must check binopAccess BEFORE Kind() since binopExp implements both
 		fs.compileBinop(e, destReg)
 	case indexAccess:
+		// Must check indexAccess BEFORE Kind() since indexExpr may implement both
 		fs.compileIndexExpr(e, destReg)
 	case interface{ Name() string }:
-		// First check if it's a local variable
+		// First check if it's a local variable (MUST be before Kind() since nameExp implements both)
 		name := e.Name()
 		if reg := fs.locals.Find(name); reg >= 0 {
 			// Local variable: emit MOVE to copy from local register
@@ -732,6 +1209,18 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 			// Global variable: emit GETTABUP to load from upvalue[0]
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
 			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx+256)
+		}
+	case interface{ Kind() astapi.ExpKind }:
+		// Handle boolean and nil constants
+		switch e.Kind() {
+		case astapi.EXP_TRUE:
+			fs.emit(int(opcodes.OP_LOADTRUE), destReg, 0, 0)
+		case astapi.EXP_FALSE:
+			fs.emit(int(opcodes.OP_LOADFALSE), destReg, 0, 0)
+		case astapi.EXP_NIL:
+			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+		default:
+			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
 		}
 	case interface{ NumFields() int; NumRecords() int }:
 		// Table constructor: emit NEWTABLE
@@ -782,18 +1271,40 @@ func (fs *FuncState) compileBinop(binop binopAccess, destReg int) {
 	// Update maxstacksize to account for operand registers
 	fs.Proto.maxstacksize = uint8(rightReg + 1)
 
-	// Load operands
-	fs.addArgLoad(left, leftReg)
-	fs.addArgLoad(right, rightReg)
-
 	// Map binopKind to opcode
 	opcode := fs.binopToOpcode(op)
 
-	// Emit ADD/SUB/etc: result in destReg, operands at leftReg and rightReg
-	fs.emitABC(opcode, destReg, leftReg, rightReg)
+	// For comparison operators, swap operands for > and >=
+	// a > b becomes b < a, a >= b becomes b <= a
+	swap := (op == astapi.BINOP_GT || op == astapi.BINOP_GE)
+	actualLeft := right
+	actualRight := left
+	if !swap {
+		actualLeft = left
+		actualRight = right
+	}
+
+	// Load operands (in swapped order for > and >=)
+	fs.addArgLoad(actualLeft, leftReg)
+	fs.addArgLoad(actualRight, rightReg)
+
+	// Emit comparison or arithmetic op
+	// For comparison ops (OP_LT, OP_LE): executor compares R[A] vs R[C]
+	// So we put left operand in A (via MOVE), right operand in C, and B=0
+	// For arithmetic ops: executor uses R[B] and R[C], result in R[A]
+	if fs.isComparisonOp(opcode) {
+		// Move left operand to destReg (result register)
+		fs.emitABC(int(opcodes.OP_MOVE), destReg, leftReg, 0)
+		// Emit comparison: R[destReg] vs R[rightReg]
+		fs.emitABC(opcode, destReg, 0, rightReg)
+	} else {
+		// Arithmetic: result in destReg, operands in leftReg and rightReg
+		fs.emitABC(opcode, destReg, leftReg, rightReg)
+	}
 }
 
 // binopToOpcode converts BinopKind to opcode
+// For > and >=, we emit OP_LT/OP_LE with swapped operands in compileBinop
 func (fs *FuncState) binopToOpcode(op astapi.BinopKind) int {
 	switch op {
 	case astapi.BINOP_ADD:
@@ -820,9 +1331,22 @@ func (fs *FuncState) binopToOpcode(op astapi.BinopKind) int {
 		return int(opcodes.OP_SHL)
 	case astapi.BINOP_SHR:
 		return int(opcodes.OP_SHR)
+	case astapi.BINOP_LT:
+		return int(opcodes.OP_LT)
+	case astapi.BINOP_LE:
+		return int(opcodes.OP_LE)
+	case astapi.BINOP_GT:
+		return int(opcodes.OP_LT) // For >, use LT with swapped operands
+	case astapi.BINOP_GE:
+		return int(opcodes.OP_LE) // For >=, use LE with swapped operands
 	default:
 		return int(opcodes.OP_ADD) // default to ADD
 	}
+}
+
+// isComparisonOp returns true if the opcode is a comparison operator
+func (fs *FuncState) isComparisonOp(opcode int) bool {
+	return opcode == int(opcodes.OP_LT) || opcode == int(opcodes.OP_LE)
 }
 
 // emitABC emits an ABC format instruction (alias for emit).
@@ -918,19 +1442,27 @@ type AbsLineInfo struct {
 // FuncState maintains compilation state for a single function.
 type FuncState struct {
 	Proto *Prototype
-	locals  Locals
-	pc    int
-	Prev  *FuncState
-	C     *Compiler
+	locals        Locals
+	pc            int
+	Prev          *FuncState
+	C             *Compiler
+	labelScopes   []map[string]int // stack of scope maps for labels
+	pendingGotos  map[string][]int // label name -> list of goto instruction positions
+	gotoScopes    map[int]int      // goto instruction PC -> scope index where it was created
+	loopExitIdx   int              // instruction index of loop exit point (for break statement)
+	pendingBreaks []int            // pending break jump indices to patch to loop exit
 }
 
 // NewFuncState creates a new FuncState.
 func NewFuncState(c *Compiler, proto *Prototype) *FuncState {
 	return &FuncState{
-		Proto:  proto,
-		locals: NewLocals(),
-		pc:     0,
-		C:      c,
+		Proto:        proto,
+		locals:       NewLocals(),
+		pc:           0,
+		C:            c,
+		labelScopes:  []map[string]int{make(map[string]int)},
+		pendingGotos: make(map[string][]int),
+		gotoScopes:   make(map[int]int),
 	}
 }
 
@@ -987,6 +1519,25 @@ func (fs *FuncState) emitAsBx(opcode, a, sbx int) int {
 	return pc
 }
 
+// emitSJ emits a JMP instruction using sBx format (compatible with GetsBx).
+func (fs *FuncState) emitSJ(sbx int) int {
+	// Use AsBx format: opcode | A | sBx
+	return fs.emitAsBx(int(opcodes.OP_JMP), 0, sbx)
+}
+
+// patchSJ patches the sBx field of a JMP instruction to jump to targetPC.
+func (fs *FuncState) patchSJ(instrIdx int, targetPC int) {
+	if instrIdx >= 0 && instrIdx < len(fs.Proto.code) {
+		offset := targetPC - instrIdx - 1
+		oldInst := fs.Proto.code[instrIdx]
+		// Extract opcode from bits 0-6 (same as VM: inst >> POS_OP & MAXARG_OP)
+		op := int(oldInst & 0x7F)
+		// Extract A from bits 6-14
+		a := int(oldInst >> 6 & 0x1FF)
+		fs.Proto.code[instrIdx] = encodeAsBx(op, a, offset)
+	}
+}
+
 // encodeABC encodes an ABC format instruction.
 func encodeABC(opcode, a, b, c int) uint32 {
 	var k int
@@ -1006,7 +1557,10 @@ func encodeABx(opcode, a, bx int) uint32 {
 
 // encodeAsBx encodes an AsBx format instruction (signed Bx).
 func encodeAsBx(opcode, a, sbx int) uint32 {
-	return uint32(opcode) | (uint32(a) << 7) | (uint32(sbx+65535) << 14)
+	// sBx is a signed 16-bit value (range -65535 to 65535), stored as unsigned with offset
+	// OFFSET_sBx = 65535 (MAXARG_Bx >> 1)
+	// Mask AFTER shift to keep only bits 15-31 of sBx field, preventing overflow
+	return uint32(opcode) | (uint32(a) << 7) | ((uint32(sbx+65535) << 15) & 0xFFFF8000)
 }
 
 // =============================================================================

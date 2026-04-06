@@ -132,6 +132,7 @@ const (
 	STAT_GLOBAL_VAR              // Global variable declaration (Lua 5.4)
 	STAT_IF                      // If statement
 	STAT_WHILE                   // While statement
+	STAT_DO                      // Do...end block
 	STAT_REPEAT                  // Repeat until statement
 	STAT_FOR_IN                  // For-in statement
 	STAT_FOR_NUM                 // Numeric for statement

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	bcapi "github.com/akzj/go-lua/bytecode/api"
+	"github.com/akzj/go-lua/opcodes"
 	"github.com/akzj/go-lua/parse"
 )
 
@@ -212,58 +213,12 @@ func TestConstructsFileBytecode(t *testing.T) {
 // Helper functions for bytecode formatting and verification
 // =============================================================================
 
-// opcodeNames maps opcode numbers to names (matching this project's opcodes/api.go)
-var opcodeNames = map[int]string{
-	0:   "MOVE",
-	1:   "GETTABUP",
-	2:   "GETTABLE",
-	3:   "LOADK",
-	4:   "LOADKX",
-	5:   "LOADBOOL",
-	6:   "LOADNIL",
-	7:   "GETUPVAL",
-	8:   "SETTABUP",
-	9:   "SETUPVAL",
-	10:  "SETTABLE",
-	11:  "NEWTABLE",
-	12:  "SELF",
-	13:  "ADD",
-	14:  "SUB",
-	15:  "MUL",
-	16:  "DIV",
-	17:  "IDIV",
-	18:  "MOD",
-	19:  "POW",
-	20:  "UNM",
-	21:  "NOT",
-	22:  "LEN",
-	23:  "CONCAT",
-	24:  "JMP",
-	25:  "EQ",
-	26:  "LT",
-	27:  "LE",
-	28:  "TEST",
-	29:  "TESTSET",
-	30:  "CALL",
-	31:  "TAILCALL",
-	32:  "RETURN0",
-	33:  "RETURN1",
-	34:  "RETURN",
-	35:  "FORLOOP",
-	36:  "FORPREP",
-	37:  "TFORLOOP",
-	38:  "SETLIST",
-	39:  "CLOSE",
-	40:  "CLOSURE",
-	41:  "VARARG",
-}
-
 // formatOpcodes converts instruction array to opcode names
 func formatOpcodes(code []uint32) []string {
 	result := make([]string, len(code))
 	for i, inst := range code {
 		op := int(inst & 0x7F)
-		name := opcodeNames[op]
+		name := opcodes.Name(opcodes.OpCode(op))
 		if name == "" {
 			name = fmt.Sprintf("OP_%d", op)
 		}

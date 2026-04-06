@@ -315,7 +315,8 @@ type doStat struct {
 }
 
 func (s *doStat) IsScopeEnd() bool   { return false }
-func (s *doStat) Kind() astapi.StatKind { return astapi.STAT_ASSIGN } // do-stat treated as block
+func (s *doStat) Kind() astapi.StatKind { return astapi.STAT_DO }
+func (s *doStat) GetBlock() astapi.Block { return s.block }
 
 type repeatStat struct {
 	baseNode
@@ -325,6 +326,8 @@ type repeatStat struct {
 
 func (s *repeatStat) IsScopeEnd() bool   { return true }
 func (s *repeatStat) Kind() astapi.StatKind { return astapi.STAT_REPEAT }
+func (s *repeatStat) GetBlock() astapi.Block      { return s.block }
+func (s *repeatStat) GetCondition() astapi.ExpNode { return s.condition }
 
 type forNumStat struct {
 	baseNode
@@ -337,6 +340,11 @@ type forNumStat struct {
 
 func (s *forNumStat) IsScopeEnd() bool   { return false }
 func (s *forNumStat) Kind() astapi.StatKind { return astapi.STAT_FOR_NUM }
+func (s *forNumStat) GetName() string    { return s.name }
+func (s *forNumStat) GetStart() astapi.ExpNode { return s.start }
+func (s *forNumStat) GetStop() astapi.ExpNode  { return s.stop }
+func (s *forNumStat) GetStep() astapi.ExpNode  { return s.step }
+func (s *forNumStat) GetBlock() astapi.Block   { return s.block }
 
 type forInStat struct {
 	baseNode
@@ -347,6 +355,9 @@ type forInStat struct {
 
 func (s *forInStat) IsScopeEnd() bool   { return false }
 func (s *forInStat) Kind() astapi.StatKind { return astapi.STAT_FOR_IN }
+func (s *forInStat) GetNames() []string    { return s.names }
+func (s *forInStat) GetExprs() []astapi.ExpNode { return s.exprs }
+func (s *forInStat) GetBlock() astapi.Block   { return s.block }
 
 // =============================================================================
 // Expression Implementation Helpers
