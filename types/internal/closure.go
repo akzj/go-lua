@@ -4,6 +4,7 @@ package internal
 import (
 	"unsafe"
 
+	bcapi "github.com/akzj/go-lua/bytecode/api"
 	"github.com/akzj/go-lua/types/api"
 )
 
@@ -42,6 +43,11 @@ type LClosure struct {
 	Upvals []*UpVal
 }
 
+// GetProto returns the function prototype as a bcapi.Prototype interface.
+func (c *LClosure) GetProto() bcapi.Prototype {
+	return c.Proto
+}
+
 // Closure is the concrete Closure implementation.
 type Closure struct {
 	IsCClosure bool
@@ -64,8 +70,8 @@ type Proto struct {
 	Sizep           int
 	Sizelocvars     int
 	Sizeabslineinfo int
-	LineDefined     int
-	LastLineDefined int
+	LineDefined_     int
+	LastLineDefined_ int
 	K               []*TValue
 	Code            []uint32
 	P               []*Proto
@@ -79,6 +85,52 @@ type Proto struct {
 
 func (p *Proto) IsVararg() bool {
 	return p.Flag&(api.PF_VARARG_HIDDEN|api.PF_VARARG_TABLE) != 0
+}
+
+// bcapi.Prototype interface implementation for Proto.
+func (p *Proto) SourceName() string      { return "" }
+func (p *Proto) LineDefined() int        { return p.LineDefined_ }
+func (p *Proto) LastLineDefined() int    { return p.LastLineDefined_ }
+func (p *Proto) NumParams() uint8        { return p.Numparams }
+func (p *Proto) MaxStackSize() uint8     { return p.Maxstacksize }
+func (p *Proto) GetCode() []uint32       { return p.Code }
+
+func (p *Proto) GetConstants() []*bcapi.Constant {
+	result := make([]*bcapi.Constant, len(p.K))
+	for i, tv := range p.K {
+		result[i] = tvalueToConstant(tv)
+	}
+	return result
+}
+
+func (p *Proto) GetSubProtos() []bcapi.Prototype {
+	result := make([]bcapi.Prototype, len(p.P))
+	for i, sub := range p.P {
+		result[i] = sub
+	}
+	return result
+}
+
+func tvalueToConstant(tv *TValue) *bcapi.Constant {
+	switch {
+	case tv.IsNil():
+		return &bcapi.Constant{Type: bcapi.ConstNil}
+	case tv.IsInteger():
+		return &bcapi.Constant{Type: bcapi.ConstInteger, Int: int64(tv.GetInteger())}
+	case tv.IsFloat():
+		return &bcapi.Constant{Type: bcapi.ConstFloat, Float: float64(tv.GetFloat())}
+	case tv.IsString():
+		if s, ok := tv.GetValue().(string); ok {
+			return &bcapi.Constant{Type: bcapi.ConstString, Str: s}
+		}
+		return &bcapi.Constant{Type: bcapi.ConstNil}
+	case tv.IsTrue():
+		return &bcapi.Constant{Type: bcapi.ConstBool, Int: 1}
+	case tv.IsFalse():
+		return &bcapi.Constant{Type: bcapi.ConstBool, Int: 0}
+	default:
+		return &bcapi.Constant{Type: bcapi.ConstNil}
+	}
 }
 
 // Upvaldesc is the concrete Upvaldesc implementation.
