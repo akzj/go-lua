@@ -86,6 +86,9 @@ func NewLuaState(alloc memapi.Allocator) *LuaState {
 	// Allocate initial stack
 	L.growStack(20)
 
+	// Open base library — register Go functions in the global environment
+	L.openBaseLib()
+
 	return L
 }
 
@@ -476,7 +479,181 @@ func createRegistry(alloc memapi.Allocator) tableapi.TableInterface {
 // The executor will type-assert it back to vm.GoFunc when calling.
 func (L *LuaState) setGlobal(name string, fn vm.GoFunc) {
 	// Store the GoFunc interface{} as the Data_ of a LightUserData TValue
-	key := typesinternal.NewTValueString(name)
-	val := typesinternal.NewTValueLightUserData(unsafe.Pointer(&fn))
+	key := types.NewTValueString(name)
+	val := types.NewTValueLightUserData(unsafe.Pointer(&fn))
 	L.global.Registry().Set(key, val)
+}
+
+// =============================================================================
+// Base Library — Go function implementations
+// =============================================================================
+
+// bprint implements Lua's print function.
+// Pushes no return values, prints arguments to stdout.
+func bprint(stack []types.TValue, base int) int {
+	for i := 1; i < len(stack)-base; i++ {
+		if i > 1 {
+			fmt.Print("\t")
+		}
+		v := stack[base+i]
+		if v == nil || v.IsNil() {
+			fmt.Print("nil")
+		} else if v.IsInteger() {
+			fmt.Print(v.GetInteger())
+		} else if v.IsFloat() {
+			fmt.Print(v.GetFloat())
+		} else if v.IsBoolean() {
+			if v.IsTrue() {
+				fmt.Print("true")
+			} else {
+				fmt.Print("false")
+			}
+		} else if v.IsString() {
+			if s, ok := v.GetValue().(string); ok {
+				fmt.Print(s)
+			}
+		} else {
+			fmt.Print(v.GetBaseType())
+		}
+	}
+	fmt.Println()
+	return 0
+}
+
+// btype implements Lua's type function.
+// Returns the type name of the value at stack[base+1].
+func btype(stack []types.TValue, base int) int {
+	if base+1 < len(stack) {
+		v := stack[base+1]
+		var t string
+		switch {
+		case v == nil || v.IsNil():
+			t = "nil"
+		case v.IsInteger():
+			t = "number"
+		case v.IsFloat():
+			t = "number"
+		case v.IsBoolean():
+			t = "boolean"
+		case v.IsString():
+			t = "string"
+		case v.IsFunction():
+			t = "function"
+		case v.IsTable():
+			t = "table"
+		case v.IsThread():
+			t = "thread"
+		case v.IsUserData():
+			t = "userdata"
+		case v.IsLightUserData():
+			t = "userdata"
+		default:
+			t = "unknown"
+		}
+		stack[base] = types.NewTValueString(t)
+	} else {
+		stack[base] = types.NewTValueNil()
+	}
+	return 1
+}
+
+// bassert implements Lua's assert function.
+func bassert(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+	v := stack[base+1]
+	if v.IsFalse() || v.IsNil() {
+		msg := "assertion failed!"
+		if nArgs >= 2 && base+2 < len(stack) {
+			if m := stack[base+2]; !m.IsNil() {
+				if s, ok := m.GetValue().(string); ok {
+					msg = s
+				}
+			}
+		}
+		panic(msg)
+	}
+	// Return the original value(s)
+	return 1
+}
+
+// btostring implements Lua's tostring function.
+func btostring(stack []types.TValue, base int) int {
+	if base+1 < len(stack) {
+		v := stack[base+1]
+		var s string
+		switch {
+		case v.IsNil():
+			s = "nil"
+		case v.IsInteger():
+			s = fmt.Sprintf("%d", v.GetInteger())
+		case v.IsFloat():
+			s = fmt.Sprintf("%g", v.GetFloat())
+		case v.IsBoolean():
+			if v.IsTrue() {
+				s = "true"
+			} else {
+				s = "false"
+			}
+		case v.IsString():
+			if sv, ok := v.GetValue().(string); ok {
+				s = sv
+			}
+		case v.IsTable():
+			s = "table: " + fmt.Sprintf("%p", v)
+		case v.IsFunction():
+			s = "function: " + fmt.Sprintf("%p", v)
+		default:
+			s = ""
+		}
+		stack[base] = types.NewTValueString(s)
+	} else {
+		stack[base] = types.NewTValueNil()
+	}
+	return 1
+}
+
+// btonumber implements Lua's tonumber function.
+func btonumber(stack []types.TValue, base int) int {
+	if base+1 < len(stack) {
+		v := stack[base+1]
+		if v.IsInteger() {
+			stack[base] = types.NewTValueInteger(v.GetInteger())
+			return 1
+		}
+		if v.IsFloat() {
+			stack[base] = types.NewTValueFloat(v.GetFloat())
+			return 1
+		}
+		if v.IsString() {
+			if s, ok := v.GetValue().(string); ok {
+				// Try integer first
+				var i int64
+				if n, err := fmt.Sscanf(s, "%d", &i); err == nil && n == 1 {
+					stack[base] = types.NewTValueInteger(types.LuaInteger(i))
+					return 1
+				}
+				// Try float
+				var f float64
+				if n, err := fmt.Sscanf(s, "%g", &f); err == nil && n == 1 {
+					stack[base] = types.NewTValueFloat(types.LuaNumber(f))
+					return 1
+				}
+			}
+		}
+	}
+	stack[base] = types.NewTValueNil()
+	return 1
+}
+
+// openBaseLib registers base library functions in the global environment.
+func (L *LuaState) openBaseLib() {
+	L.setGlobal("print", bprint)
+	L.setGlobal("type", btype)
+	L.setGlobal("assert", bassert)
+	L.setGlobal("tostring", btostring)
+	L.setGlobal("tonumber", btonumber)
 }
