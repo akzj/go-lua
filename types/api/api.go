@@ -196,3 +196,102 @@ func MakeVariant(t, v int) int { return t | (v << variantShift) }
 func Ctb(t int) int { return t | BIT_ISCOLLECTABLE }
 func Novariant(t int) int { return t & 0x0F }
 func WithVariant(t int) int { return t & 0x3F }
+
+// =============================================================================
+// TValue Constructors (inline implementations)
+// =============================================================================
+
+// NewTValueNil creates a nil TValue.
+func NewTValueNil() TValue { return &tvalueStruct{Tt: uint8(LUA_VNIL)} }
+
+// NewTValueBoolean creates a boolean TValue.
+func NewTValueBoolean(b bool) TValue {
+	tt := LUA_VFALSE
+	if b {
+		tt = LUA_VTRUE
+	}
+	return &tvalueStruct{Tt: uint8(tt)}
+}
+
+// NewTValueInteger creates an integer TValue.
+func NewTValueInteger(i LuaInteger) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueInteger, Data_: i}, Tt: uint8(LUA_VNUMINT)}
+}
+
+// NewTValueFloat creates a float TValue.
+func NewTValueFloat(n LuaNumber) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueFloat, Data_: n}, Tt: uint8(LUA_VNUMFLT)}
+}
+
+// NewTValueLightUserData creates a light userdata TValue.
+func NewTValueLightUserData(p unsafe.Pointer) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValuePointer, Data_: p}, Tt: uint8(LUA_VLIGHTUSERDATA)}
+}
+
+// NewTValueString creates a string TValue.
+func NewTValueString(s string) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueGC, Data_: s}, Tt: uint8(Ctb(int(LUA_VSHRSTR)))}
+}
+
+// NewTValueLightCFunction creates a light C function TValue.
+func NewTValueLightCFunction(fn unsafe.Pointer) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueCFunction, Data_: fn}, Tt: uint8(LUA_VLCF)}
+}
+
+// NewDoStringMarker creates a special marker for DoString closures.
+func NewDoStringMarker(id int) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValuePointer, Data_: id}, Tt: uint8(LUA_VLIGHTUSERDATA)}
+}
+
+// tvalueStruct and valueStruct are the concrete implementations referenced by
+// the public TValue and Value interfaces in api. Defined here to avoid import cycles.
+type tvalueStruct struct {
+	Value *valueStruct
+	Tt    uint8
+}
+type valueStruct struct {
+	Variant ValueVariant
+	Data_   interface{}
+}
+
+func (v *valueStruct) GetGC() *GCObject {
+	if v.Variant != ValueGC {
+		panic("not GC")
+	}
+	return v.Data_.(*GCObject)
+}
+func (v *valueStruct) GetPointer() unsafe.Pointer { return v.Data_.(unsafe.Pointer) }
+func (v *valueStruct) GetCFunction() unsafe.Pointer { return v.Data_.(unsafe.Pointer) }
+func (v *valueStruct) GetInteger() LuaInteger { return v.Data_.(LuaInteger) }
+func (v *valueStruct) GetFloat() LuaNumber { return v.Data_.(LuaNumber) }
+
+func (t *tvalueStruct) GetTag() int               { return int(t.Tt) }
+func (t *tvalueStruct) GetBaseType() int          { return int(t.Tt) & 0x0F }
+func (t *tvalueStruct) GetValue() interface{}      { return t.Value.Data_ }
+func (t *tvalueStruct) GetGC() *GCObject           { return t.Value.GetGC() }
+func (t *tvalueStruct) GetInteger() LuaInteger     { return t.Value.GetInteger() }
+func (t *tvalueStruct) GetFloat() LuaNumber        { return t.Value.GetFloat() }
+func (t *tvalueStruct) GetPointer() unsafe.Pointer { return t.Value.GetPointer() }
+func (t *tvalueStruct) IsNil() bool                { return t.GetBaseType() == LUA_TNIL }
+func (t *tvalueStruct) IsBoolean() bool            { return t.GetBaseType() == LUA_TBOOLEAN }
+func (t *tvalueStruct) IsNumber() bool             { return t.GetBaseType() == LUA_TNUMBER }
+func (t *tvalueStruct) IsInteger() bool            { return int(t.Tt) == LUA_VNUMINT }
+func (t *tvalueStruct) IsFloat() bool              { return int(t.Tt) == LUA_VNUMFLT }
+func (t *tvalueStruct) IsString() bool             { return t.GetBaseType() == LUA_TSTRING }
+func (t *tvalueStruct) IsTable() bool              { return int(t.Tt) == Ctb(int(LUA_VTABLE)) }
+func (t *tvalueStruct) IsFunction() bool           { return t.GetBaseType() == LUA_TFUNCTION }
+func (t *tvalueStruct) IsThread() bool            { return int(t.Tt) == LUA_VTHREAD }
+func (t *tvalueStruct) IsLightUserData() bool      { return int(t.Tt) == LUA_VLIGHTUSERDATA }
+func (t *tvalueStruct) IsUserData() bool           { return int(t.Tt) == Ctb(int(LUA_VUSERDATA)) }
+func (t *tvalueStruct) IsCollectable() bool       { return int(t.Tt)&(1<<6) != 0 }
+func (t *tvalueStruct) IsTrue() bool              { return int(t.Tt) == LUA_VTRUE }
+func (t *tvalueStruct) IsFalse() bool             { return int(t.Tt) == LUA_VFALSE }
+func (t *tvalueStruct) IsLClosure() bool          { return int(t.Tt) == Ctb(int(LUA_VLCL)) }
+func (t *tvalueStruct) IsCClosure() bool         { return int(t.Tt) == Ctb(int(LUA_VCCL)) }
+func (t *tvalueStruct) IsLightCFunction() bool    { return int(t.Tt) == LUA_VLCF }
+func (t *tvalueStruct) IsClosure() bool            { return t.IsLClosure() || t.IsCClosure() || t.IsLightCFunction() }
+func (t *tvalueStruct) IsProto() bool              { return int(t.Tt) == Ctb(int(LUA_VPROTO)) }
+func (t *tvalueStruct) IsUpval() bool             { return int(t.Tt) == Ctb(int(LUA_VUPVAL)) }
+func (t *tvalueStruct) IsShortString() bool       { return int(t.Tt) == Ctb(int(LUA_VSHRSTR)) }
+func (t *tvalueStruct) IsLongString() bool        { return int(t.Tt) == Ctb(int(LUA_VLNGSTR)) }
+func (t *tvalueStruct) IsEmpty() bool             { return t.GetBaseType() == LUA_TNIL && t.Value == nil }

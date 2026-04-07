@@ -668,6 +668,11 @@ func (ti *TableImpl) SetMetatable(t typesapi.Table) {
 }
 
 // newkey inserts a key-value pair into the hash table.
+// Implements the standard Lua table insertion algorithm:
+// - If main position (mp) is empty: store directly at mp.
+// - If mp is occupied: traverse collision chain from mp, find free slot f,
+//   move the node at mp to f if its main position is in the collision chain,
+//   then store the new key-value at mp.
 func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 	mp := mainposition(ti.tbl, key)
 	if mp == nil {
@@ -675,33 +680,129 @@ func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 		ti.tbl.Lsizenode = 1
 		nodes := make([]Node, sizenode(ti.tbl))
 		ti.tbl.Node = (*Node)(unsafe.Pointer(&nodes[0]))
+		ti.tbl.Flags &^= BITDUMMY
 		mp = mainposition(ti.tbl, key)
 		if mp == nil {
 			return
 		}
 	}
 	if isempty(gval(mp)) || isdummy(ti.tbl) {
-		f := ti.getfreepos()
-		if f == nil {
-			// No free position, table is full
-			return
-		}
-		if mp != f {
-			*f = *mp
-			setempty(gval(mp))
-		}
-		setnodekey(f, key)
-		f.Val = *value
+		// Main position is empty -- store directly here
+		setnodekey(mp, key)
+		mp.Val = *value
+		setnodummy(ti.tbl)
 		return
 	}
-	// Collision - need to rehash or find free slot
+	// Collision: main position occupied.
+	// Find a free slot to hold the displaced node at mp.
 	f := ti.getfreepos()
 	if f == nil {
-		// No free position
+		// No free slot -- rehash to grow the table
+		ti.rehash()
+		// Retry insertion after rehash
+		ti.newkey(key, value)
 		return
 	}
+	// Check if the displaced node (at mp) can be moved to f.
+	// Traverse the collision chain starting at mp.
+	// A node can be moved if its main position is NOT in the chain.
+	n := mp
+	for {
+		other := mainposition(ti.tbl, getnodekey(n))
+		if other == nil {
+			break
+		}
+		// Check if 'other' is in the chain from mp
+		reachable := false
+		check := mp
+		for {
+			if check == other {
+				reachable = true
+				break
+			}
+			if gnext(check) == 0 {
+				break
+			}
+			nextIdx := int(uintptr(unsafe.Pointer(check))-uintptr(unsafe.Pointer(ti.tbl.Node)))/int(unsafe.Sizeof(Node{})) + gnext(check)
+			check = gnode(ti.tbl, nextIdx)
+		}
+		if !reachable {
+			// 'other' is not in the chain -- mp can be moved to f
+			break
+		}
+		if gnext(n) == 0 {
+			break
+		}
+		nextIdx := int(uintptr(unsafe.Pointer(n))-uintptr(unsafe.Pointer(ti.tbl.Node)))/int(unsafe.Sizeof(Node{})) + gnext(n)
+		n = gnode(ti.tbl, nextIdx)
+	}
+	// Move node at mp to free slot f
+	*f = *mp
+	setempty(gval(mp))
+	// Store new key-value at mp
 	setnodekey(mp, key)
-	f.Val = *value
+	mp.Val = *value
+}
+
+// rehash grows the hash table by one level.
+// All existing entries are reinserted into the new table.
+func (ti *TableImpl) rehash() {
+	oldSize := allocsizenode(ti.tbl)
+	ti.tbl.Lsizenode++
+	if ti.tbl.Lsizenode >= 32 {
+		ti.tbl.Lsizenode--
+		return
+	}
+	newSize := sizenode(ti.tbl)
+	if newSize <= oldSize {
+		ti.tbl.Lsizenode--
+		return
+	}
+
+	// Save old nodes
+	oldBase := ti.tbl.Node
+	oldCount := oldSize
+
+	// Allocate new node array
+	newNodes := make([]Node, newSize)
+	ti.tbl.Node = (*Node)(unsafe.Pointer(&newNodes[0]))
+	setnodummy(ti.tbl)
+
+	// Reinsert all old entries
+	for i := 0; i < oldCount; i++ {
+		oldNode := (*Node)(unsafe.Pointer(uintptr(unsafe.Pointer(oldBase)) + uintptr(i)*unsafe.Sizeof(Node{})))
+		if keyisnil(oldNode) || oldNode.KeyIsDead() || isempty(gval(oldNode)) {
+			continue
+		}
+		ti.reinsertNode(oldNode)
+	}
+}
+
+// reinsertNode inserts a node from the old table into the current table.
+// Called during rehash with the current table's mainposition.
+func (ti *TableImpl) reinsertNode(oldNode *Node) {
+	key := getnodekey(oldNode)
+	val := oldNode.Val
+
+	mp := mainposition(ti.tbl, key)
+	if mp == nil || isempty(gval(mp)) || isdummy(ti.tbl) {
+		// Free slot -- store directly
+		setnodekey(mp, key)
+		mp.Val = val
+		return
+	}
+
+	// Collision: find free slot
+	f := ti.getfreepos()
+	if f == nil {
+		// This should not happen after rehash increased size
+		return
+	}
+	// Move mp to f, store new key at mp
+	*f = *mp
+	setempty(gval(mp))
+	setnodekey(mp, key)
+	mp.Val = val
 }
 
 // deleteKey removes a key from the hash table.
