@@ -64,8 +64,12 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 
 	// Check for undefined labels referenced by gotos
 	if len(fs.pendingGotos) > 0 {
+		var undefinedLabels []string
 		for labelName := range fs.pendingGotos {
-			return nil, bcapi.NewCompileError(0, 0, "label '%s' not defined", labelName)
+			undefinedLabels = append(undefinedLabels, labelName)
+		}
+		if len(undefinedLabels) > 0 {
+			return nil, bcapi.NewCompileError(0, 0, "labels not defined: %v", undefinedLabels)
 		}
 	}
 
@@ -219,15 +223,20 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+2, 1)
 		
 	} else if name, ok := funcExp.(nameAccess); ok {
-		// Global function call: name(args)
 		funcName := name.GetName()
 		
 		// Allocate a fresh register for the function
 		funcReg = fs.allocReg()
 		
-		// Emit GETTABUP R(funcReg), upval[0], K(nameIdx)
-		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
-		fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, 0, nameIdx+256)
+		// Check if it's a local variable first
+		if localReg := fs.locals.Find(funcName); localReg >= 0 {
+			// Local variable: use MOVE to copy from local register
+			fs.emitABC(int(opcodes.OP_MOVE), funcReg, localReg, 0)
+		} else {
+			// Global variable: emit GETTABUP to load from upvalue[0]
+			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
+			fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, 0, nameIdx+256)
+		}
 		
 		// Now emit arguments starting at R[funcReg+1]
 		for i, arg := range args {
@@ -291,7 +300,7 @@ func (fs *FuncState) compileGlobalFuncStat(stat astapi.StatNode) error {
 	// Get the FuncDef from the stat
 	gf, ok := stat.(interface{ GetFuncDef() astapi.FuncDef })
 	if !ok || gf == nil {
-		return nil // Not a real global function stat
+		return fs.errorf("invalid global function statement") // Should not happen in normal flow
 	}
 	
 	funcDef := gf.GetFuncDef()
@@ -358,7 +367,7 @@ func (fs *FuncState) compileGlobalVarStat(stat astapi.StatNode) error {
 func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	lf, ok := stat.(interface{ GetFuncDef() astapi.FuncDef })
 	if !ok || lf == nil {
-		return nil // Not a real local function stat
+		return fs.errorf("invalid local function statement") // Should not happen in normal flow
 	}
 	
 	funcDef := lf.GetFuncDef()
@@ -372,6 +381,8 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 		funcName = namer.GetName()
 	}
 	
+
+	
 	// Compile the function to get its prototype
 	funcProto, err := fs.compileFuncDef(funcDef)
 	if err != nil {
@@ -383,6 +394,7 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	
 	// Allocate a register for the function
 	reg := fs.allocReg()
+
 	
 	// Emit CLOSURE to load function into register
 	fs.emitABx(int(opcodes.OP_CLOSURE), reg, funcIdx)
@@ -390,6 +402,7 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	// Register the local variable
 	if funcName != "" {
 		fs.locals.Add(funcName, reg, 0)
+
 	}
 	
 	return nil
@@ -1034,27 +1047,159 @@ func (fs *FuncState) compileAssignStat(stat astapi.StatNode) error {
 		vars := as.GetVars()
 		exprs := as.GetExprs()
 		
-		// For multi-assign, we need to:
-		// 1. First compile all expressions to consecutive registers
-		// 2. Then emit instructions to store each expression result
-		// For simplicity, only support 1:1 assignment for now
-		if len(vars) != len(exprs) {
-			// Multi-assign with different counts - not yet supported
-			// Return nil to avoid breaking compilation (will be a runtime error if executed)
-			return nil
+		nVars := len(vars)
+		nExprs := len(exprs)
+		
+		// Special handling for multi-value assignment: a,b = f()
+		// When len(vars) < len(exprs) and last expr is a function call
+		// the function call may return multiple values
+		if nVars > 0 && nExprs > 0 && nVars < nExprs {
+			// Check if last expression is a function call
+			lastExp := exprs[nExprs-1]
+			if _, isFuncCall := lastExp.(astapi.FuncCall); isFuncCall {
+				return fs.compileMultiAssign(vars, exprs)
+			}
 		}
 		
 		// Simple 1:1 assignment
 		for i, v := range vars {
-			if err := fs.compileSingleAssign(v, exprs[i]); err != nil {
-				return err
+			if i < nExprs && exprs[i] != nil {
+				if err := fs.compileSingleAssign(v, exprs[i]); err != nil {
+					return err
+				}
+			} else {
+				// Variable without expression - set to nil
+				if name, ok := v.(nameAccess); ok {
+					nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name.GetName()})
+					fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, NO_REG)
+				} else if idx, ok := v.(indexAccess); ok {
+					tableReg := fs.allocReg()
+					fs.expToReg(idx.GetTable(), tableReg)
+					keyReg := fs.allocReg()
+					fs.expToReg(idx.GetKey(), keyReg)
+					fs.emitABC(int(opcodes.OP_LOADNIL), NO_REG, 0, 0)
+					fs.emitABC(int(opcodes.OP_SETTABLE), NO_REG, tableReg, keyReg)
+					fs.freeReg(keyReg)
+					fs.freeReg(tableReg)
+				}
 			}
 		}
 		return nil
 	}
-	// Statement doesn't have GetVars/GetExprs - not a real assignment
+	// Statement doesn't have GetVars/GetExprs - skip (e.g., break/continue in compiler)
 	return nil
 }
+
+// compileMultiAssign handles multi-value assignment like a,b = f()
+// where the number of variables may not match the number of expressions
+func (fs *FuncState) compileMultiAssign(vars []astapi.ExpNode, exprs []astapi.ExpNode) error {
+	nVars := len(vars)
+	nExprs := len(exprs)
+	
+	// Compile all expressions except the last one to consecutive registers
+	for i := 0; i < nExprs-1; i++ {
+		reg := fs.allocReg()
+		fs.expToReg(exprs[i], reg)
+	}
+	
+	// For the last expression (function call), we need to:
+	// 1. Compile function to a register
+	// 2. Call with expected results = nVars
+	// 3. The results will be placed starting at that register
+	lastExp := exprs[nExprs-1]
+	
+	var funcReg int
+	// Handle function call specially
+	if funcCall, ok := lastExp.(astapi.FuncCall); ok {
+		var err error
+		funcReg, err = fs.compileFuncCallToVars(funcCall, nVars)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Non-function-call expression: compile to a register
+		funcReg = fs.allocReg()
+		fs.expToReg(lastExp, funcReg)
+	}
+	
+	// Now assign results to variables using MOVE or SETUPVAL
+	// Results are at funcReg..funcReg+nVars-1
+	for i, v := range vars {
+		if err := fs.assignToVar(v, funcReg+i); err != nil {
+			return err
+		}
+	}
+	
+	return nil
+}
+
+// compileFuncCallToVars compiles a function call that returns multiple values
+// The expected number of results is nVars
+// Returns the register where the function was placed (results are at funcReg..funcReg+nVars-1)
+func (fs *FuncState) compileFuncCallToVars(call astapi.FuncCall, nVars int) (int, error) {
+	funcExp := call.Func()
+	args := call.Args()
+	
+	// Allocate register for the function
+	funcReg := fs.allocReg()
+	fs.expToReg(funcExp, funcReg)
+	
+	// Emit arguments
+	for i, arg := range args {
+		argReg := funcReg + 1 + i
+		fs.expToReg(arg, argReg)
+		if argReg+1 > int(fs.Proto.maxstacksize) {
+			fs.Proto.maxstacksize = uint8(argReg + 1)
+		}
+	}
+	
+	// Update maxstacksize for arguments
+	nArgs := len(args)
+	if nArgs > 0 {
+		if funcReg+1+nArgs > int(fs.Proto.maxstacksize) {
+			fs.Proto.maxstacksize = uint8(funcReg + 1 + nArgs)
+		}
+	} else {
+		if funcReg+2 > int(fs.Proto.maxstacksize) {
+			fs.Proto.maxstacksize = uint8(funcReg + 2)
+		}
+	}
+	
+	// Emit CALL: R[funcReg], nArgs+1, nVars+1
+	// B = nArgs + 1 (includes function itself)
+	// C = nVars + 1 (number of results including function slot)
+	fs.emitABC(int(opcodes.OP_CALL), funcReg, nArgs+1, nVars+1)
+	
+	return funcReg, nil
+}
+
+// assignToVar assigns the value at srcReg to variable v
+func (fs *FuncState) assignToVar(v astapi.ExpNode, srcReg int) error {
+	if name, ok := v.(nameAccess); ok {
+		// Check if it's a local variable
+		if localReg := fs.locals.Find(name.GetName()); localReg >= 0 {
+			// Local variable: use MOVE to copy
+			fs.emitABC(int(opcodes.OP_MOVE), localReg, srcReg, 0)
+		} else {
+			// Global variable: use SETTABUP
+			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name.GetName()})
+			fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, srcReg)
+		}
+	} else if idx, ok := v.(indexAccess); ok {
+		// Table assignment: t[k] = v
+		tableReg := fs.allocReg()
+		fs.expToReg(idx.GetTable(), tableReg)
+		keyReg := fs.allocReg()
+		fs.expToReg(idx.GetKey(), keyReg)
+		fs.emitABC(int(opcodes.OP_SETTABLE), srcReg, tableReg, keyReg)
+		fs.freeReg(keyReg)
+		fs.freeReg(tableReg)
+	}
+	return nil
+}
+
+// NO_REG constant for cases where we need MAX_FSTACK (no register)
+const NO_REG = 0x1FF
 
 // compileSingleAssign compiles a single assignment: var = expr
 func (fs *FuncState) compileSingleAssign(v astapi.ExpNode, e astapi.ExpNode) error {
@@ -1122,7 +1267,18 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 				return nil, err
 			}
 		}
-		// Add return if last instruction is not a return
+		
+		// Handle return statement if present (stored in block.returnExp by parser)
+		if retExp := block.ReturnExp(); retExp != nil {
+			for _, exp := range retExp {
+				reg := nestedFs.allocReg()
+				nestedFs.expToReg(exp, reg)
+			}
+			n := len(retExp)
+			nestedFs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
+		}
+		
+		// Add implicit return if last instruction is not a return
 		if len(nestedProto.code) == 0 || ((nestedProto.code[len(nestedProto.code)-1]>>6)&0x3F) != uint32(opcodes.OP_RETURN0) {
 			nestedFs.emit(int(opcodes.OP_RETURN0), 0, 1, 0)
 		}
@@ -1202,7 +1358,8 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 	case interface{ Name() string }:
 		// First check if it's a local variable (MUST be before Kind() since nameExp implements both)
 		name := e.Name()
-		if reg := fs.locals.Find(name); reg >= 0 {
+		reg := fs.locals.Find(name)
+		if reg >= 0 {
 			// Local variable: emit MOVE to copy from local register
 			fs.emitABC(int(opcodes.OP_MOVE), destReg, reg, 0)
 		} else {
@@ -1225,6 +1382,37 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 	case interface{ NumFields() int; NumRecords() int }:
 		// Table constructor: emit NEWTABLE
 		fs.emitABx(int(opcodes.OP_NEWTABLE), destReg, 0)
+	case astapi.FuncCall:
+		// Function call as expression: compile function, args, then CALL
+		funcExp := e.Func()
+		args := e.Args()
+		
+		// Compile function to destReg
+		fs.expToReg(funcExp, destReg)
+		
+		// Compile arguments starting at destReg+1
+		for i, arg := range args {
+			argReg := destReg + 1 + i
+			fs.expToReg(arg, argReg)
+			if argReg+1 > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(argReg + 1)
+			}
+		}
+		
+		// Update maxstacksize for arguments
+		nArgs := len(args)
+		if nArgs > 0 {
+			if destReg+1+nArgs > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(destReg + 1 + nArgs)
+			}
+		} else {
+			if destReg+2 > int(fs.Proto.maxstacksize) {
+				fs.Proto.maxstacksize = uint8(destReg + 2)
+			}
+		}
+		
+		// Emit CALL R(destReg), nArgs+1, 1 (1 result)
+		fs.emitABC(int(opcodes.OP_CALL), destReg, nArgs+1, 1)
 	default:
 		fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
 	}
@@ -1391,7 +1579,13 @@ func (p *Prototype) IsVararg() bool          { return p.flag&1 != 0 }
 func (p *Prototype) MaxStackSize() uint8    { return p.maxstacksize }
 func (p *Prototype) GetCode() []uint32        { return p.code }
 func (p *Prototype) GetConstants() []*bcapi.Constant { return p.k }
-func (p *Prototype) GetSubProtos() []*Prototype { return p.p }
+func (p *Prototype) GetSubProtos() []bcapi.Prototype {
+	result := make([]bcapi.Prototype, len(p.p))
+	for i, proto := range p.p {
+		result[i] = proto
+	}
+	return result
+}
 
 // Constant represents a compile-time constant value.
 type Constant struct {
@@ -1478,14 +1672,20 @@ func (fs *FuncState) allocReg() int {
 	return reg
 }
 
-// freeReg frees a register.
+// freeReg frees a register by decrementing maxstacksize.
+// Note: This assumes registers are freed in LIFO order (last allocated = first freed).
+// For non-LIFO freeing, a more sophisticated register tracking system would be needed.
 func (fs *FuncState) freeReg(reg int) {
-	// TODO: implement
+	if int(fs.Proto.maxstacksize) > 0 && reg == int(fs.Proto.maxstacksize)-1 {
+		fs.Proto.maxstacksize--
+	}
 }
 
-// free_regs frees multiple registers.
+// free_regs frees multiple consecutive registers starting from 'from' for 'n' count.
 func (fs *FuncState) free_regs(from, n int) {
-	// TODO: implement
+	for i := 0; i < n; i++ {
+		fs.freeReg(from + i)
+	}
 }
 
 // =============================================================================
@@ -1569,7 +1769,21 @@ func encodeAsBx(opcode, a, sbx int) uint32 {
 
 // addConstant adds a constant to the constant table.
 func (fs *FuncState) addConstant(c *Constant) int {
-	// Simple linear search for now
+	// Handle ConstFunction specially - store in p[] (sub-prototypes)
+	if c.Type == ConstFunction && c.Func != nil {
+		// Check if this prototype already exists
+		for i, p := range fs.Proto.p {
+			if p == c.Func {
+				return i // Return index into p[]
+			}
+		}
+		// Add to sub-prototypes
+		idx := len(fs.Proto.p)
+		fs.Proto.p = append(fs.Proto.p, c.Func)
+		return idx
+	}
+
+	// Simple linear search for regular constants
 	for i, k := range fs.Proto.k {
 		if k.Type != bcapi.ConstantType(c.Type) {
 			continue

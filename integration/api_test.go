@@ -420,3 +420,14 @@ assert(x == 1 and y == 2 and z == 3, "multiple returns failed")
 		}
 	})
 }
+
+
+
+func TestMultiValueAssign(t *testing.T) {
+	// Test multi-value assignment: a,b = f()
+	code := `local function f() return 1,2 end; local a,b; a,b = f(); if a~=1 or b~=2 then error("wrong values: a="..tostring(a)..", b="..tostring(b)) end`
+	
+	if err := state.DoString(code); err != nil {
+		t.Errorf("MultiValueAssign failed: %v", err)
+	}
+}
