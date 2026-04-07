@@ -2,6 +2,8 @@
 package internal
 
 import (
+	"unsafe"
+
 	bcapi "github.com/akzj/go-lua/bytecode/api"
 	"github.com/akzj/go-lua/types"
 	typesapi "github.com/akzj/go-lua/types/api"
@@ -137,9 +139,11 @@ func (L *LuaState) executeProto(proto bcapi.Prototype, nArgs, nResults int) {
 	frameBase := newCI.func_
 
 	// Create frame data for VM
-	var nilTValue typesapi.TValue
+	// Use a special marker to indicate this is the main chunk with proto
+	mainClosure := typesapi.TValue(&mainChunkClosure{proto: proto})
+
 	frame := &luaFrame{
-		closure:    nilTValue,
+		closure:    mainClosure,
 		base:       frameBase,
 		prev:       executor.CurrentFrame(),
 		savedPC:    0,
@@ -164,6 +168,117 @@ func (L *LuaState) executeProto(proto bcapi.Prototype, nArgs, nResults int) {
 	} else {
 		L.top = L.ci.Top()
 	}
+}
+
+// mainChunkClosure wraps a Prototype to identify the main chunk's prototype.
+// This allows the VM to look up sub-prototypes for OP_CLOSURE.
+// Implements typesapi.TValue interface for use as closure in stack frames.
+type mainChunkClosure struct {
+	proto bcapi.Prototype
+}
+
+// GetValue returns the prototype as the value for TValue interface
+func (m *mainChunkClosure) GetValue() interface{} {
+	return m.proto
+}
+
+// IsNil returns false (closure is not nil)
+func (m *mainChunkClosure) IsNil() bool { return false }
+
+// IsBoolean returns false
+func (m *mainChunkClosure) IsBoolean() bool { return false }
+
+// IsNumber returns false
+func (m *mainChunkClosure) IsNumber() bool { return false }
+
+// IsInteger returns false
+func (m *mainChunkClosure) IsInteger() bool { return false }
+
+// IsFloat returns false
+func (m *mainChunkClosure) IsFloat() bool { return false }
+
+// IsString returns false
+func (m *mainChunkClosure) IsString() bool { return false }
+
+// IsTable returns false
+func (m *mainChunkClosure) IsTable() bool { return false }
+
+// IsFunction returns true (closure is a function)
+func (m *mainChunkClosure) IsFunction() bool { return true }
+
+// IsThread returns false
+func (m *mainChunkClosure) IsThread() bool { return false }
+
+// IsLightUserData returns false
+func (m *mainChunkClosure) IsLightUserData() bool { return false }
+
+// IsUserData returns false
+func (m *mainChunkClosure) IsUserData() bool { return false }
+
+// IsCollectable returns true (GC object)
+func (m *mainChunkClosure) IsCollectable() bool { return true }
+
+// IsTrue returns true (non-nil, non-false)
+func (m *mainChunkClosure) IsTrue() bool { return true }
+
+// IsFalse returns false
+func (m *mainChunkClosure) IsFalse() bool { return false }
+
+// IsLClosure returns true (Lua closure)
+func (m *mainChunkClosure) IsLClosure() bool { return true }
+
+// IsCClosure returns false
+func (m *mainChunkClosure) IsCClosure() bool { return false }
+
+// IsLightCFunction returns false
+func (m *mainChunkClosure) IsLightCFunction() bool { return false }
+
+// IsClosure returns true
+func (m *mainChunkClosure) IsClosure() bool { return true }
+
+// IsProto returns true (this is a prototype-based closure)
+func (m *mainChunkClosure) IsProto() bool { return true }
+
+// IsUpval returns false
+func (m *mainChunkClosure) IsUpval() bool { return false }
+
+// IsShortString returns false
+func (m *mainChunkClosure) IsShortString() bool { return false }
+
+// IsLongString returns false
+func (m *mainChunkClosure) IsLongString() bool { return false }
+
+// IsEmpty returns false
+func (m *mainChunkClosure) IsEmpty() bool { return false }
+
+// GetTag returns the type tag for LUA_VLCL (Lua closure)
+func (m *mainChunkClosure) GetTag() int {
+	return int(typesapi.Ctb(int(typesapi.LUA_VLCL)))
+}
+
+// GetBaseType returns the base type (LUA_TFUNCTION)
+func (m *mainChunkClosure) GetBaseType() int {
+	return int(typesapi.LUA_TFUNCTION)
+}
+
+// GetGC returns nil (not a GC table)
+func (m *mainChunkClosure) GetGC() *typesapi.GCObject {
+	return nil
+}
+
+// GetInteger returns 0 (not an integer)
+func (m *mainChunkClosure) GetInteger() typesapi.LuaInteger {
+	return 0
+}
+
+// GetFloat returns 0.0 (not a float)
+func (m *mainChunkClosure) GetFloat() typesapi.LuaNumber {
+	return 0
+}
+
+// GetPointer returns nil (not a pointer)
+func (m *mainChunkClosure) GetPointer() unsafe.Pointer {
+	return nil
 }
 
 // luaFrame implements vm.StackFrame for integration with VM

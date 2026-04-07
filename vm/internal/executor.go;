@@ -6,6 +6,7 @@ import (
 	"math"
 	"unsafe"
 
+	bcapi "github.com/akzj/go-lua/bytecode/api"
 	opcodes "github.com/akzj/go-lua/opcodes/api"
 	tableapi "github.com/akzj/go-lua/table/api"
 	types "github.com/akzj/go-lua/types/api"
@@ -121,6 +122,11 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 	}
 	if v.IsNil() {
 		return types.ValueGC, nil
+	}
+	// Check for closures (Lua or C) before boolean
+	// This must come before IsTrue/IsFalse checks
+	if v.IsLClosure() || v.IsCClosure() {
+		return types.ValueGC, v.GetValue()
 	}
 	if v.IsTrue() {
 		return types.ValueGC, true
@@ -299,11 +305,14 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		} else if b == 0 && c >= 256 {
 			// No upvals - check if this is print("..."), otherwise use globalEnv
 			constIdx := c - 256
+			fmt.Printf("GETTABUP: constIdx=%d, kvalues len=%d, frame kvalues=%p\n", constIdx, len(e.kvalues), unsafe.Pointer(&e.kvalues))
 			kval := e.k(constIdx)
+			fmt.Printf("GETTABUP: kval=%v, GetValue=%v\n", kval, kval.GetValue())
 			if name, ok := kval.GetValue().(string); ok && name == "print" {
 				tv := newLightCFunctionValue(printBuiltin)
 				e.setReg(a, tv)
 			} else if e.globalEnvPtr != nil {
+				fmt.Printf("GETTABUP: Looking up global '%v', globalEnvPtr=%p\n", kval.GetValue(), unsafe.Pointer(e.globalEnvPtr))
 				// Fallback to globalEnv for other globals (stored as lightuserdata)
 				globalTValue := &TValue{
 					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
@@ -311,6 +320,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 				}
 				e.finishGet(e.reg(a), globalTValue, e.rk(c))
 			} else {
+				fmt.Printf("GETTABUP: No globalEnvPtr, setting nil for '%v'\n", kval.GetValue())
 				e.setNil(e.reg(a))
 			}
 		} else {
@@ -345,12 +355,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if hasUpvals {
 			e.finishSet(&frame.upvals[a].Value, e.k(b), e.rk(c))
 		} else if e.globalEnv != nil {
-			// Store to globalEnv for global variables
-			globalTValue := &TValue{
-				Value: Value{Variant: types.ValueGC, Data_: e.globalEnv},
-				Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
-			}
-			e.finishSet(globalTValue, e.k(b), e.rk(c))
+			key := e.k(b)
+			value := e.rk(c)
+			e.globalEnv.Set(key, value)
 		}
 
 	case opcodes.OP_SETTABLE:
@@ -568,11 +575,34 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		return e.executeCall(frameBase(e)+a, nArgs, c)
 
 	case opcodes.OP_RETURN, opcodes.OP_RETURN0, opcodes.OP_RETURN1:
+		fmt.Printf("RETURN: frames=%d, pc=%d\n", len(e.frames), e.pc)
 		if len(e.frames) > 1 {
+			// Save the caller's savedPC before popping
+			callerSavedPC := e.currentFrame().savedPC
+			fmt.Printf("RETURN: callerSavedPC=%d\n", callerSavedPC)
+			
+			// Pop current frame
 			e.frames = e.frames[:len(e.frames)-1]
-			e.kvalues = e.currentFrame().kvalues
-			e.pc = e.currentFrame().savedPC
+			
+			// Restore caller's frame state
+			if len(e.frames) > 0 {
+				e.kvalues = e.currentFrame().kvalues
+				e.pc = callerSavedPC
+				fmt.Printf("RETURN: restored pc=%d, code len=%d\n", e.pc, len(e.code))
+				// Restore caller's code - need to get it from caller's closure
+				if e.currentFrame().Closure != nil {
+					if callerProto, ok := e.currentFrame().Closure.GetValue().(bcapi.Prototype); ok {
+						e.code = e.convertCode(callerProto.GetCode())
+						fmt.Printf("RETURN: restored code, len=%d\n", len(e.code))
+					} else {
+						fmt.Printf("RETURN: Closure.GetValue() is not Prototype: %T\n", e.currentFrame().Closure.GetValue())
+					}
+				} else {
+					fmt.Printf("RETURN: Closure is nil\n")
+				}
+			}
 		} else {
+			fmt.Printf("RETURN: last frame, stopping\n")
 			return false
 		}
 
@@ -623,7 +653,28 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		}
 
 	case opcodes.OP_CLOSURE:
-		e.setNil(e.reg(vmapi.GetArgA(inst)))
+		a := vmapi.GetArgA(inst)
+		bx := vmapi.GetArgBx(inst)
+		// bx is the index into the current function's sub-prototypes (p[])
+		// We need to get the prototype from the parent closure's data
+		var proto bcapi.Prototype
+		frame := e.currentFrame()
+		if frame != nil && frame.Closure != nil {
+			if parentProto, ok := frame.Closure.GetValue().(bcapi.Prototype); ok {
+				if bx < len(parentProto.GetSubProtos()) {
+					proto = parentProto.GetSubProtos()[bx]
+				}
+			}
+		}
+		// Create a closure value and store at R[A]
+		if proto != nil {
+			closureSlot := e.reg(a)
+			closureSlot.Tt = uint8(types.Ctb(int(types.LUA_VLCL)))
+			closureSlot.Value.Variant = types.ValueGC
+			closureSlot.Value.Data_ = proto
+		} else {
+			e.setNil(e.reg(a))
+		}
 
 	case opcodes.OP_VARARG:
 		a := vmapi.GetArgA(inst)
@@ -736,6 +787,7 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	fn := e.reg(base)
 
 	if fn.IsNil() {
+		fmt.Printf("executeCall: fn is nil at base=%d\n", base)
 		return false // Suspend - no function to call
 	}
 
@@ -745,7 +797,109 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		return true // Continue after builtin
 	}
 
+	// Handle Lua closure
+	if fn.IsLClosure() {
+		// Extract prototype from closure
+		if proto, ok := fn.GetValue().(bcapi.Prototype); ok {
+			fmt.Printf("executeCall: Lua closure found, base=%d, proto has %d instructions\n", base, len(proto.GetCode()))
+			
+			// Save return address: e.pc was already incremented by executeNext when fetching CALL
+			// So e.pc points to the instruction AFTER CALL - this is exactly what we need
+			returnPC := e.pc
+			fmt.Printf("executeCall: saving returnPC=%d\n", returnPC)
+			
+			// Push new frame for the closure
+			newFrame := &Frame{
+				Closure: fn,
+				base:    base,
+				prev:     e.currentFrame(),
+				savedPC:  returnPC,
+				kvalues:  e.protoToTValues(proto),
+			}
+			e.frames = append(e.frames, newFrame)
+
+			// Set code to the closure's bytecode
+			e.code = e.convertCode(proto.GetCode())
+			e.pc = 0
+			fmt.Printf("executeCall: pushed new frame, e.pc=0\n")
+
+			return true // Continue executing the closure
+		}
+	}
+
+	fmt.Printf("executeCall: unknown fn type, IsLClosure=%v, IsLightCFunction=%v, Tag=%d, Tt=%d, Value=%v\n", 
+		fn.IsLClosure(), fn.IsLightCFunction(), fn.GetTag(), fn.Tt, fn.Value)
 	return true // Continue execution
+}
+
+// convertCode converts []uint32 to []opcodes.Instruction
+func (e *Executor) convertCode(code []uint32) []opcodes.Instruction {
+	result := make([]opcodes.Instruction, len(code))
+	for i, c := range code {
+		result[i] = opcodes.Instruction(c)
+	}
+	return result
+}
+
+// SetMainPrototype initializes the executor with the main prototype for the top-level chunk.
+// This sets up the initial frame so OP_CLOSURE can look up sub-prototypes.
+func (e *Executor) SetMainPrototype(proto bcapi.Prototype) {
+	// Create a TValue with the main prototype
+	mainClosure := &TValue{
+		Tt:   uint8(types.Ctb(int(types.LUA_VLCL))),
+		Value: Value{Variant: types.ValueGC, Data_: proto},
+	}
+
+	// Push the initial frame
+	e.frames = []*Frame{
+		{
+			Closure: mainClosure,
+			base:    0,
+			prev:    nil,
+			savedPC: 0,
+			kvalues: e.protoToTValues(proto),
+		},
+	}
+
+	// Set code and constants
+	e.code = e.convertCode(proto.GetCode())
+	e.kvalues = e.protoToTValues(proto)
+}
+
+// protoToTValues converts a prototype's constants to TValue slice
+func (e *Executor) protoToTValues(proto bcapi.Prototype) []TValue {
+	consts := proto.GetConstants()
+	result := make([]TValue, len(consts))
+	for i, c := range consts {
+		switch c.Type {
+		case bcapi.ConstNil:
+			result[i] = TValue{Tt: uint8(types.LUA_VNIL)}
+		case bcapi.ConstInteger:
+			result[i] = TValue{
+				Tt:   uint8(types.LUA_VNUMINT),
+				Value: Value{Variant: types.ValueInteger, Data_: c.Int},
+			}
+		case bcapi.ConstFloat:
+			result[i] = TValue{
+				Tt:   uint8(types.LUA_VNUMFLT),
+				Value: Value{Variant: types.ValueFloat, Data_: c.Float},
+			}
+		case bcapi.ConstString:
+			result[i] = TValue{
+				Tt:   uint8(types.Ctb(int(types.LUA_VSHRSTR))),
+				Value: Value{Variant: types.ValueGC, Data_: c.Str},
+			}
+		case bcapi.ConstBool:
+			if c.Int == 1 {
+				result[i] = TValue{Tt: uint8(types.LUA_VTRUE), Value: Value{Variant: types.ValueGC, Data_: true}}
+			} else {
+				result[i] = TValue{Tt: uint8(types.LUA_VFALSE), Value: Value{Variant: types.ValueGC, Data_: false}}
+			}
+		default:
+			result[i] = TValue{Tt: uint8(types.LUA_VNIL)}
+		}
+	}
+	return result
 }
 
 // builtinPrint implements the print function
@@ -904,13 +1058,29 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 }
 
 func (e *Executor) finishSet(t, key, value *TValue) {
+	// Handle lightuserdata (globalEnv pointer stored as LUA_VLIGHTUSERDATA)
+	if t.IsLightUserData() {
+		if ptr := t.GetPointer(); ptr != nil {
+			wrapper := (*globalEnvWrapper)(ptr)
+			if wrapper != nil && wrapper.env != nil {
+				tval := &TValue{
+					Value: Value{Variant: types.ValueGC, Data_: wrapper.env},
+					Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
+				}
+				if tbl := e.getTable(tval); tbl != nil {
+					tbl.Set(key, value)
+					return
+				}
+			}
+		}
+		return
+	}
 
 	if !t.IsTable() {
 		return
 	}
 	if tbl := e.getTable(t); tbl != nil {
 		tbl.Set(key, value)
-	} else {
 	}
 }
 

@@ -50,8 +50,6 @@ func DoStringOn(L stateapi.LuaStateInterface, code string) error {
 		return err
 	}
 
-
-
 	// Step 3: Register prototype and create closure
 	internal.RegisterDoStringClosure(L, proto)
 

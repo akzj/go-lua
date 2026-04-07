@@ -31,6 +31,8 @@ type Prototype interface {
 	GetCode() []uint32
 	// GetConstants returns the constant list.
 	GetConstants() []*Constant
+	// GetSubProtos returns the list of nested function prototypes.
+	GetSubProtos() []Prototype
 }
 
 // Constant represents a compile-time constant value.
