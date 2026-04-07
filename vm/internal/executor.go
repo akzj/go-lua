@@ -563,13 +563,103 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		nArgs := b
 		return e.executeCall(frameBase(e)+a, nArgs, c)
 
-	case opcodes.OP_RETURN, opcodes.OP_RETURN0, opcodes.OP_RETURN1:
-		if len(e.frames) > 1 {
-			e.frames = e.frames[:len(e.frames)-1]
-			e.kvalues = e.currentFrame().kvalues
-			e.pc = e.currentFrame().savedPC
-		} else {
+	case opcodes.OP_RETURN:
+		// OP_RETURN A B k — return R[A], R[A+1], ..., R[A+B-2]
+		// B=1 means no return values, B=0 means return up to top
+		a := vmapi.GetArgA(inst)
+		b := vmapi.GetArgB(inst)
+		base := frameBase(e)
+
+		if len(e.frames) <= 1 {
+			// Returning from top-level chunk — exit VM loop
 			return false
+		}
+
+		// Calculate number of return values
+		nRet := 0
+		if b >= 2 {
+			nRet = b - 1
+		}
+		// b==0 (multi-return) and b==1 (no returns) both handled: nRet=0
+
+		// The caller's frame is below the current one.
+		// The caller expects results starting at the callee's base (the function slot).
+		calleeBase := e.currentFrame().base
+
+		// Copy return values to caller's expected position
+		for i := 0; i < nRet; i++ {
+			src := e.reg(base + a + i)
+			dst := e.reg(calleeBase + i)
+			*dst = *src
+		}
+
+		// Pop current frame and restore caller state
+		e.frames = e.frames[:len(e.frames)-1]
+		e.kvalues = e.currentFrame().kvalues
+		e.pc = e.currentFrame().savedPC
+
+		// Restore caller's bytecode
+		callerLC, ok := e.currentFrame().Closure.GetValue().(luaClosure)
+		if ok {
+			rawCode := callerLC.GetProto().GetCode()
+			code := make([]opcodes.Instruction, len(rawCode))
+			for i, c := range rawCode {
+				code[i] = opcodes.Instruction(c)
+			}
+			e.code = code
+		}
+
+	case opcodes.OP_RETURN0:
+		// OP_RETURN0 — return with no values
+		if len(e.frames) <= 1 {
+			return false
+		}
+
+		// Pop current frame and restore caller state
+		e.frames = e.frames[:len(e.frames)-1]
+		e.kvalues = e.currentFrame().kvalues
+		e.pc = e.currentFrame().savedPC
+
+		// Restore caller's bytecode
+		callerLC, ok := e.currentFrame().Closure.GetValue().(luaClosure)
+		if ok {
+			rawCode := callerLC.GetProto().GetCode()
+			code := make([]opcodes.Instruction, len(rawCode))
+			for i, c := range rawCode {
+				code[i] = opcodes.Instruction(c)
+			}
+			e.code = code
+		}
+
+	case opcodes.OP_RETURN1:
+		// OP_RETURN1 A — return R[A] (exactly one value)
+		a := vmapi.GetArgA(inst)
+		base := frameBase(e)
+
+		if len(e.frames) <= 1 {
+			return false
+		}
+
+		// Copy single return value to caller's expected position
+		calleeBase := e.currentFrame().base
+		src := e.reg(base + a)
+		dst := e.reg(calleeBase)
+		*dst = *src
+
+		// Pop current frame and restore caller state
+		e.frames = e.frames[:len(e.frames)-1]
+		e.kvalues = e.currentFrame().kvalues
+		e.pc = e.currentFrame().savedPC
+
+		// Restore caller's bytecode
+		callerLC, ok := e.currentFrame().Closure.GetValue().(luaClosure)
+		if ok {
+			rawCode := callerLC.GetProto().GetCode()
+			code := make([]opcodes.Instruction, len(rawCode))
+			for i, c := range rawCode {
+				code[i] = opcodes.Instruction(c)
+			}
+			e.code = code
 		}
 
 	// For loop opcodes
@@ -619,7 +709,37 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		}
 
 	case opcodes.OP_CLOSURE:
-		e.setNil(e.reg(vmapi.GetArgA(inst)))
+		a := vmapi.GetArgA(inst)
+		bx := vmapi.GetArgBx(inst)
+
+		// Get current frame's closure and extract its prototype
+		frame := e.currentFrame()
+		if frame == nil || frame.Closure == nil {
+			e.err = fmt.Errorf("OP_CLOSURE: no current frame/closure")
+			return false
+		}
+		parentLC, ok := frame.Closure.GetValue().(luaClosure)
+		if !ok {
+			e.err = fmt.Errorf("OP_CLOSURE: current frame closure does not implement luaClosure")
+			return false
+		}
+		parentProto := parentLC.GetProto()
+		subProtos := parentProto.GetSubProtos()
+		if bx < 0 || bx >= len(subProtos) {
+			e.err = fmt.Errorf("OP_CLOSURE: sub-prototype index %d out of range (have %d)", bx, len(subProtos))
+			return false
+		}
+		subProto := subProtos[bx]
+
+		// Create a new luaClosureImpl wrapping the sub-prototype.
+		// This satisfies the luaClosure duck-type interface so executeCall can use it.
+		newClosure := &luaClosureImpl{proto: subProto}
+
+		// Set the result register to an LClosure TValue
+		dst := e.reg(frameBase(e) + a)
+		dst.Tt = uint8(types.Ctb(int(types.LUA_VLCL)))
+		dst.Value.Variant = types.ValueGC
+		dst.Value.Data_ = newClosure
 
 	case opcodes.OP_VARARG:
 		a := vmapi.GetArgA(inst)
@@ -727,13 +847,29 @@ func (e *Executor) setBuiltinPrint(dst *TValue) {
 	dst.Value.Data_ = unsafe.Pointer(printBuiltin)
 }
 
-// luaClosure is a duck-type interface satisfied by types/internal.LClosure.
+// luaClosure is a duck-type interface satisfied by types/internal.LClosure
+// and by luaClosureImpl (created by OP_CLOSURE in the VM).
 // It lets vm/internal extract the prototype without importing types/internal.
 type luaClosure interface {
 	GetProto() bcapi.Prototype
 }
 
-// executeCall handles function calls
+// luaClosureImpl is a VM-local closure wrapper that satisfies the luaClosure
+// duck-type interface. Created by OP_CLOSURE when the VM needs to instantiate
+// a new Lua closure from a sub-prototype.
+type luaClosureImpl struct {
+	proto  bcapi.Prototype
+	upvals []*UpVal
+}
+
+func (c *luaClosureImpl) GetProto() bcapi.Prototype { return c.proto }
+
+// GoFunc is the duck-type interface for Go functions callable from the VM.
+// Implemented by state/internal when registering base library functions.
+// Receives the VM's stack and base position, returns number of results pushed.
+type GoFunc func(stack []TValue, base int) int
+
+// executeCall handles function calls (LClosure, CClosure, LightCFunction).
 func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	fn := e.reg(base)
 
@@ -742,10 +878,34 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		return false
 	}
 
-	// Handle builtin print
-	if fn.IsLightCFunction() && fn.GetValue() == unsafe.Pointer(printBuiltin) {
-		e.builtinPrint(base, nArgs)
-		return true
+	// Handle LightCFunction (raw C function pointer, e.g. builtin print)
+	if fn.IsLightCFunction() {
+		ptr := fn.GetValue()
+		if ptr == unsafe.Pointer(printBuiltin) {
+			e.builtinPrint(base, nArgs)
+			return true
+		}
+		// For other light C functions, try GoFunc duck-type
+		if gf, ok := ptr.(GoFunc); ok {
+			gf(e.stack, base)
+			// The function pushed nRet results starting at stack[base]
+			// (callee's expected return area is the same as caller's expected area)
+			return true
+		}
+		e.err = fmt.Errorf("attempt to call unsupported light C function")
+		return false
+	}
+
+	// Handle CClosure (Go function with potential upvalues)
+	if fn.IsCClosure() {
+		// CClosure stores its function value in a wrapper accessed via fn.GetValue()
+		// Try GoFunc duck-type from the stored value
+		if gf, ok := fn.GetValue().(GoFunc); ok {
+			gf(e.stack, base)
+			return true
+		}
+		e.err = fmt.Errorf("attempt to call non-Go-function CClosure")
+		return false
 	}
 
 	// Handle Lua closures (LClosure)
@@ -786,8 +946,8 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		return true
 	}
 
-	// TODO: Handle CClosure and LightCFunction calls
-	return true
+	e.err = fmt.Errorf("attempt to call value of type %d", fn.GetBaseType())
+	return false
 }
 
 // convertProtoConstants converts a Prototype's constant pool to executor-local []TValue.

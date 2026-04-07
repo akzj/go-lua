@@ -471,19 +471,12 @@ func createRegistry(alloc memapi.Allocator) tableapi.TableInterface {
 	return registry
 }
 
-// EnsurePointerSize ensures the TValue slice has room for n elements.
-func EnsurePointerSize(s []types.TValue, n int) []types.TValue {
-	if cap(s) >= n {
-		return s
-	}
-	newSize := n * 2
-	if newSize < 32 {
-		newSize = 32
-	}
-	return make([]types.TValue, len(s), newSize)
-}
-
-// Memory allocation helpers (placeholder - actual impl in mem module)
-func realloc(alloc memapi.Allocator, old unsafe.Pointer, oldSize, newSize uint) unsafe.Pointer {
-	return alloc.SafeRealloc(old, memapi.LuaMem(oldSize), memapi.LuaMem(newSize))
+// setGlobal registers a Go function in the global environment table.
+// It stores the function as a LightUserData TValue wrapping the GoFunc interface{}.
+// The executor will type-assert it back to vm.GoFunc when calling.
+func (L *LuaState) setGlobal(name string, fn vm.GoFunc) {
+	// Store the GoFunc interface{} as the Data_ of a LightUserData TValue
+	key := typesinternal.NewTValueString(name)
+	val := typesinternal.NewTValueLightUserData(unsafe.Pointer(&fn))
+	L.global.Registry().Set(key, val)
 }
