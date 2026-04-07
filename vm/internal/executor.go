@@ -6,16 +6,12 @@ import (
 	"math"
 	"unsafe"
 
+	bcapi "github.com/akzj/go-lua/bytecode/api"
 	opcodes "github.com/akzj/go-lua/opcodes/api"
 	tableapi "github.com/akzj/go-lua/table/api"
 	types "github.com/akzj/go-lua/types/api"
 	vmapi "github.com/akzj/go-lua/vm/api"
 )
-
-// Compile-time interface checks
-var _ vmapi.VMExecutor = (*Executor)(nil)
-var _ vmapi.StackFrame = (*Frame)(nil)
-var _ types.TValue = (*TValue)(nil)
 
 // =============================================================================
 // Constants
@@ -731,21 +727,97 @@ func (e *Executor) setBuiltinPrint(dst *TValue) {
 	dst.Value.Data_ = unsafe.Pointer(printBuiltin)
 }
 
+// luaClosure is a duck-type interface satisfied by types/internal.LClosure.
+// It lets vm/internal extract the prototype without importing types/internal.
+type luaClosure interface {
+	GetProto() bcapi.Prototype
+}
+
 // executeCall handles function calls
 func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	fn := e.reg(base)
 
 	if fn.IsNil() {
-		return false // Suspend - no function to call
+		e.err = fmt.Errorf("attempt to call nil value")
+		return false
 	}
 
-	// Check if this is builtin print
+	// Handle builtin print
 	if fn.IsLightCFunction() && fn.GetValue() == unsafe.Pointer(printBuiltin) {
 		e.builtinPrint(base, nArgs)
-		return true // Continue after builtin
+		return true
 	}
 
-	return true // Continue execution
+	// Handle Lua closures (LClosure)
+	if fn.IsLClosure() {
+		lc, ok := fn.GetValue().(luaClosure)
+		if !ok {
+			e.err = fmt.Errorf("LClosure value does not implement luaClosure interface")
+			return false
+		}
+		proto := lc.GetProto()
+
+		// Save current PC so we can resume here after return
+		e.currentFrame().savedPC = e.pc
+
+		// Build kvalues from prototype constants
+		kvals := convertProtoConstants(proto)
+
+		// Push new frame
+		newFrame := &Frame{
+			Closure: fn,
+			base:    base,
+			prev:    e.currentFrame(),
+			savedPC: 0,
+			kvalues: kvals,
+		}
+		e.frames = append(e.frames, newFrame)
+
+		// Switch to new closure's bytecode
+		rawCode := proto.GetCode()
+		code := make([]opcodes.Instruction, len(rawCode))
+		for i, c := range rawCode {
+			code[i] = opcodes.Instruction(c)
+		}
+		e.code = code
+		e.pc = 0
+		e.kvalues = newFrame.kvalues
+
+		return true
+	}
+
+	// TODO: Handle CClosure and LightCFunction calls
+	return true
+}
+
+// convertProtoConstants converts a Prototype's constant pool to executor-local []TValue.
+func convertProtoConstants(proto bcapi.Prototype) []TValue {
+	consts := proto.GetConstants()
+	kvals := make([]TValue, len(consts))
+	for i, c := range consts {
+		kvals[i] = bcConstantToTValue(c)
+	}
+	return kvals
+}
+
+func bcConstantToTValue(c *bcapi.Constant) TValue {
+	switch c.Type {
+	case bcapi.ConstNil:
+		return TValue{Tt: uint8(types.LUA_VNIL)}
+	case bcapi.ConstInteger:
+		return TValue{Value: Value{Variant: types.ValueInteger, Data_: types.LuaInteger(c.Int)}, Tt: uint8(types.LUA_VNUMINT)}
+	case bcapi.ConstFloat:
+		return TValue{Value: Value{Variant: types.ValueFloat, Data_: types.LuaNumber(c.Float)}, Tt: uint8(types.LUA_VNUMFLT)}
+	case bcapi.ConstString:
+		return TValue{Value: Value{Variant: types.ValueGC, Data_: c.Str}, Tt: uint8(types.Ctb(int(types.LUA_VSHRSTR)))}
+	case bcapi.ConstBool:
+		tt := uint8(types.LUA_VFALSE)
+		if c.Int != 0 {
+			tt = uint8(types.LUA_VTRUE)
+		}
+		return TValue{Tt: tt}
+	}
+	return TValue{Tt: uint8(types.LUA_VNIL)}
 }
 
 // builtinPrint implements the print function
