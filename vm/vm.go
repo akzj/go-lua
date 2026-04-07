@@ -12,6 +12,7 @@ type OpCode = api.OpCode
 type VMExecutor = api.VMExecutor
 type StackFrame = api.StackFrame
 type VMFrameManager = api.VMFrameManager
+type GoFunc = api.GoFunc
 
 // NewVMFrameManager creates a new VM frame manager for integrated execution.
 var NewVMFrameManager = internal.NewVMFrameManager

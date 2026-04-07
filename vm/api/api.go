@@ -33,31 +33,37 @@ type VMExecutor interface {
 // Used by state package to integrate VM execution with Lua call frames.
 type VMFrameManager interface {
 	VMExecutor
-	
+
 	// SetStack shares a stack with the executor for integrated execution.
 	SetStack(stack []types.TValue)
-	
+
 	// SetCode sets the bytecode instructions for the current frame.
 	SetCode(code []Instruction)
-	
+
 	// SetKValues sets the constant pool for the current frame.
 	SetKValues(kvalues []types.TValue)
-	
+
 	// PushFrame pushes a new stack frame for a function call.
 	PushFrame(frame StackFrame)
-	
+
 	// PopFrame pops the current stack frame.
 	PopFrame()
 
 	// SetGlobalEnv sets the global environment table for global variable access.
 	SetGlobalEnv(env tableapi.TableInterface)
-	
+
 	// CurrentFrame returns the current frame without popping.
 	CurrentFrame() StackFrame
-	
+
 	// FrameCount returns the number of frames on the stack.
 	FrameCount() int
 }
+
+// GoFunc is the duck-type interface for Go functions callable from the VM.
+// state/internal implements these to register base library functions (print, type, etc.).
+// The function receives the VM stack and base position of the call,
+// and is responsible for pushing return values onto the stack.
+type GoFunc func(stack []types.TValue, base int) int
 
 // StackFrame represents a single function call frame on the VM stack.
 type StackFrame interface {

@@ -179,6 +179,11 @@ type mainChunkClosure struct {
 
 // GetValue returns the prototype as the value for TValue interface
 func (m *mainChunkClosure) GetValue() interface{} {
+	return m
+}
+
+// GetProto returns the prototype for the luaClosure duck-type interface.
+func (m *mainChunkClosure) GetProto() bcapi.Prototype {
 	return m.proto
 }
 
@@ -325,12 +330,21 @@ func extractProto(closure interface{}) bcapi.Prototype {
 	if proto := lookupDoStringPrototype(closure); proto != nil {
 		return proto
 	}
-	
+
+	// Try luaClosure interface (GetProto() bcapi.Prototype) — used by
+	// both mainChunkClosure and types/internal.LClosure.
+	type protoProvider interface {
+		GetProto() bcapi.Prototype
+	}
+	if lc, ok := closure.(protoProvider); ok {
+		return lc.GetProto()
+	}
+
 	// If closure is a bcapi.Prototype directly, return it
 	if proto, ok := closure.(bcapi.Prototype); ok {
 		return proto
 	}
-	
+
 	return nil
 }
 
