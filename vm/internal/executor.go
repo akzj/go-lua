@@ -475,7 +475,12 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		rb := e.reg(frameBase(e) + b)
-		if rb.IsTable() {
+		if rb.IsString() {
+			if s, ok := rb.GetValue().(string); ok {
+				str := s
+			e.setInteger(e.RA(a), types.LuaInteger(len(str)))
+			}
+		} else if rb.IsTable() {
 			if tbl := e.getTable(rb); tbl != nil {
 				e.setInteger(e.RA(a), types.LuaInteger(tbl.Len()))
 			}
@@ -995,8 +1000,9 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// This uses []types.TValue, not the internal GoFunc type.
 		if apiFunc, ok := val.(vmapi.GoFunc); ok {
 			// Bridge: convert []TValue to []types.TValue for the call.
-			args := make([]types.TValue, nArgs+1) // +1 for the function itself
-			for i := 0; i <= nArgs; i++ {
+			// nArgs already includes the function slot (B field from CALL).
+			args := make([]types.TValue, nArgs)
+			for i := 0; i < nArgs; i++ {
 				args[i] = e.reg(base + i)
 			}
 			nRet := apiFunc(args, 0)
@@ -1033,8 +1039,9 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		if unwrapper, ok := val.(goFuncUnwrapper); ok {
 			apiFunc := unwrapper.unwrapGoFunc()
 			// Bridge: convert []TValue to []types.TValue for the call.
-			args := make([]types.TValue, nArgs+1)
-			for i := 0; i <= nArgs; i++ {
+			// nArgs already includes the function slot (B field from CALL).
+			args := make([]types.TValue, nArgs)
+			for i := 0; i < nArgs; i++ {
 				args[i] = e.reg(base + i)
 			}
 			nRet := apiFunc(args, 0)
