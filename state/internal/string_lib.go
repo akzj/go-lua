@@ -288,10 +288,14 @@ func bstringFind(stack []types.TValue, base int) int {
 	}
 
 	n := len(s)
-	// Adjust init
+	// Adjust init (Lua 5.4 semantics)
 	if init < 0 { init = n + init + 1 }
 	if init < 1 { init = 1 }
-	if init > n+1 { init = n + 1 }
+	// If init is past the end of string (+1 for empty match at end), fail
+	if init > n+1 {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
 
 	si := init - 1 // convert to 0-based
 
