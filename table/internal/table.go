@@ -892,6 +892,9 @@ func (ti *TableImpl) rehash() {
 // deleteKey removes a key from the hash table.
 func (ti *TableImpl) deleteKey(key typesapi.TValue) {
 	mp := mainposition(ti.tbl, key)
+	if mp == nil {
+		return // empty hash table, nothing to delete
+	}
 	for {
 		if equalkey(key, mp) {
 			// Mark as dead key and empty value
