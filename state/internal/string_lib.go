@@ -119,7 +119,7 @@ func luaTypeName(v types.TValue) string {
 
 // nArgs returns the number of arguments passed to a Go function.
 func nArgs(stack []types.TValue, base int) int {
-	return len(stack) - base - 1
+	return realArgCount(stack, base)
 }
 
 // isTruthy checks if a TValue is truthy (not nil and not false).
