@@ -708,10 +708,9 @@ func (fs *FuncState) compileWhileStat(stat astapi.StatNode) error {
 }
 
 // compileRepeatStat compiles repeat...until statement: repeat block until condition
-// The body executes first, then condition is tested.
-// Loop continues while condition is FALSE, exits when TRUE.
-// Fix: negate the condition (false→true, true→false) and use TEST to check.
-// If negated is TRUE (original was FALSE), we JMP back (continue loop).
+// Pattern: loopStart → body → compile condition → TEST condReg 0 → JMP loopStart
+// TEST condReg 0: if condReg is truthy (condition met), skip JMP → exit loop.
+//                 if condReg is falsy (condition not met), fall through to JMP → loop back.
 func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 	repeatStmt, ok := stat.(interface {
 		GetCondition() astapi.ExpNode
@@ -730,7 +729,7 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 	fs.pendingBreaks = make([]int, 0)
 	fs.loopExitIdx = -1
 
-	// Compile loop body first (repeat...until executes body before testing condition)
+	// Compile loop body
 	if block := repeatStmt.GetBlock(); block != nil {
 		if err := fs.compileBlock(block); err != nil {
 			fs.pendingBreaks = savedPendingBreaks
@@ -739,54 +738,31 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 		}
 	}
 
-	// Negate the condition using conditional jumps:
-	// negReg = NOT(IsTrue(condReg))
-	// 1. LOADFALSE negReg    ; default: negReg = false
-	// 2. TEST condReg, 0     ; JMP if condReg is FALSE (to setTrue)
-	// 3. JMP skipTrue        ; skip over LOADTRUE
-	// setTrue:
-	// 4. LOADTRUE negReg     ; cond was false → set negReg = true
-	// skipTrue:
-	// (negReg now has negated boolean)
-
-	negReg := fs.allocReg()
-	// Step 1: default negReg = false
-	fs.emit(int(opcodes.OP_LOADFALSE), negReg, 0, 0)
-	// Step 2: TEST condReg, 0 — JMP if condReg is FALSE
+	// Compile condition to a register
 	condReg := fs.allocReg()
 	fs.expToReg(repeatStmt.GetCondition(), condReg)
+
+	// TEST condReg 0: if condReg is truthy → skip next (exit loop)
+	//                 if condReg is falsy → fall through to JMP (loop back)
 	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
-	jmpToSetTrue := fs.pc
-	fs.emitSJ(0) // placeholder
-	// Step 3: JMP to skip LOADTRUE
-	jmpSkipTrue := fs.pc
-	fs.emitSJ(0) // placeholder
-	// Step 4: setTrue — LOADTRUE negReg
-	setTrueIdx := fs.pc
-	fs.emit(int(opcodes.OP_LOADTRUE), negReg, 0, 0)
-	// Patch TEST JMP to setTrue, patch skip JMP to here
-	fs.patchSJ(jmpToSetTrue, setTrueIdx)
-	fs.patchSJ(jmpSkipTrue, setTrueIdx)
 
-	// Now TEST negReg, 1 — JMP if negReg is TRUE (original was FALSE → continue)
-	fs.emitABC(int(opcodes.OP_TEST), negReg, 1, 0)
+	// JMP back to loopStart (only reached if condition is false)
 	jmpBackIdx := fs.pc
-	fs.emitSJ(0) // placeholder jump
-
-	// Set loop exit index for break
-	fs.loopExitIdx = fs.pc
-
-	// Patch jump to loop start
+	fs.emitSJ(0) // placeholder
 	fs.patchSJ(jmpBackIdx, loopStart)
 
-	// Patch pending break jumps
+	// Loop exit point (for break statements)
+	loopExitPC := fs.pc
+
+	// Patch pending break jumps to exit
 	for _, breakIdx := range fs.pendingBreaks {
-		fs.patchSJ(breakIdx, fs.pc)
+		fs.patchSJ(breakIdx, loopExitPC)
 	}
 
 	// Restore
 	fs.pendingBreaks = savedPendingBreaks
 	fs.loopExitIdx = savedLoopExitIdx
+	fs.freeReg(condReg)
 
 	return nil
 }
