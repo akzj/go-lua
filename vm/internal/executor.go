@@ -298,15 +298,14 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if hasUpvals {
 			// Normal path: get upval from frame
 			e.finishGet(e.RA(a), &frame.upvals[b].Value, e.rk(c))
-		} else if b == 0 && c >= 256 {
-			// No upvals (b==0 means upval[0]/_ENV) - look up in globalEnv.
-			// c >= 256 means it's a string constant, c - 256 is the constant index.
+		} else if b == 0 {
+			// b==0 means upval[0]/_ENV. c is raw 0-based constant index.
 			if e.globalEnvPtr != nil {
 				globalTValue := &TValue{
 					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
 					Tt:    uint8(types.LUA_VLIGHTUSERDATA),
 				}
-				e.finishGet(e.RA(a), globalTValue, e.rk(c))
+				e.finishGet(e.RA(a), globalTValue, e.k(int(c)))
 			} else {
 				e.setNil(e.RA(a))
 			}
