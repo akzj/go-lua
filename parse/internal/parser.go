@@ -673,46 +673,8 @@ func (p *parser) parseIf() {
 	}
 	p.block = parentBlock // Restore parent block reference AFTER block is complete
 	
-	// Handle elseif/else chain
-	var elseBlock astapi.Block = nil
-	
-	for p.peek(lexapi.TOKEN_ELSEIF) {
-		// Parse elseif block
-		p.next() // consume 'elseif'
-		elseIfCond, err := p.parseExpr()
-		if err != nil {
-			return
-		}
-		if !p.peek(lexapi.TOKEN_THEN) {
-			p.errorAt(p.current(), "'then' expected")
-			return
-		}
-		p.next() // consume 'then'
-		elseIfBlock, err := p.parseBlock()
-		if err != nil {
-			return
-		}
-		// Create nested if for elseif
-		nestedIf := &ifStat{
-			baseNode: baseNode{line: p.current().Line, column: p.current().Column},
-			condition: elseIfCond,
-			thenBlock: elseIfBlock,
-			elseBlock: elseBlock, // chain to previous elseBlock
-		}
-		elseBlock = &blockImpl{
-			line:   p.current().Line,
-			column: p.current().Column,
-			stats:  []astapi.StatNode{nestedIf},
-		}
-	}
-	
-	if p.peek(lexapi.TOKEN_ELSE) {
-		p.next() // consume 'else'
-		elseBlock, err = p.parseBlock()
-		if err != nil {
-			return
-		}
-	}
+	// Handle elseif/else chain (forward-building)
+	elseBlock := p.parseElseIfOrElse()
 	
 	if !p.peek(lexapi.TOKEN_END) {
 		p.errorAt(p.current(), "'end' expected")
@@ -728,6 +690,55 @@ func (p *parser) parseIf() {
 	}
 	// Use saved parent block reference
 		parentBlock.stats = append(parentBlock.stats, stat)
+}
+
+// parseElseIfOrElse builds the elseif/else chain FORWARD via recursion.
+// Each elseif becomes a nested ifStat whose else is the REST of the chain.
+func (p *parser) parseElseIfOrElse() astapi.Block {
+	if p.peek(lexapi.TOKEN_ELSEIF) {
+		p.next() // consume 'elseif'
+		cond, err := p.parseExpr()
+		if err != nil {
+			return nil
+		}
+		if !p.peek(lexapi.TOKEN_THEN) {
+			p.errorAt(p.current(), "'then' expected")
+			return nil
+		}
+		p.next() // consume 'then'
+		parentBlock := p.block
+		thenBlock, err := p.parseBlock()
+		if err != nil {
+			p.block = parentBlock
+			return nil
+		}
+		p.block = parentBlock
+		// Recurse: the else of THIS elseif is whatever comes next
+		restElse := p.parseElseIfOrElse()
+		nestedIf := &ifStat{
+			baseNode:  baseNode{line: p.current().Line, column: p.current().Column},
+			condition: cond,
+			thenBlock: thenBlock,
+			elseBlock: restElse,
+		}
+		return &blockImpl{
+			line:   p.current().Line,
+			column: p.current().Column,
+			stats:  []astapi.StatNode{nestedIf},
+		}
+	}
+	if p.peek(lexapi.TOKEN_ELSE) {
+		p.next() // consume 'else'
+		parentBlock := p.block
+		elseBlock, err := p.parseBlock()
+		if err != nil {
+			p.block = parentBlock
+			return nil
+		}
+		p.block = parentBlock
+		return elseBlock
+	}
+	return nil
 }
 
 // parseElseIfChain handles elseif/else clauses after the then block

@@ -79,13 +79,20 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 	retExps := block.ReturnExp()
 	if len(retExps) > 0 {
 		// Compile each return expression to consecutive registers
+		firstReg := -1
 		for _, exp := range retExps {
 			reg := fs.allocReg()
+			if firstReg == -1 {
+				firstReg = reg
+			}
 			fs.expToReg(exp, reg)
 		}
-		// Emit RETURN with number of results
+		// Emit RETURN with first register and number of results
 		n := len(retExps)
-		fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
+		if firstReg == -1 {
+			firstReg = 0
+		}
+		fs.emitABC(int(opcodes.OP_RETURN), firstReg, n+1, 0)
 	} else {
 		// Add RETURN0 at end of function block (no return values)
 		if len(proto.code) == 0 || (proto.code[len(proto.code)-1]>>6)&0x3F != uint32(opcodes.OP_RETURN0) {
@@ -524,14 +531,21 @@ func (fs *FuncState) compileReturnStat(stat astapi.StatNode) error {
 	}
 	
 	// Compile each expression to consecutive registers
+	firstReg := -1
 	for _, exp := range exps {
 		reg := fs.allocReg()
+		if firstReg == -1 {
+			firstReg = reg
+		}
 		fs.expToReg(exp, reg)
 	}
 	
-	// Emit RETURN with number of results
+	// Emit RETURN with first register and number of results
 	n := len(exps)
-	fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
+	if firstReg == -1 {
+		firstReg = 0
+	}
+	fs.emitABC(int(opcodes.OP_RETURN), firstReg, n+1, 0)
 	
 	return nil
 }
@@ -551,12 +565,19 @@ func (fs *FuncState) compileBlock(block astapi.Block) error {
 	// Handle block-level return expressions
 	retExps := block.ReturnExp()
 	if len(retExps) > 0 {
+		firstReg := -1
 		for _, exp := range retExps {
 			reg := fs.allocReg()
+			if firstReg == -1 {
+				firstReg = reg
+			}
 			fs.expToReg(exp, reg)
 		}
 		n := len(retExps)
-		fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
+		if firstReg == -1 {
+			firstReg = 0
+		}
+		fs.emitABC(int(opcodes.OP_RETURN), firstReg, n+1, 0)
 	}
 	return nil
 }
@@ -578,6 +599,7 @@ func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
 
 	// TEST condReg, if false JMP to else (c=0 means jump if false)
 	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
+	fs.freeReg(condReg) // Free condition register after TEST
 	jmpToElseIdx := fs.pc
 	fs.emitSJ(0) // placeholder jump
 
@@ -1326,8 +1348,9 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 	}
 	
 	// Create a new FuncState for the nested function
+	nParams := uint8(len(funcDef.GetParams()))
 	nestedProto := &Prototype{
-		maxstacksize: 2, // minimum
+		maxstacksize: nParams, // start at number of parameters
 		k:            make([]*bcapi.Constant, 0),
 		code:          make([]uint32, 0),
 	}
@@ -1360,12 +1383,19 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 		
 		// Handle return statement if present (stored in block.returnExp by parser)
 		if retExp := block.ReturnExp(); retExp != nil {
+			firstReg := -1
 			for _, exp := range retExp {
 				reg := nestedFs.allocReg()
+				if firstReg == -1 {
+					firstReg = reg
+				}
 				nestedFs.expToReg(exp, reg)
 			}
 			n := len(retExp)
-			nestedFs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
+			if firstReg == -1 {
+				firstReg = 0
+			}
+			nestedFs.emitABC(int(opcodes.OP_RETURN), firstReg, n+1, 0)
 		}
 		
 		// Add implicit return if last instruction is not a return

@@ -258,14 +258,14 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		}
 
 	case opcodes.OP_LOADFALSE:
-		e.setBoolean(e.reg(vmapi.GetArgA(inst)), false)
+		e.setBoolean(e.RA(vmapi.GetArgA(inst)), false)
 
 	case opcodes.OP_LFALSESKIP:
-		e.setBoolean(e.reg(vmapi.GetArgA(inst)), false)
+		e.setBoolean(e.RA(vmapi.GetArgA(inst)), false)
 		e.pc++
 
 	case opcodes.OP_LOADTRUE:
-		e.setBoolean(e.reg(vmapi.GetArgA(inst)), true)
+		e.setBoolean(e.RA(vmapi.GetArgA(inst)), true)
 
 	case opcodes.OP_LOADNIL:
 		a := vmapi.GetArgA(inst)
@@ -288,7 +288,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
-			e.copyValue(&frame.upvals[b].Value, e.reg(vmapi.GetArgA(inst)))
+			e.copyValue(&frame.upvals[b].Value, e.RA(vmapi.GetArgA(inst)))
 		}
 
 	case opcodes.OP_GETTABUP:
@@ -600,7 +600,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		for i := 0; i < nRet; i++ {
 			src := e.reg(base + a + i)
 			dst := e.reg(calleeBase + i)
-			*dst = *src
+				*dst = *src
 		}
 
 		// Pop current frame and restore caller state
@@ -624,6 +624,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if len(e.frames) <= 1 {
 			return false
 		}
+
+		// Clear the function slot (caller expects nil for 0-return functions)
+		calleeBase := e.currentFrame().base
+		e.setNil(e.reg(calleeBase))
 
 		// Pop current frame and restore caller state
 		e.frames = e.frames[:len(e.frames)-1]
@@ -815,7 +819,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		}
 
 	case opcodes.OP_GETVARG:
-		e.setNil(e.reg(vmapi.GetArgA(inst)))
+		e.setNil(e.RA(vmapi.GetArgA(inst)))
 
 	case opcodes.OP_CONCAT:
 		a := vmapi.GetArgA(inst)
@@ -1199,6 +1203,8 @@ func (e *Executor) setBoolean(dst *TValue, b bool) {
 	} else {
 		dst.Tt = uint8(types.LUA_VFALSE)
 	}
+	dst.Value.Variant = 0
+	dst.Value.Data_ = nil
 }
 
 func (e *Executor) setInteger(dst *TValue, i types.LuaInteger) {
