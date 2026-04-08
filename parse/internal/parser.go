@@ -206,14 +206,16 @@ func (s *localFuncStat) GetName() string { return s.name }
 // globalFuncStat implements global function declaration.
 type globalFuncStat struct {
 	baseNode
-	name string
-	func_ astapi.FuncDef
+	name     string
+	func_    astapi.FuncDef
+	isMethod bool // true if defined with colon syntax (function a:m())
 }
 
 func (s *globalFuncStat) IsScopeEnd() bool   { return true }
 func (s *globalFuncStat) Kind() astapi.StatKind { return astapi.STAT_GLOBAL_FUNC }
 func (s *globalFuncStat) GetFuncDef() astapi.FuncDef { return s.func_ }
 func (s *globalFuncStat) GetName() string { return s.name }
+func (s *globalFuncStat) IsMethod() bool { return s.isMethod }
 
 // returnStat implements return statement.
 type returnStat struct {
@@ -1124,6 +1126,7 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 	
 	// Check for method/field syntax: function t:m() or function t.a() or function t.a:m()
 	// Loop to handle chained method/field access
+	isMethod := false
 	for p.peek(lexapi.TOKEN_COLON) || p.peek(lexapi.TOKEN_DOT) {
 		if p.peek(lexapi.TOKEN_COLON) {
 			p.next() // consume ':'
@@ -1134,6 +1137,7 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 			// Build "prefix.method" name
 			name = name + "." + p.current().Value
 			nameTok = p.current()
+			isMethod = true // colon syntax → implicit self parameter
 			p.next()
 		} else {
 			p.next() // consume '.'
@@ -1172,9 +1176,14 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 	}
 	p.next() // consume 'end'
 	
+	// For method syntax (colon), prepend implicit "self" parameter
+	if isMethod {
+		params = append([]string{"self"}, params...)
+	}
 	stat := &globalFuncStat{
 		baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
 		name:     name,
+		isMethod: isMethod,
 		func_: &funcDefImpl{
 			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
 			isLocal:   false,
