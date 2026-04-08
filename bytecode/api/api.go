@@ -33,6 +33,16 @@ type Prototype interface {
 	GetConstants() []*Constant
 	// GetSubProtos returns the list of nested function prototypes.
 	GetSubProtos() []Prototype
+	// GetUpvalues returns the upvalue descriptors for this prototype.
+	GetUpvalues() []UpvalueDesc
+}
+
+// UpvalueDesc describes an upvalue captured by a closure.
+type UpvalueDesc struct {
+	Name    string
+	Instack uint8 // 1 = capture from enclosing function's register, 0 = copy from enclosing function's upvalue
+	Idx     uint8 // register index (if Instack==1) or upvalue index (if Instack==0)
+	Kind    uint8
 }
 
 // Constant represents a compile-time constant value.

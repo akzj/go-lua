@@ -111,6 +111,23 @@ func (p *Proto) GetSubProtos() []bcapi.Prototype {
 	return result
 }
 
+func (p *Proto) GetUpvalues() []bcapi.UpvalueDesc {
+	result := make([]bcapi.UpvalueDesc, len(p.Upvalues))
+	for i, uv := range p.Upvalues {
+		name := ""
+		if uv.Name != nil {
+			name = string(uv.Name.Contents_)
+		}
+		result[i] = bcapi.UpvalueDesc{
+			Name:    name,
+			Instack: uv.Instack,
+			Idx:     uv.Idx,
+			Kind:    uv.Kind,
+		}
+	}
+	return result
+}
+
 func tvalueToConstant(tv *TValue) *bcapi.Constant {
 	switch {
 	case tv.IsNil():
