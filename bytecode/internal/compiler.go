@@ -64,11 +64,9 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 	})
 	proto.sizeupvalues = len(proto.upvalues)
 
-	// Compile each statement in the block
-	for _, stat := range block.Stats() {
-		if err := fs.compileStat(stat); err != nil {
-			return nil, err
-		}
+	// Compile the block (includes register cleanup between statements)
+	if err := fs.compileBlock(block); err != nil {
+		return nil, err
 	}
 
 	// Check for undefined labels referenced by gotos
@@ -616,23 +614,36 @@ func (fs *FuncState) compileBlock(block astapi.Block) error {
 	}
 	for _, stat := range block.Stats() {
 		if stat != nil {
-			// Save register allocation state before each statement.
-			savedMax := fs.Proto.maxstacksize
+			// Only reset temp registers for leaf statements (no sub-blocks).
+			// Block statements (if/while/do/repeat/for) manage their own
+			// scopes via enterScope/leaveScope — resetting them here would
+			// double-reset and corrupt register state.
+			isLeaf := true
+			switch stat.Kind() {
+			case astapi.STAT_IF, astapi.STAT_WHILE, astapi.STAT_DO,
+				astapi.STAT_REPEAT, astapi.STAT_FOR_NUM, astapi.STAT_FOR_IN:
+				isLeaf = false
+			}
+			var savedMax uint8
+			if isLeaf {
+				savedMax = fs.Proto.maxstacksize
+			}
 			if err := fs.compileStat(stat); err != nil {
 				return err
 			}
-			// Track peak for VM stack allocation
-			if fs.Proto.maxstacksize > fs.peakStack {
-				fs.peakStack = fs.Proto.maxstacksize
-			}
-			// Reset allocation pointer to reclaim temp registers.
-			// Use max(savedMax, nLocals) because the statement may have
-			// added new locals (STAT_LOCAL_VAR, STAT_LOCAL_FUNC).
-			nLocals := uint8(fs.locals.Count())
-			if nLocals > savedMax {
-				fs.Proto.maxstacksize = nLocals
-			} else {
-				fs.Proto.maxstacksize = savedMax
+			if isLeaf {
+				// Track peak for VM stack allocation
+				if fs.Proto.maxstacksize > fs.peakStack {
+					fs.peakStack = fs.Proto.maxstacksize
+				}
+				// Reset: max(savedMax, nLocals) to reclaim temps
+				nLocals := uint8(fs.locals.Count())
+				if nLocals > savedMax {
+					fs.Proto.maxstacksize = nLocals
+				} else {
+					fs.Proto.maxstacksize = savedMax
+				}
+
 			}
 		}
 	}
@@ -746,12 +757,19 @@ func (fs *FuncState) compileWhileStat(stat astapi.StatNode) error {
 	// Mark loop start position
 	loopStart := fs.pc
 
-	// Compile condition
+	// Compile condition — save/restore maxstacksize to reclaim all temps
+	// (condReg + any intermediate expression temps)
+	savedCondMax := fs.Proto.maxstacksize
 	condReg := fs.allocReg()
 	fs.expToReg(whileStmt.GetCondition(), condReg)
 
 	// TEST condReg, if false JMP to end (c=0 means jump if false)
 	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
+	// Track peak then restore — reclaim condReg and all expression temps
+	if fs.Proto.maxstacksize > fs.peakStack {
+		fs.peakStack = fs.Proto.maxstacksize
+	}
+	fs.Proto.maxstacksize = savedCondMax
 	jmpToEndIdx := fs.pc
 	fs.emitSJ(0) // placeholder jump
 
@@ -921,6 +939,9 @@ func (fs *FuncState) compileForNum(stat astapi.StatNode) error {
 	stepExp := forNum.GetStep()
 	bodyBlock := forNum.GetBlock()
 
+	// Save maxstacksize to restore after loop (reclaim loop control registers)
+	savedForMax := fs.Proto.maxstacksize
+
 	// Allocate 3 consecutive registers:
 	// R[baseReg]   = limit
 	// R[baseReg+1] = step
@@ -991,6 +1012,12 @@ func (fs *FuncState) compileForNum(stat astapi.StatNode) error {
 	fs.pendingBreaks = savedPendingBreaks
 	fs.loopExitIdx = savedLoopExitIdx
 
+	// Reclaim loop control registers
+	if fs.Proto.maxstacksize > fs.peakStack {
+		fs.peakStack = fs.Proto.maxstacksize
+	}
+	fs.Proto.maxstacksize = savedForMax
+
 	return nil
 }
 
@@ -1032,6 +1059,9 @@ func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 	}
 
 	nVars := len(names)
+
+	// Save maxstacksize to restore after loop
+	savedForInMax := fs.Proto.maxstacksize
 
 	// Layout: R[baseReg] = iterator, R[baseReg+1] = state, R[baseReg+2] = control
 	//         R[baseReg+3..baseReg+2+nVars] = loop variables
@@ -1127,6 +1157,12 @@ func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 
 	fs.pendingBreaks = savedPendingBreaks
 	fs.loopExitIdx = savedLoopExitIdx
+
+	// Reclaim loop control registers
+	if fs.Proto.maxstacksize > fs.peakStack {
+		fs.peakStack = fs.Proto.maxstacksize
+	}
+	fs.Proto.maxstacksize = savedForInMax
 
 	return nil
 }
