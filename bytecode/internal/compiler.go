@@ -198,51 +198,45 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 	}
 	
 	if idx, ok := funcExp.(indexAccess); ok {
-		// Method call: obj:method(args) -> compiles to:
-		// 1. Load obj to register
-		// 2. GETTABLE obj.method to register (SELF would be better but requires MOVE first)
-		// 3. MOVE obj to R(A+1) for self
-		// 4. Load args starting at R(A+2)
-		// 5. CALL R(A), nArgs+2, 1
+		// Field access call: table.func(args) — NOT a method call.
+		// The parser already handles : vs . — for : calls, self is in args.
+		// Here we just load the function from the table field and call normally.
 		
 		table := idx.GetTable()
 		key := idx.GetKey()
 		
-		// Allocate register for method result
+		// Allocate register for function
 		funcReg = fs.allocReg()
 		
-		// Compile table (object) to a temp register
+		// Compile table to a temp register
 		tableReg := fs.allocReg()
 		fs.expToReg(table, tableReg)
 		
-		// Get method from table: GETTABLE R(funcReg), R(tableReg), K(methodName)
+		// Get function from table field: GETFIELD R(funcReg), R(tableReg), K(fieldName)
 		if s, ok := key.(interface{ GetValue() string }); ok {
-			methodIdx := fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
-			fs.emitABC(int(opcodes.OP_GETFIELD), funcReg, tableReg, methodIdx)
+			fieldIdx := fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
+			fs.emitABC(int(opcodes.OP_GETFIELD), funcReg, tableReg, fieldIdx)
 		} else {
 			keyReg := fs.allocReg()
 			fs.expToReg(key, keyReg)
 			fs.emitABC(int(opcodes.OP_GETTABLE), funcReg, tableReg, keyReg)
 		}
 		
-		// Self argument: MOVE R(funcReg+1), R(tableReg) - object is now self
-		fs.emitABC(int(opcodes.OP_MOVE), funcReg+1, tableReg, 0)
-		
 		// Update maxstacksize
 		fs.Proto.maxstacksize = uint8(funcReg + 2)
 		
-		// Emit arguments starting at R(funcReg+2)
+		// Emit arguments starting at R(funcReg+1) — no self injection
 		for i, arg := range args {
-			argReg := funcReg + 2 + i
+			argReg := funcReg + 1 + i
 			fs.expToReg(arg, argReg)
 			if argReg+1 > int(fs.Proto.maxstacksize) {
 				fs.Proto.maxstacksize = uint8(argReg + 1)
 			}
 		}
 		
-		// Emit CALL R(funcReg), nArgs+2, 1
-		// +2 because: function + self + args
-		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+2, 1)
+		// Emit CALL R(funcReg), nArgs+1, 1
+		// +1 because: function + args (no self)
+		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
 		
 	} else if name, ok := funcExp.(nameAccess); ok {
 		funcName := name.GetName()
@@ -1566,6 +1560,12 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumRecords() int }, destReg int) {
 	nArray := tc.NumFields()
 	nHash := tc.NumRecords()
+
+	// Ensure allocReg() won't reuse destReg for temporaries.
+	// destReg holds the table — all temps must come after it.
+	if int(fs.Proto.maxstacksize) <= destReg {
+		fs.Proto.maxstacksize = uint8(destReg + 1)
+	}
 
 	// Emit NEWTABLE A B C k — A=dest, B=array size hint, C=hash size hint
 	// For Lua 5.4, NEWTABLE uses log-encoded sizes. For simplicity, use 0 (VM will grow as needed).
