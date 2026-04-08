@@ -493,6 +493,14 @@ func (t *tableConstructor) AddArrayField(e astapi.ExpNode) { t.arrayFields = app
 func (t *tableConstructor) AddRecordField(k, v astapi.ExpNode) {
 	t.recordFields = append(t.recordFields, struct{ Key, Value astapi.ExpNode }{k, v})
 }
+func (t *tableConstructor) GetArrayField(i int) astapi.ExpNode {
+	if i >= 0 && i < len(t.arrayFields) { return t.arrayFields[i] }
+	return nil
+}
+func (t *tableConstructor) GetRecordField(i int) (astapi.ExpNode, astapi.ExpNode) {
+	if i >= 0 && i < len(t.recordFields) { return t.recordFields[i].Key, t.recordFields[i].Value }
+	return nil, nil
+}
 func (t *tableConstructor) IsConstant() bool { return false }
 func (t *tableConstructor) Kind() astapi.ExpKind { return astapi.EXP_NONRELOC }
 

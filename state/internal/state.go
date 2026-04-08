@@ -1431,7 +1431,7 @@ var _ = strconv.Itoa // keep strconv import
 
 // makeRequire creates a require GoFunc that captures the registry.
 // This allows require to look up modules in package.loaded.
-func makeRequire(registry tableapi.TableInterface) vm.GoFunc {
+func makeRequire(registry tableapi.TableInterface, globalEnv tableapi.TableInterface) vm.GoFunc {
 	return func(stack []types.TValue, base int) int {
 		if base+1 >= len(stack) {
 			stack[base] = types.NewTValueNil()
@@ -1448,13 +1448,26 @@ func makeRequire(registry tableapi.TableInterface) vm.GoFunc {
 
 		// Look up the module in the global environment (registry)
 		key := types.NewTValueString(modName)
-		result := registry.Get(key)
+		var result types.TValue
+		result = registry.Get(key)
 		if result != nil && !result.IsNil() {
-			stack[base] = result
-			return 1
+			// Skip goFuncWrapper - it's a loader, not the module
+			if _, isFunc := result.GetValue().(vm.GoFunc); !isFunc {
+				stack[base] = result
+				return 1
+			}
 		}
 
-		// Module not found - return nil (graceful degradation, not an error)
+		// Module not found in registry - try looking up as global variable
+		// This handles cases where modules like "string", "math" are globals
+		if globalEnv != nil {
+			if result = globalEnv.Get(key); result != nil && !result.IsNil() {
+				stack[base] = result
+				return 1
+			}
+		}
+		
+		// Module not found - return nil
 		stack[base] = types.NewTValueNil()
 		return 1
 	}
@@ -1683,7 +1696,7 @@ func (L *LuaState) openBaseLib() {
 	L.setGlobalValue("package", &tableWrapper{tbl: packageTbl})
 
 	// Register require function (closure captures registry)
-	L.setGlobal("require", makeRequire(L.global.Registry()))
+	L.setGlobal("require", makeRequire(L.global.Registry(), L.global.Registry()))
 
 	// Register _G as a reference to the global environment table
 	L.setGlobalValue("_G", &tableWrapper{tbl: L.global.Registry()})

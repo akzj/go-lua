@@ -1521,11 +1521,8 @@ func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumR
 		}); ok {
 			for i := 0; i < nArray; i++ {
 				field := iter.GetArrayField(i)
-				tmpReg := destReg + 1
+				tmpReg := fs.allocReg()
 				fs.expToReg(field, tmpReg)
-				if tmpReg+1 > int(fs.Proto.maxstacksize) {
-					fs.Proto.maxstacksize = uint8(tmpReg + 1)
-				}
 				// SETI A B C: R[A][B] = R[C]  (B is integer key, 1-based)
 				fs.emitABC(int(opcodes.OP_SETI), destReg, i+1, tmpReg)
 			}

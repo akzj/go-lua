@@ -720,6 +720,15 @@ func (ti *TableImpl) SetInt(key typesapi.LuaInteger, value typesapi.TValue) {
 		ti.tbl.Array[idx-1] = &TValue{Tt: uint8(value.GetTag()), Value: Value{Variant: getVariant(value), Data_: getData(value)}}
 		return
 	}
+	// Key not in array. Auto-expand for small positive integers.
+	if key >= 1 && uint64(key) > uint64(ti.tbl.Asize) && key <= 128 {
+		ti.Resize(int(key))
+		idx = ikeyinarray(ti.tbl, key)
+		if idx > 0 && int(idx)-1 < len(ti.tbl.Array) {
+			ti.tbl.Array[idx-1] = &TValue{Tt: uint8(value.GetTag()), Value: Value{Variant: getVariant(value), Data_: getData(value)}}
+			return
+		}
+	}
 	// Insert into hash
 	ti.newkey(NewTValueInteger(key), &TValue{Tt: uint8(value.GetTag()), Value: Value{Variant: getVariant(value), Data_: getData(value)}})
 }
