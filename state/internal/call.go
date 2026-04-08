@@ -94,7 +94,9 @@ func (L *LuaState) callLuaClosure(fn typesapi.TValue, nArgs, nResults int) {
 	executor.PushFrame(frame)
 	
 	// Execute bytecode
-	_ = executor.Run()
+	if err := executor.Run(); err != nil {
+		L.lastErr = err
+	}
 	
 	// Pop frame from VM
 	executor.PopFrame()
@@ -153,7 +155,9 @@ func (L *LuaState) executeProto(proto bcapi.Prototype, nArgs, nResults int) {
 	executor.PushFrame(frame)
 
 	// Execute bytecode
-	_ = executor.Run()
+	if err := executor.Run(); err != nil {
+		L.lastErr = err
+	}
 
 	// Pop frame from VM
 	executor.PopFrame()
@@ -386,4 +390,11 @@ func wrapStringAsTValue(s typesapi.TString) typesapi.TValue {
 	// Use NewValueGC to wrap the string as a GC object
 	// This is a simplified approach - actual implementation needs proper string handling
 	return tv
+}
+
+// GetLastError returns the last execution error and clears it.
+func (L *LuaState) GetLastError() error {
+	err := L.lastErr
+	L.lastErr = nil
+	return err
 }

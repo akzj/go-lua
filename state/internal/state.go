@@ -68,6 +68,8 @@ type LuaState struct {
 	global   *globalState    // Shared global state
 	executor vm.VMFrameManager // VM executor (lazy initialization)
 	
+	lastErr  error          // Last execution error (set by Call, checked by DoStringOn)
+
 	// Coroutine state management
 	parent   *LuaState       // Parent LuaState that called Resume (for yield transfer)
 	savedPC  int            // Saved program counter for resume after yield

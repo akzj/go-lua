@@ -56,6 +56,16 @@ func DoStringOn(L stateapi.LuaStateInterface, code string) error {
 	// Step 4: Execute - state.Call(0, 0)
 	L.Call(0, 0)
 
+	// Check for execution errors (stored on LuaState by VM executor)
+	type errorProvider interface {
+		GetLastError() error
+	}
+	if ep, ok := L.(errorProvider); ok {
+		if err := ep.GetLastError(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
