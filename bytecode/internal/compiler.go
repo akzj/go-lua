@@ -867,8 +867,8 @@ func (fs *FuncState) compileForNum(stat astapi.StatNode) error {
 	// Emit FORLOOP: R[A+2] += R[A+1]; if in range pc += sBx
 	forLoopIdx := fs.emitAsBx(int(opcodes.OP_FORLOOP), baseReg, 0)
 
-	// Patch FORPREP to jump to FORLOOP+1 (instruction after the body)
-	fs.patchAsBxJump(forPrepIdx, forLoopIdx+1)
+	// Patch FORPREP to jump to FORLOOP (which checks condition and loops back)
+	fs.patchAsBxJump(forPrepIdx, forLoopIdx)
 
 	// Patch FORLOOP to jump back to FORPREP+1 (right after FORPREP)
 	fs.patchAsBxJump(forLoopIdx, forPrepIdx+1)
@@ -894,11 +894,18 @@ type forInAccess interface {
 }
 
 // compileForIn compiles generic for-loop: for vars in exprs do body end
+// Lua 5.4 register layout:
+//   R[A]   = iterator function
+//   R[A+1] = state (invariant)
+//   R[A+2] = control variable
+//   R[A+3] = first loop variable (e.g., k)
+//   R[A+4] = second loop variable (e.g., v)
 // Generates:
-//   TFORPREP A -> pc+=sBx  (create upvalue, jump to TFORCALL)
+//   [setup: compile exprs, CALL to get iterator/state/control into R[A..A+2]]
+//   TFORPREP A sBx  → jump forward to TFORLOOP
 //   [loop body]
-//   TFORCALL A -> R[A+4], ... := R[A](R[A+1], R[A+2])
-//   TFORLOOP A -> if R[A+2] ~= nil then R[A]=R[A+2]; pc -= sBx
+//   TFORCALL A C    → R[A+4..A+3+C] := R[A](R[A+1], R[A+2])
+//   TFORLOOP A sBx  → if R[A+2] ~= nil then pc -= sBx (back to body)
 func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 	forIn, ok := stat.(forInAccess)
 	if !ok {
@@ -917,51 +924,66 @@ func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 	}
 
 	nVars := len(names)
-	// Layout: R[A] to R[A+nVars-1] = loop variables
-	//         R[A+nVars] = internal (control)
-	//         R[A+nVars+1] = state
-	//         R[A+nVars+2] = iterator function
-	baseReg := fs.allocReg() // R[baseReg] = first loop variable
 
-	// Allocate registers for all variables and internal state
-	for i := 1; i < nVars+3; i++ {
+	// Layout: R[baseReg] = iterator, R[baseReg+1] = state, R[baseReg+2] = control
+	//         R[baseReg+3..baseReg+2+nVars] = loop variables
+	baseReg := fs.allocReg() // R[baseReg] = iterator function
+
+	// Allocate registers for state, control, and loop variables
+	for i := 1; i < 3+nVars; i++ {
 		fs.allocReg()
 	}
 
-	// Update maxstacksize
-	fs.Proto.maxstacksize = uint8(baseReg + nVars + 3)
-
-	// Compile expression list to registers starting at baseReg+nVars+2
-	// Order: iterator(baseReg+nVars+2), state(baseReg+nVars+1), control(baseReg+nVars)
-	for i, expr := range exprs {
-		reg := baseReg + nVars + 2 + i
-		fs.expToReg(expr, reg)
+	// Update maxstacksize: need baseReg + 3 + nVars + extra for TFORCALL temp
+	needed := baseReg + 3 + nVars + 3
+	if needed > int(fs.Proto.maxstacksize) {
+		fs.Proto.maxstacksize = uint8(needed)
 	}
 
-	// If fewer expressions than needed (3: iterator, state, control), fill with nil
-	// Actually in Lua 5.5, exprs should provide: func, state, control
-	// If less than 3, remaining slots are filled by the loop
+	// Compile the expression list.
+	// For "pairs(t)", this is a single function call that returns 3 values.
+	// We need 3 results: iterator, state, control → R[baseReg], R[baseReg+1], R[baseReg+2]
+	if len(exprs) == 1 {
+		// Single expression (common case: pairs(t) or ipairs(t))
+		// Compile as a function call with 3 results
+		if fc, ok := exprs[0].(astapi.FuncCall); ok {
+			// Compile function call with 3 results into baseReg
+			funcExp := fc.Func()
+			args := fc.Args()
+			fs.expToReg(funcExp, baseReg)
+			for i, arg := range args {
+				fs.expToReg(arg, baseReg+1+i)
+			}
+			nArgs := len(args)
+			// CALL baseReg, nArgs+1, 4 (3 results: iterator, state, control)
+			fs.emitABC(int(opcodes.OP_CALL), baseReg, nArgs+1, 4)
+		} else {
+			// Non-call expression: evaluate to baseReg, nil state and control
+			fs.expToReg(exprs[0], baseReg)
+		}
+	} else {
+		// Multiple expressions: first goes to baseReg, second to baseReg+1, etc.
+		for i, expr := range exprs {
+			if i < 3 {
+				fs.expToReg(expr, baseReg+i)
+			}
+		}
+	}
 
-	// Emit TFORPREP: create upvalue for R[A+nVars], jump to TFORCALL
+	// Emit TFORPREP: jump forward past the body to TFORLOOP
 	tforPrepIdx := fs.emitAsBx(int(opcodes.OP_TFORPREP), baseReg, 0)
 
-	// Emit TFORCALL: call iterator with state and control
-	// TFORCALL A n results: R[A+4..A+3+n] := R[A](R[A+1], R[A+2])
-	// A = baseReg, n = nVars (number of loop variables)
-	fs.emitABC(int(opcodes.OP_TFORCALL), baseReg, nVars, 0)
-
-	// Register loop variables
+	// Register loop variables (they start at baseReg+3)
 	for i, name := range names {
-		fs.locals.Add(name, baseReg+i, fs.pc)
+		fs.locals.Add(name, baseReg+3+i, fs.pc)
 	}
 
-	// Save previous pending breaks and loop exit index
+	// Save break state
 	savedPendingBreaks := fs.pendingBreaks
 	savedLoopExitIdx := fs.loopExitIdx
 	fs.pendingBreaks = make([]int, 0)
-	// loopExitIdx will be set after TFORLOOP
 
-	// Compile loop body with new label scope
+	// Compile loop body
 	if bodyBlock != nil {
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(bodyBlock)
@@ -973,24 +995,25 @@ func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 		}
 	}
 
-	// Emit TFORLOOP: if control ~= nil then var = control; pc -= sBx
+	// Emit TFORCALL: call R[A](R[A+1], R[A+2]), results to R[A+4..A+3+C]
+	fs.emitABC(int(opcodes.OP_TFORCALL), baseReg, 0, nVars)
+
+	// Emit TFORLOOP: if R[A+2] ~= nil then pc -= sBx
 	tforLoopIdx := fs.emitAsBx(int(opcodes.OP_TFORLOOP), baseReg, 0)
 
-	// Patch TFORPREP to jump to TFORCALL (the instruction after the body + TFORCALL)
-	// TFORPREP jumps forward, TFORLOOP jumps backward
-	// Jump target for TFORPREP = instruction after TFORLOOP
-	fs.patchAsBxJump(tforPrepIdx, tforLoopIdx+1)
+	// Patch jumps:
+	// TFORPREP jumps forward to TFORLOOP
+	fs.patchAsBxJump(tforPrepIdx, tforLoopIdx)
 
-	// TFORLOOP jumps back to TFORCALL (right after TFORPREP)
+	// TFORLOOP jumps back to the start of the body (tforPrepIdx + 1)
 	fs.patchAsBxJump(tforLoopIdx, tforPrepIdx+1)
 
-	// Set loop exit index and patch pending break jumps
+	// Patch break jumps
 	fs.loopExitIdx = fs.pc
 	for _, breakIdx := range fs.pendingBreaks {
 		fs.patchSJ(breakIdx, fs.pc)
 	}
 
-	// Restore previous pending breaks and loop exit index
 	fs.pendingBreaks = savedPendingBreaks
 	fs.loopExitIdx = savedLoopExitIdx
 
@@ -1086,9 +1109,9 @@ func (fs *FuncState) compileLabelStat(stat astapi.StatNode) error {
 func (fs *FuncState) patchAsBxJump(instrIdx int, targetPC int) {
 	if instrIdx >= 0 && instrIdx < len(fs.Proto.code) {
 		oldInst := fs.Proto.code[instrIdx]
-		// Use uint32 throughout to avoid sign issues with int conversion
-		op := int(uint32(oldInst) >> 6 & 0x7F)
-		a := int(uint32(oldInst) >> 14 & 0x1FF)
+		// Lua 5.4 instruction format: bits 0-6 = opcode, bits 7-14 = A
+		op := int(oldInst & 0x7F)
+		a := int((oldInst >> 7) & 0xFF)
 		offset := targetPC - instrIdx - 1
 		fs.Proto.code[instrIdx] = encodeAsBx(op, a, offset)
 	}
@@ -1916,10 +1939,9 @@ func (fs *FuncState) patchSJ(instrIdx int, targetPC int) {
 	if instrIdx >= 0 && instrIdx < len(fs.Proto.code) {
 		offset := targetPC - instrIdx - 1
 		oldInst := fs.Proto.code[instrIdx]
-		// Extract opcode from bits 0-6 (same as VM: inst >> POS_OP & MAXARG_OP)
+		// Lua 5.4 instruction format: bits 0-6 = opcode, bits 7-14 = A
 		op := int(oldInst & 0x7F)
-		// Extract A from bits 6-14
-		a := int(oldInst >> 6 & 0x1FF)
+		a := int((oldInst >> 7) & 0xFF)
 		fs.Proto.code[instrIdx] = encodeAsBx(op, a, offset)
 	}
 }

@@ -665,6 +665,29 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 
 	// For loop opcodes
 	case opcodes.OP_FORPREP:
+		// Prepare numeric for loop: R[A+2] -= R[A+1], then jump to FORLOOP
+		// This pre-subtracts step so FORLOOP's first increment yields the correct start value
+		a := vmapi.GetArgA(inst)
+		base := frameBase(e)
+		ra1 := e.reg(base + a + 1) // step
+		ra2 := e.reg(base + a + 2) // initial index
+		if ra2.IsInteger() && ra1.IsInteger() {
+			setInt(ra2, getInt(ra2)-getInt(ra1))
+		} else if ra2.IsFloat() || ra1.IsFloat() {
+			// Handle float for loops
+			var idx, step types.LuaNumber
+			if ra2.IsFloat() {
+				idx = getFloat(ra2)
+			} else {
+				idx = types.LuaNumber(getInt(ra2))
+			}
+			if ra1.IsFloat() {
+				step = getFloat(ra1)
+			} else {
+				step = types.LuaNumber(getInt(ra1))
+			}
+			setFloat(ra2, idx-step)
+		}
 		e.pc += vmapi.GetsBx(inst)
 
 	case opcodes.OP_FORLOOP:
@@ -680,7 +703,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			newIdx := idx + step
 			if (step > 0 && newIdx <= limit) || (step < 0 && newIdx >= limit) {
 				setInt(ra2, newIdx)
-				e.pc -= b
+				e.pc += b
 			}
 		}
 
@@ -688,13 +711,46 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		e.pc += vmapi.GetsBx(inst)
 
 	case opcodes.OP_TFORCALL:
-		// Execute iterator
+		// Generic for loop: call iterator function
+		// R[A+4]..R[A+3+C] := R[A](R[A+1], R[A+2])
+		// A = iterator func, A+1 = state, A+2 = control variable
+		// C = number of loop variables (results to produce)
+		a := vmapi.GetArgA(inst)
+		c := vmapi.GetArgC(inst)
+		base := frameBase(e)
+
+		// Number of results = C (the number of loop variables)
+		nResults := c
+		if nResults == 0 {
+			nResults = 2 // default: key, value
+		}
+
+		// Copy iterator function and args to a temp call area past the loop vars
+		// Temp area starts at R[A+3+nResults] to avoid clobbering loop var slots
+		callBase := base + a + 3 + nResults
+		e.copyValue(e.reg(callBase), e.reg(base+a))     // iterator function
+		e.copyValue(e.reg(callBase+1), e.reg(base+a+1)) // invariant state
+		e.copyValue(e.reg(callBase+2), e.reg(base+a+2)) // control variable
+
+		// Call the iterator: nArgs=2 (state, control), nResults
+		e.executeCall(callBase, 3, nResults)
+
+		// Copy all results to loop variable slots R[A+3..A+3+nResults-1]
+		// Also update control variable R[A+2] = first result
+		if !e.reg(callBase).IsNil() {
+			for i := 0; i < nResults; i++ {
+				e.copyValue(e.reg(base+a+3+i), e.reg(callBase+i))
+			}
+			e.copyValue(e.reg(base+a+2), e.reg(callBase)) // control = first result
+		} else {
+			e.setNil(e.reg(base + a + 3)) // signal loop end to TFORLOOP
+		}
 
 	case opcodes.OP_TFORLOOP:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetsBx(inst)
 		if !e.reg(frameBase(e) + a + 3).IsNil() {
-			e.pc -= b
+			e.pc += b
 		}
 
 	// Table/closure opcodes
