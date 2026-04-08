@@ -55,6 +55,15 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 		gotoScopes:   make(map[int]int),
 	}
 
+	// Main chunk always has _ENV as upvalue[0] (set up by the VM).
+	// This must be registered so child functions can capture it via resolveUpvalue.
+	proto.upvalues = append(proto.upvalues, &Upvaldesc{
+		Name:    "_ENV",
+		Instack: 1,
+		Idx:     0,
+	})
+	proto.sizeupvalues = len(proto.upvalues)
+
 	// Compile each statement in the block
 	for _, stat := range block.Stats() {
 		if err := fs.compileStat(stat); err != nil {
