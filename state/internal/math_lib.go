@@ -252,8 +252,14 @@ func bmathModf(stack []types.TValue, base int) int {
 		return 2
 	}
 	i, f := math.Modf(x)
-	// For whole numbers, return integer type for the integer part
-	stack[base] = types.NewTValueInteger(types.LuaInteger(i))
+	// Return integer type only if the value fits in int64
+	const maxSafeInt = float64(math.MaxInt64)
+	const minSafeInt = float64(math.MinInt64)
+	if i >= minSafeInt && i <= maxSafeInt {
+		stack[base] = types.NewTValueInteger(types.LuaInteger(i))
+	} else {
+		stack[base] = types.NewTValueFloat(types.LuaNumber(i))
+	}
 	stack[base+1] = types.NewTValueFloat(types.LuaNumber(f))
 	return 2
 }
