@@ -805,6 +805,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			dst := e.reg(calleeBase - 1 + i)
 				*dst = *src
 		}
+		// Set lastCallBase so the caller's B=0 CALL can compute correct nArgs
+		e.lastCallBase = calleeBase - 1
 
 		// Pop current frame and restore caller state
 		e.frames = e.frames[:len(e.frames)-1]
@@ -2537,6 +2539,9 @@ func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
 		default:
 			*dst2 = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: fmt.Sprintf("%v", ev)})
 		}
+		// Set lastCallNRet/lastCallBase for B=0 propagation
+		e.lastCallNRet = 2 // false + error message
+		e.lastCallBase = base
 		return true
 	}
 	
@@ -2556,6 +2561,14 @@ func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
 	dst := e.reg(base)
 	dst.Tt = uint8(types.LUA_VTRUE)
 	dst.Value.Data_ = nil
+	// Set lastCallNRet/lastCallBase so caller's B=0 CALL can count results
+	// pcall returns: true/false + result(s). Count actual results from inner call.
+	nInnerResults := e.lastCallNRet
+	if nInnerResults < 1 {
+		nInnerResults = 1
+	}
+	e.lastCallNRet = 1 + nInnerResults // true/false + inner results
+	e.lastCallBase = base
 	return true
 }
 
