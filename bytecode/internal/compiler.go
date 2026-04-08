@@ -1392,6 +1392,11 @@ func (fs *FuncState) addArgConstant(arg astapi.ExpNode) {
 }
 
 // binopAccess interface for accessing binop fields
+// unaryOpAccess matches UnopExp which has public fields Op and Exp.
+type unaryOpAccess interface {
+	GetUnaryOp() (astapi.UnopKind, astapi.ExpNode)
+}
+
 type binopAccess interface {
 	GetOp() astapi.BinopKind
 	GetLeft() astapi.ExpNode
@@ -1431,6 +1436,9 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 	case interface{ GetValue() float64 }:
 		idx := fs.addConstant(&Constant{Type: ConstFloat, Float: e.GetValue()})
 		fs.emitABx(int(opcodes.OP_LOADK), destReg, idx)
+	case unaryOpAccess:
+		// Unary operators: #, -, ~, not
+		fs.compileUnaryOp(e, destReg)
 	case binopAccess:
 		// Must check binopAccess BEFORE Kind() since binopExp implements both
 		fs.compileBinop(e, destReg)
@@ -1560,6 +1568,28 @@ func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumR
 	}
 }
 
+
+// compileUnaryOp compiles unary operators: -, #, ~, not
+func (fs *FuncState) compileUnaryOp(e unaryOpAccess, destReg int) {
+	op, operand := e.GetUnaryOp()
+	// Compile operand to destReg first
+	operandReg := fs.allocReg()
+	fs.expToReg(operand, operandReg)
+	
+	switch op {
+	case astapi.UNOP_NEG:
+		fs.emitABC(int(opcodes.OP_UNM), destReg, operandReg, 0)
+	case astapi.UNOP_LEN:
+		fs.emitABC(int(opcodes.OP_LEN), destReg, operandReg, 0)
+	case astapi.UNOP_BNOT:
+		fs.emitABC(int(opcodes.OP_BNOT), destReg, operandReg, 0)
+	case astapi.UNOP_NOT:
+		fs.emitABC(int(opcodes.OP_NOT), destReg, operandReg, 0)
+	default:
+		fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+	}
+	fs.freeReg(operandReg)
+}
 
 // compileIndexExpr compiles an indexed expression (table.key) to a register.
 // Generates: GETTABLE R(dest), R(tableReg), K(keyIdx)

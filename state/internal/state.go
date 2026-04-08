@@ -1451,6 +1451,11 @@ func makeRequire(registry tableapi.TableInterface, globalEnv tableapi.TableInter
 		var result types.TValue
 		result = registry.Get(key)
 		if result != nil && !result.IsNil() {
+			// Unwrap tableWrapper or goFuncWrapper if present
+			if tw, ok := result.GetValue().(*tableWrapper); ok {
+				stack[base] = &tableWrapper{tbl: tw.tbl}
+				return 1
+			}
 			// Skip goFuncWrapper - it's a loader, not the module
 			if _, isFunc := result.GetValue().(vm.GoFunc); !isFunc {
 				stack[base] = result
@@ -1462,6 +1467,11 @@ func makeRequire(registry tableapi.TableInterface, globalEnv tableapi.TableInter
 		// This handles cases where modules like "string", "math" are globals
 		if globalEnv != nil {
 			if result = globalEnv.Get(key); result != nil && !result.IsNil() {
+				// Unwrap tableWrapper or goFuncWrapper if present
+				if tw, ok := result.GetValue().(*tableWrapper); ok {
+					stack[base] = &tableWrapper{tbl: tw.tbl}
+					return 1
+				}
 				stack[base] = result
 				return 1
 			}

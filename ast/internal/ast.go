@@ -156,6 +156,7 @@ func (e *UnopExp) IsConstant() bool {
 	return e.Exp.IsConstant()
 }
 func (e *UnopExp) Kind() api.ExpKind { return api.EXP_RELOC }
+func (e *UnopExp) GetUnaryOp() (api.UnopKind, api.ExpNode) { return e.Op, e.Exp }
 func (e *UnopExp) Position() (int, int) { return e.BaseNode.Line, e.BaseNode.Column }
 
 // =============================================================================
