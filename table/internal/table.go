@@ -935,10 +935,12 @@ func (ti *TableImpl) Next(key typesapi.TValue) (typesapi.TValue, typesapi.TValue
 	}
 	
 	size := sizenode(ti.tbl)
-	for i := hashStart; i < uint32(size); i++ {
-		n := gnode(ti.tbl, int(i))
-		if !isempty(gval(n)) && !n.KeyIsDead() {
-			return getnodekey(n), gval(n), true
+	if ti.tbl.Node != nil && !isdummy(ti.tbl) {
+		for i := hashStart; i < uint32(size); i++ {
+			n := gnode(ti.tbl, int(i))
+			if n != nil && gval(n) != nil && !isempty(gval(n)) && !n.KeyIsDead() {
+				return getnodekey(n), gval(n), true
+			}
 		}
 	}
 	
