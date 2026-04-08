@@ -59,14 +59,17 @@ func luaError(msg types.TValue) {
 
 // luaErrorString is a convenience helper for string error messages.
 
-// realArgCount counts the actual non-nil arguments passed to a GoFunc.
+// realArgCount counts the actual arguments passed to a GoFunc.
 // The GoFunc bridge may pass extra nil-padded slots (gfBase offset),
-// so len(stack)-base-1 can overcount. This returns the true arg count.
+// so len(stack)-base-1 can overcount. This strips trailing Go-nil
+// slots (never written by the bridge) but preserves explicit Lua nil
+// arguments (non-nil Go interface with nil tag).
 func realArgCount(stack []types.TValue, base int) int {
 	raw := len(stack) - base - 1
 	for raw > 0 {
 		idx := base + raw
-		if idx < len(stack) && stack[idx] != nil && !stack[idx].IsNil() {
+		if idx < len(stack) && stack[idx] != nil {
+			// Non-nil Go interface = real argument (even if Lua nil)
 			break
 		}
 		raw--
@@ -701,38 +704,39 @@ func bprint(stack []types.TValue, base int) int {
 
 // btype implements Lua's type function.
 // Returns the type name of the value at stack[base+1].
+// Errors if called with 0 arguments (like standard Lua).
 func btype(stack []types.TValue, base int) int {
-	if base+1 < len(stack) {
-		v := stack[base+1]
-		var t string
-		switch {
-		case v == nil || v.IsNil():
-			t = "nil"
-		case v.IsInteger():
-			t = "number"
-		case v.IsFloat():
-			t = "number"
-		case v.IsBoolean():
-			t = "boolean"
-		case v.IsString():
-			t = "string"
-		case v.IsFunction():
-			t = "function"
-		case v.IsTable():
-			t = "table"
-		case v.IsThread():
-			t = "thread"
-		case v.IsUserData():
-			t = "userdata"
-		case v.IsLightUserData():
-			t = "userdata"
-		default:
-			t = "unknown"
-		}
-		stack[base] = types.NewTValueString(t)
-	} else {
-		stack[base] = types.NewTValueNil()
+	nArgs := realArgCount(stack, base)
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'type' (value expected)")
 	}
+	v := stack[base+1]
+	var t string
+	switch {
+	case v == nil || v.IsNil():
+		t = "nil"
+	case v.IsInteger():
+		t = "number"
+	case v.IsFloat():
+		t = "number"
+	case v.IsBoolean():
+		t = "boolean"
+	case v.IsString():
+		t = "string"
+	case v.IsFunction():
+		t = "function"
+	case v.IsTable():
+		t = "table"
+	case v.IsThread():
+		t = "thread"
+	case v.IsUserData():
+		t = "userdata"
+	case v.IsLightUserData():
+		t = "userdata"
+	default:
+		t = "unknown"
+	}
+	stack[base] = types.NewTValueString(t)
 	return 1
 }
 
