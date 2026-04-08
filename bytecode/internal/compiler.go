@@ -458,14 +458,40 @@ func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
 	
 	// Compile expressions to registers
 	for i, exp := range exps {
-		reg := fs.allocReg()
-		if exp != nil {
-			fs.expToReg(exp, reg)
-		} else {
-			// Nil expression
+		if exp == nil {
+			reg := fs.allocReg()
 			fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+			if i < nVars && names[i] != "" {
+				fs.locals.Add(names[i], reg, fs.pc)
+			}
+			continue
 		}
-		// Register the local variable for variables that have corresponding expressions
+		// Check if this is the last expression AND it's a function call
+		// AND there are more variables than expressions — use multi-return
+		if i == nExps-1 && nVars > i+1 {
+			if fc, ok := exp.(astapi.FuncCall); ok {
+				nResults := nVars - i
+				funcReg, err := fs.compileFuncCallToVars(fc, nResults)
+				if err != nil {
+					return err
+				}
+				// Register all remaining locals from funcReg onwards
+				for j := i; j < nVars; j++ {
+					if names[j] != "" {
+						fs.locals.Add(names[j], funcReg+j-i, fs.pc)
+					}
+				}
+				// Allocate registers for the extra results (funcReg+1..funcReg+nResults-1)
+				// compileFuncCallToVars already allocated funcReg, allocate the rest
+				for j := 1; j < nResults; j++ {
+					fs.allocReg()
+				}
+				return nil // All vars handled by multi-return
+			}
+		}
+		// Normal single-value expression
+		reg := fs.allocReg()
+		fs.expToReg(exp, reg)
 		if i < nVars && names[i] != "" {
 			fs.locals.Add(names[i], reg, fs.pc)
 		}
