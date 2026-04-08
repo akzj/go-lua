@@ -1405,12 +1405,29 @@ func (e *Executor) compareImmGE(inst opcodes.Instruction) {
 	}
 }
 
+// numToFloat64 converts any numeric TValue to float64.
+// Handles both integer and float variants safely.
+func numToFloat64(v types.TValue) float64 {
+	if v.IsInteger() {
+		return float64(v.GetInteger())
+	}
+	if v.IsFloat() {
+		return float64(v.GetFloat())
+	}
+	return 0
+}
+
 func (e *Executor) lessThan(a, b *TValue) bool {
 	if a.IsInteger() && b.IsInteger() {
 		return a.GetInteger() < b.GetInteger()
 	}
 	if a.IsNumber() && b.IsNumber() {
-		return float64(a.GetFloat()) < float64(b.GetFloat())
+		return numToFloat64(a) < numToFloat64(b)
+	}
+	if a.IsString() && b.IsString() {
+		sa, _ := a.GetValue().(string)
+		sb, _ := b.GetValue().(string)
+		return sa < sb
 	}
 	return false
 }
@@ -1420,7 +1437,12 @@ func (e *Executor) lessEqual(a, b types.TValue) bool {
 		return a.GetInteger() <= b.GetInteger()
 	}
 	if a.IsNumber() && b.IsNumber() {
-		return float64(a.GetFloat()) <= float64(b.GetFloat())
+		return numToFloat64(a) <= numToFloat64(b)
+	}
+	if a.IsString() && b.IsString() {
+		sa, _ := a.GetValue().(string)
+		sb, _ := b.GetValue().(string)
+		return sa <= sb
 	}
 	return false
 }
@@ -1435,11 +1457,17 @@ func (e *Executor) equalValues(a, b *TValue) bool {
 	if a.IsInteger() && b.IsInteger() {
 		return a.GetInteger() == b.GetInteger()
 	}
-	if a.IsFloat() && b.IsFloat() {
-		return float64(a.GetFloat()) == float64(b.GetFloat())
+	// Mixed int/float comparison
+	if a.IsNumber() && b.IsNumber() {
+		return numToFloat64(a) == numToFloat64(b)
 	}
 	if a.IsBoolean() && b.IsBoolean() {
 		return a.IsTrue() == b.IsTrue()
+	}
+	if a.IsString() && b.IsString() {
+		sa, _ := a.GetValue().(string)
+		sb, _ := b.GetValue().(string)
+		return sa == sb
 	}
 	return false
 }
