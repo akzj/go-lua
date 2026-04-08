@@ -18,4 +18,8 @@ func init() {
 	// Initialize the default table for the api package.
 	// NewTable creates a TableImpl.
 	tableapi.DefaultTable = NewTable()
+	// Register factory so api.NewTable() creates fresh instances
+	tableapi.NewTableFactory = func() tableapi.TableInterface {
+		return NewTable()
+	}
 }

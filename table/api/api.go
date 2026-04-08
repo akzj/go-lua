@@ -74,12 +74,20 @@ type TableInterface interface {
 // Factory Function (avoids circular dependency)
 // =============================================================================
 
-// DefaultTable is the default table instance.
+// DefaultTable is the default table instance used as a template.
 // Initialized by internal.init() before any user code runs.
 var DefaultTable TableInterface
 
-// NewTable returns a new TableInterface instance.
-// This factory pattern avoids importing internal/ from api/.
+// NewTableFactory is a factory function that creates fresh table instances.
+// Set by table/internal.init() to avoid circular imports.
+var NewTableFactory func() TableInterface
+
+// NewTable returns a NEW TableInterface instance.
+// Each call creates a distinct table (not a singleton).
 func NewTable(alloc memapi.Allocator) TableInterface {
+	if NewTableFactory != nil {
+		return NewTableFactory()
+	}
+	// Fallback: should never happen after init
 	return DefaultTable
 }
