@@ -1708,10 +1708,20 @@ func (fs *FuncState) compileBinop(binop binopAccess, destReg int) {
 	// So we put left operand in A (via MOVE), right operand in C, and B=0
 	// For arithmetic ops: executor uses R[B] and R[C], result in R[A]
 	if fs.isComparisonOp(opcode) {
-		// Move left operand to destReg (result register)
-		fs.emitABC(int(opcodes.OP_MOVE), destReg, leftReg, 0)
-		// Emit comparison: R[destReg] vs R[rightReg]
-		fs.emitABC(opcode, destReg, 0, rightReg)
+		// Lua 5.4 comparison pattern: EQ/LT/LE A B k
+		// VM: if (cond != k) then pc++ (skip next instruction)
+		// Followed by boolean materialization: LFALSESKIP + LOADTRUE
+		//
+		// For ==: k=0 → skip LFALSESKIP when equal → LOADTRUE → true
+		// For ~=: k=1 → skip LFALSESKIP when NOT equal → LOADTRUE → true
+		// For < and <=: k=0 → skip LFALSESKIP when condition true → LOADTRUE → true
+		k := 0
+		if op == astapi.BINOP_NE {
+			k = 1
+		}
+		fs.emitABCk(opcode, leftReg, k, rightReg, 0)
+		fs.emitABC(int(opcodes.OP_LFALSESKIP), destReg, 0, 0)
+		fs.emitABC(int(opcodes.OP_LOADTRUE), destReg, 0, 0)
 	} else {
 		// Arithmetic: result in destReg, operands in leftReg and rightReg
 		fs.emitABC(opcode, destReg, leftReg, rightReg)
