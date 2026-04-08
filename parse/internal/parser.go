@@ -2522,6 +2522,8 @@ handleSuffixes:
 				// No args after method name
 				args = []astapi.ExpNode{}
 			}
+			// Prepend self (the table/object) as first argument for method call
+			args = append([]astapi.ExpNode{expr}, args...)
 			expr = &funcCall{
 				baseNode:   baseNode{line: methodTok.Line, column: methodTok.Column},
 				func_:      methodExpr,
