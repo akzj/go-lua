@@ -250,7 +250,7 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		} else {
 			// Global variable: emit GETTABUP to load from upvalue[0]
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
-			fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, 0, nameIdx+256)
+			fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, 0, nameIdx)
 		}
 		
 		// Now emit arguments starting at R[funcReg+1]
@@ -1447,7 +1447,7 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 		} else {
 			// Global variable: emit GETTABUP to load from upvalue[0]
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
-			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx+256)
+			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx)
 		}
 	case astapi.FuncCall:
 		// Function call as expression — MUST be before Kind() since FuncCallImpl has Kind()
