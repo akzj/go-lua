@@ -57,6 +57,10 @@ type VMFrameManager interface {
 
 	// FrameCount returns the number of frames on the stack.
 	FrameCount() int
+
+	// SetStringMetatable sets the shared metatable for all string values.
+	// Used to implement string:method() syntax via __index.
+	SetStringMetatable(mt tableapi.TableInterface)
 }
 
 // GoFunc is the duck-type interface for Go functions callable from the VM.

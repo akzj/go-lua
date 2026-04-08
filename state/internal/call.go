@@ -321,6 +321,10 @@ func (L *LuaState) getOrCreateExecutor() vm.VMFrameManager {
 		L.executor = vm.NewVMFrameManager()
 		// Set the global environment table for global variable access
 		L.executor.SetGlobalEnv(L.global.Registry())
+		// Set string metatable for string:method() syntax
+		if L.stringMetatable != nil {
+			L.executor.SetStringMetatable(L.stringMetatable)
+		}
 	}
 	// Always sync stack to executor to ensure latest state
 	L.executor.SetStack(L.stack)

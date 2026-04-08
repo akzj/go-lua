@@ -100,6 +100,9 @@ type LuaState struct {
 	// Coroutine state management
 	parent   *LuaState       // Parent LuaState that called Resume (for yield transfer)
 	savedPC  int            // Saved program counter for resume after yield
+
+	// String metatable: {__index = string_lib_table}
+	stringMetatable tableapi.TableInterface
 }
 
 // NewLuaState creates a new Lua state.
@@ -1735,6 +1738,12 @@ func (L *LuaState) openBaseLib() {
 	// Register string library functions
 	if stringMod != nil {
 		registerStringLib(stringMod)
+		// Create string metatable: {__index = string_lib_table}
+		// This enables "hello":sub(1,3) syntax
+		strMT := tableapi.NewTable(nil)
+		indexKey := types.NewTValueString("__index")
+		strMT.Set(indexKey, &tableWrapper{tbl: stringMod})
+		L.stringMetatable = strMT
 	}
 
 	// Register math library functions
