@@ -622,6 +622,22 @@ func (ti *TableImpl) Set(key, value typesapi.TValue) {
 		// Delete key
 		if key.IsInteger() {
 			ti.SetInt(key.GetInteger(), NewTValueNil())
+		} else {
+			// Delete from hash part: find the node and set its value to nil
+			mp := mainposition(ti.tbl, key)
+			if mp != nil {
+				for {
+					if equalkey(key, mp) {
+						mp.Val = TValue{Tt: uint8(typesapi.LUA_VNIL)}
+						return
+					}
+					if gnext(mp) == 0 {
+						break
+					}
+					idx := nodeIndex(ti.tbl, mp) + gnext(mp)
+					mp = gnode(ti.tbl, idx)
+				}
+			}
 		}
 		return
 	}

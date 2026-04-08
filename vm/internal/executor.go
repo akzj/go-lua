@@ -330,10 +330,10 @@ func (e *Executor) SetGlobalEnv(env tableapi.TableInterface) {
 // SetGlobalEnvUpval initializes an UpVal to point to the global environment table.
 // Used to set up the main frame's _ENV upvalue.
 func (e *Executor) SetGlobalEnvUpval(uv *UpVal) {
-	if e.globalEnvPtr != nil {
+	if e.globalEnv != nil {
 		uv.Value = TValue{
-			Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
-			Tt:    uint8(types.LUA_VLIGHTUSERDATA),
+			Value: Value{Variant: types.ValueGC, Data_: e.globalEnv},
+			Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
 		}
 	}
 }
@@ -425,6 +425,12 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
 			e.copyValue(e.RA(a), frame.upvals[b].Get())
+		} else if b == 0 && e.globalEnv != nil {
+			// Upval 0 is _ENV — fall back to globalEnv when frame has no upvals
+			ra := e.RA(a)
+			ra.Value.Variant = types.ValueGC
+			ra.Value.Data_ = e.globalEnv
+			ra.Tt = uint8(types.Ctb(int(types.LUA_VTABLE)))
 		} else {
 			e.setNil(e.RA(a))
 		}
@@ -434,6 +440,14 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
 			e.copyValue(frame.upvals[b].Get(), e.RA(vmapi.GetArgA(inst)))
+		} else if b == 0 {
+			// SETUPVAL on _ENV (upval 0) — update the global environment reference
+			ra := e.RA(vmapi.GetArgA(inst))
+			if ra.IsTable() {
+				if tbl := e.getTable(ra); tbl != nil {
+					e.globalEnv = tbl
+				}
+			}
 		}
 
 	case opcodes.OP_GETTABUP:
@@ -451,10 +465,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			e.finishGet(e.RA(a), frame.upvals[b].Get(), e.k(int(c)))
 		} else if b == 0 {
 			// b==0 means upval[0]/_ENV. c is raw 0-based constant index.
-			if e.globalEnvPtr != nil {
+			if e.globalEnv != nil {
 				globalTValue := &TValue{
-					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
-					Tt:    uint8(types.LUA_VLIGHTUSERDATA),
+					Value: Value{Variant: types.ValueGC, Data_: e.globalEnv},
+					Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
 				}
 				e.finishGet(e.RA(a), globalTValue, e.k(int(c)))
 			} else {
@@ -965,12 +979,12 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 					// Copy from parent's upvalue (chained capture)
 					if frame.upvals != nil && int(desc.Idx) < len(frame.upvals) {
 						newClosure.upvals[i] = frame.upvals[desc.Idx]
-					} else if desc.Name == "_ENV" && e.globalEnvPtr != nil {
-						// Main frame has no upvals array but child needs _ENV — use globalEnvPtr
+					} else if desc.Name == "_ENV" && e.globalEnv != nil {
+						// Main frame has no upvals array but child needs _ENV — use globalEnv as proper table
 						envUpval := &UpVal{}
-						envUpval.Value.Tt = uint8(types.LUA_VLIGHTUSERDATA)
-						envUpval.Value.Value.Variant = types.ValuePointer
-						envUpval.Value.Value.Data_ = unsafe.Pointer(e.globalEnvPtr)
+						envUpval.Value.Tt = uint8(types.Ctb(int(types.LUA_VTABLE)))
+						envUpval.Value.Value.Variant = types.ValueGC
+						envUpval.Value.Value.Data_ = e.globalEnv
 						newClosure.upvals[i] = envUpval
 					} else {
 						// Fallback: create nil upvalue
@@ -982,12 +996,12 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			// No upvalue descriptors (old-style) — copy all parent upvals for backward compat
 			newClosure.upvals = make([]*UpVal, len(frame.upvals))
 			copy(newClosure.upvals, frame.upvals)
-		} else if e.globalEnvPtr != nil {
-			// Top-level frame with no upvals: create _ENV upval from globalEnvPtr
+		} else if e.globalEnv != nil {
+			// Top-level frame with no upvals: create _ENV upval from globalEnv as proper table
 			envUpval := &UpVal{}
-			envUpval.Value.Tt = uint8(types.LUA_VLIGHTUSERDATA)
-			envUpval.Value.Value.Variant = types.ValuePointer
-			envUpval.Value.Value.Data_ = unsafe.Pointer(e.globalEnvPtr)
+			envUpval.Value.Tt = uint8(types.Ctb(int(types.LUA_VTABLE)))
+			envUpval.Value.Value.Variant = types.ValueGC
+			envUpval.Value.Value.Data_ = e.globalEnv
 			newClosure.upvals = []*UpVal{envUpval}
 		}
 
