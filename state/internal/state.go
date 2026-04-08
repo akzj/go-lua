@@ -1487,6 +1487,7 @@ func (L *LuaState) openBaseLib() {
 	// Pre-populate package.loaded with stub module tables
 	moduleNames := []string{"debug", "string", "math", "table", "io", "os", "coroutine", "utf8"}
 	var tableMod tableapi.TableInterface
+	var stringMod tableapi.TableInterface
 	for _, name := range moduleNames {
 		modTbl := createModuleTable()
 		key := types.NewTValueString(name)
@@ -1496,6 +1497,14 @@ func (L *LuaState) openBaseLib() {
 		if name == "table" {
 			tableMod = modTbl
 		}
+		if name == "string" {
+			stringMod = modTbl
+		}
+	}
+
+	// Register string library functions
+	if stringMod != nil {
+		registerStringLib(stringMod)
 	}
 
 	// Register table.unpack
