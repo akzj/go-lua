@@ -1472,6 +1472,11 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 		// Compile function to destReg
 		fs.expToReg(funcExp, destReg)
 
+		// Ensure allocReg() won't reuse destReg for arg temporaries
+		if int(fs.Proto.maxstacksize) <= destReg {
+			fs.Proto.maxstacksize = uint8(destReg + 1)
+		}
+
 		// Compile arguments starting at destReg+1
 		for i, arg := range args {
 			argReg := destReg + 1 + i
@@ -1599,7 +1604,10 @@ func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumR
 // compileUnaryOp compiles unary operators: -, #, ~, not
 func (fs *FuncState) compileUnaryOp(e unaryOpAccess, destReg int) {
 	op, operand := e.GetUnaryOp()
-	// Compile operand to destReg first
+	// Ensure allocReg() won't reuse destReg for operand
+	if int(fs.Proto.maxstacksize) <= destReg {
+		fs.Proto.maxstacksize = uint8(destReg + 1)
+	}
 	operandReg := fs.allocReg()
 	fs.expToReg(operand, operandReg)
 	
@@ -1623,6 +1631,11 @@ func (fs *FuncState) compileUnaryOp(e unaryOpAccess, destReg int) {
 func (fs *FuncState) compileIndexExpr(idx indexAccess, destReg int) {
 	table := idx.GetTable()
 	key := idx.GetKey()
+
+	// Ensure allocReg() won't reuse destReg or destReg+1 for temporaries
+	if int(fs.Proto.maxstacksize) <= destReg+1 {
+		fs.Proto.maxstacksize = uint8(destReg + 2)
+	}
 
 	// Compile table to a register
 	tableReg := fs.expToReg(table, destReg+1)
