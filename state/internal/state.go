@@ -1516,8 +1516,10 @@ func (L *LuaState) openBaseLib() {
 		registerMathLib(mathMod)
 	}
 
-	// Register table.unpack
+	// Register table library functions
 	if tableMod != nil {
+		registerTableLib(tableMod)
+		// Also register table.unpack (from Phase 2)
 		unpackKey := types.NewTValueString("unpack")
 		tableMod.Set(unpackKey, &goFuncWrapper{fn: bunpack})
 	}
