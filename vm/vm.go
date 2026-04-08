@@ -28,3 +28,8 @@ var (
 	GetArgAx  = api.GetArgAx
 	HasKBit   = api.HasKBit
 )
+
+// ProtectedCallFromGoFunc performs a protected function call from within a GoFunc.
+// Used by pcall/xpcall to call Lua closures with error recovery.
+var ProtectedCallFromGoFunc = internal.ProtectedCallFromGoFunc
+
