@@ -696,13 +696,18 @@ func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
 		return fs.errorf("invalid if statement")
 	}
 
-	// Compile condition
+	// Compile condition — save/restore maxstacksize to reclaim all temps
+	savedCondMax := fs.Proto.maxstacksize
 	condReg := fs.allocReg()
 	fs.expToReg(ifStmt.GetCondition(), condReg)
 
 	// TEST condReg, if false JMP to else (c=0 means jump if false)
 	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
-	fs.freeReg(condReg) // Free condition register after TEST
+	// Track peak then restore — reclaim condReg and all expression temps
+	if fs.Proto.maxstacksize > fs.peakStack {
+		fs.peakStack = fs.Proto.maxstacksize
+	}
+	fs.Proto.maxstacksize = savedCondMax
 	jmpToElseIdx := fs.pc
 	fs.emitSJ(0) // placeholder jump
 
@@ -863,13 +868,19 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 		fs.leaveScope(saved)
 	}
 
-	// Compile condition to a register
+	// Compile condition — save/restore maxstacksize to reclaim all temps
+	savedCondMax := fs.Proto.maxstacksize
 	condReg := fs.allocReg()
 	fs.expToReg(repeatStmt.GetCondition(), condReg)
 
 	// TEST condReg 0: if condReg is truthy → skip next (exit loop)
 	//                 if condReg is falsy → fall through to JMP (loop back)
 	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
+	// Track peak then restore
+	if fs.Proto.maxstacksize > fs.peakStack {
+		fs.peakStack = fs.Proto.maxstacksize
+	}
+	fs.Proto.maxstacksize = savedCondMax
 
 	// JMP back to loopStart (only reached if condition is false)
 	jmpBackIdx := fs.pc
@@ -887,7 +898,6 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 	// Restore
 	fs.pendingBreaks = savedPendingBreaks
 	fs.loopExitIdx = savedLoopExitIdx
-	fs.freeReg(condReg)
 
 	return nil
 }
