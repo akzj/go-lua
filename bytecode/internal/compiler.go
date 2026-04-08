@@ -211,7 +211,7 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		// Get method from table: GETTABLE R(funcReg), R(tableReg), K(methodName)
 		if s, ok := key.(interface{ GetValue() string }); ok {
 			methodIdx := fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
-			fs.emitABC(int(opcodes.OP_GETTABLE), funcReg, tableReg, methodIdx+256)
+			fs.emitABC(int(opcodes.OP_GETFIELD), funcReg, tableReg, methodIdx)
 		} else {
 			keyReg := fs.allocReg()
 			fs.expToReg(key, keyReg)
@@ -1154,7 +1154,7 @@ func (fs *FuncState) compileAssignStat(stat astapi.StatNode) error {
 					keyReg := fs.allocReg()
 					fs.expToReg(idx.GetKey(), keyReg)
 					fs.emitABC(int(opcodes.OP_LOADNIL), NO_REG, 0, 0)
-					fs.emitABC(int(opcodes.OP_SETTABLE), NO_REG, tableReg, keyReg)
+					fs.emitABC(int(opcodes.OP_SETTABLE), tableReg, keyReg, NO_REG)
 					fs.freeReg(keyReg)
 					fs.freeReg(tableReg)
 				}
@@ -1265,10 +1265,17 @@ func (fs *FuncState) assignToVar(v astapi.ExpNode, srcReg int) error {
 		// Table assignment: t[k] = v
 		tableReg := fs.allocReg()
 		fs.expToReg(idx.GetTable(), tableReg)
-		keyReg := fs.allocReg()
-		fs.expToReg(idx.GetKey(), keyReg)
-		fs.emitABC(int(opcodes.OP_SETTABLE), srcReg, tableReg, keyReg)
-		fs.freeReg(keyReg)
+		// Check if key is a string constant — use SETFIELD for efficiency
+		key := idx.GetKey()
+		if strKey, ok := key.(interface{ GetValue() string }); ok {
+			keyIdx := fs.addConstant(&Constant{Type: ConstString, Str: strKey.GetValue()})
+			fs.emitABC(int(opcodes.OP_SETFIELD), tableReg, keyIdx, srcReg)
+		} else {
+			keyReg := fs.allocReg()
+			fs.expToReg(key, keyReg)
+			fs.emitABC(int(opcodes.OP_SETTABLE), tableReg, keyReg, srcReg)
+			fs.freeReg(keyReg)
+		}
 		fs.freeReg(tableReg)
 	}
 	return nil
@@ -1548,7 +1555,7 @@ func (fs *FuncState) compileIndexExpr(idx indexAccess, destReg int) {
 	if s, ok := key.(interface{ GetValue() string }); ok {
 		keyIdx := fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
 		// Use GETTABLE with constant key encoded in B (for short strings)
-		fs.emitABC(int(opcodes.OP_GETTABLE), destReg, tableReg, keyIdx+256)
+		fs.emitABC(int(opcodes.OP_GETFIELD), destReg, tableReg, keyIdx)
 	} else {
 		// Non-constant key: compile key to register
 		fs.expToReg(key, keyReg)
