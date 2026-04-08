@@ -10,6 +10,8 @@
 package state
 
 import (
+	"fmt"
+
 	bc "github.com/akzj/go-lua/bytecode"
 	parse "github.com/akzj/go-lua/parse"
 	"github.com/akzj/go-lua/state/internal"
@@ -35,7 +37,7 @@ func DoString(code string) error {
 // Postconditions:
 // - On success: L may have modified global state
 // - On error: L is unchanged, error contains parse/compile info
-func DoStringOn(L stateapi.LuaStateInterface, code string) error {
+func DoStringOn(L stateapi.LuaStateInterface, code string) (retErr error) {
 	// Step 1: Parse - parse.NewParser().Parse(code) → ast.Chunk
 	parser := parse.NewParser()
 	chunk, err := parser.Parse(code)
@@ -54,6 +56,23 @@ func DoStringOn(L stateapi.LuaStateInterface, code string) error {
 	internal.RegisterDoStringClosure(L, proto)
 
 	// Step 4: Execute - state.Call(0, 0)
+	// Wrap in recover to catch Lua error() panics (LuaError).
+	// Without this, error("msg") at top level crashes the Go process.
+	defer func() {
+		if r := recover(); r != nil {
+			if le, ok := r.(*internal.LuaError); ok {
+				if le.Msg != nil {
+					retErr = fmt.Errorf("%v", le.Msg.GetValue())
+				} else {
+					retErr = fmt.Errorf("error object is nil")
+				}
+			} else {
+				// Re-panic for Go bugs (non-LuaError panics)
+				panic(r)
+			}
+		}
+	}()
+
 	L.Call(0, 0)
 
 	// Check for execution errors (stored on LuaState by VM executor)

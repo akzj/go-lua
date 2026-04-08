@@ -119,3 +119,15 @@ func GetArgAx(inst Instruction) int {
 func HasKBit(inst Instruction) bool {
 	return (inst & (1 << api.POS_k)) != 0
 }
+
+// PcallTag is implemented by GoFunc wrappers that represent pcall.
+// When the VM's executeCall detects this tag, it handles the protected call at the VM level.
+type PcallTag interface {
+	IsPcall() bool
+}
+
+// XpcallTag is implemented by GoFunc wrappers that represent xpcall.
+type XpcallTag interface {
+	IsXpcall() bool
+}
+

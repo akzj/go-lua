@@ -1538,6 +1538,20 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 			fs.emit(int(opcodes.OP_LOADFALSE), destReg, 0, 0)
 		case astapi.EXP_NIL:
 			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+		case astapi.EXP_FUNC:
+			// Anonymous function expression: function() ... end
+			// Cast to FuncDef and compile like local function
+			if funcDef, ok := exp.(astapi.FuncDef); ok {
+				funcProto, err := fs.compileFuncDef(funcDef)
+				if err == nil {
+					funcIdx := fs.addConstant(&Constant{Type: ConstFunction, Func: funcProto})
+					fs.emitABx(int(opcodes.OP_CLOSURE), destReg, funcIdx)
+				} else {
+					fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+				}
+			} else {
+				fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+			}
 		default:
 			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
 		}

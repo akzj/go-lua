@@ -25,6 +25,125 @@ const (
 )
 
 // =============================================================================
+// =============================================================================
+// Protected Call Support (for pcall/xpcall)
+// =============================================================================
+
+// activeExecutor holds the currently running executor for goroutine-local access.
+// This allows GoFuncs (like pcall) to call back into the executor.
+// Safe because each goroutine has its own executor and Run() is not reentrant.
+var activeExecutor *Executor
+
+// ProtectedCallFromGoFunc performs a protected function call from within a GoFunc.
+// It wraps executeCall in a recover to catch LuaError panics.
+// The function to call must already be at stack[base], with args following.
+// Returns (nResults, nil) on success or (0, errorTValue) on error.
+func ProtectedCallFromGoFunc(base, nArgs, nResults int) (int, interface{}) {
+	e := activeExecutor
+	if e == nil {
+		return 0, "no active executor for protected call"
+	}
+	return e.protectedCall(base, nArgs, nResults)
+}
+
+// luaErrorMsg is a duck-type interface to extract Msg from LuaError
+// without importing state/internal (which would create a circular dependency).
+type luaErrorMsg interface {
+	Error() string
+}
+
+// luaErrorWithMsg extracts the Msg field from a LuaError-like panic value.
+// LuaError has: Msg types.TValue. We use reflection-free duck typing.
+type luaErrorWithTValue interface {
+	GetMsg() types.TValue
+}
+
+// protectedCall wraps executeCall in recover to catch LuaError panics.
+func (e *Executor) protectedCall(base, nArgs, nResults int) (retN int, retErr interface{}) {
+	// Save executor state so we can restore on error
+	savedPC := e.pc
+	savedCode := e.code
+	savedKvalues := e.kvalues
+	savedFrameCount := len(e.frames)
+	savedErr := e.err
+	
+	defer func() {
+		if r := recover(); r != nil {
+			// Restore executor state on panic
+			e.pc = savedPC
+			e.code = savedCode
+			e.kvalues = savedKvalues
+			e.err = savedErr
+			// Pop any frames that were pushed during the failed call
+			for len(e.frames) > savedFrameCount {
+				e.frames = e.frames[:len(e.frames)-1]
+			}
+			if savedFrameCount > 0 {
+				e.kvalues = e.frames[savedFrameCount-1].kvalues
+			}
+			
+			// Try to extract the error message from the panic value.
+			// LuaError has Msg field of type types.TValue.
+			// We use struct field extraction via interface.
+			retN = 0
+			retErr = extractPanicError(r)
+		}
+	}()
+	
+	ok := e.executeCall(base, nArgs, nResults)
+	if !ok {
+		if e.err != nil {
+			errMsg := e.err.Error()
+			e.err = savedErr
+			return 0, errMsg
+		}
+		return 0, "call failed"
+	}
+	
+	// For Lua closures, executeCall pushes a frame and returns true.
+	// We need to run the VM loop until that frame completes.
+	// The frame was pushed, so run until frame count returns to savedFrameCount.
+	for len(e.frames) > savedFrameCount {
+		if !e.executeNext() {
+			break
+		}
+	}
+	
+	// Check if the VM loop ended with an error
+	if e.err != nil && e.err != savedErr {
+		errMsg := e.err.Error()
+		e.err = savedErr
+		return 0, errMsg
+	}
+	
+	return nResults, nil
+}
+
+// extractPanicError converts a recover() value into a handlePcall-friendly error.
+// It handles LuaError (from state/internal) via duck-typing to avoid circular imports.
+func extractPanicError(r interface{}) interface{} {
+	// Check if it has a Msg field that is a types.TValue
+	// LuaError struct: { Msg types.TValue }
+	// We can't import LuaError, but we can use reflect or duck-type.
+	// Duck-type approach: check for Error() string method first.
+	
+	// Try to extract Msg via a known interface
+	type msgProvider interface {
+		GetMsg() types.TValue
+	}
+	if mp, ok := r.(msgProvider); ok {
+		return &luaErrorValue{msg: mp.GetMsg()}
+	}
+	
+	// Try reflection to get .Msg field (LuaError has public Msg field)
+	// Use fmt to get the string representation
+	if err, ok := r.(error); ok {
+		return err.Error()
+	}
+	
+	return fmt.Sprintf("%v", r)
+}
+
 // Value/TValue Implementation
 // =============================================================================
 
@@ -206,6 +325,10 @@ func (e *Executor) Run() error {
 	if e.err != nil {
 		return e.err
 	}
+	// Set active executor for goroutine-local access by GoFuncs (pcall etc.)
+	prevExecutor := activeExecutor
+	activeExecutor = e
+	defer func() { activeExecutor = prevExecutor }()
 	for e.executeNext() {
 	}
 	return e.err
@@ -1018,6 +1141,14 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	if fn.IsLClosure() {
 		val := fn.GetValue()
 
+		// Check for pcall/xpcall FIRST — these need special VM-level handling
+		if _, ok := val.(vmapi.PcallTag); ok {
+			return e.handlePcall(base, nArgs, nResults)
+		}
+		if _, ok := val.(vmapi.XpcallTag); ok {
+			return e.handleXpcall(base, nArgs, nResults)
+		}
+
 		// Check for vm/api.GoFunc (from goFuncWrapper via setGlobal).
 		// This uses []types.TValue, not the internal GoFunc type.
 		if apiFunc, ok := val.(vmapi.GoFunc); ok {
@@ -1751,4 +1882,152 @@ func newLightCFunctionValue(fn uintptr) *TValue {
 		Tt:   uint8(types.LUA_VLCF),
 		Value: Value{Variant: types.ValueCFunction, Data_: unsafe.Pointer(fn)},
 	}
+}
+
+// handlePcall implements pcall(f, ...) at the VM level.
+// Stack layout: stack[base]=pcall, stack[base+1]=f, stack[base+2..]=args
+// After: stack[base]=true/false, stack[base+1..]=results/errmsg
+func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
+// nArgs includes pcall itself in the count from OP_CALL's B field
+	// stack[base] = pcall, stack[base+1] = f, stack[base+2..] = extra args
+	// The function to call is at base+1, with (nArgs-2) extra args
+	// (nArgs counts: pcall + f + extra_args, but B field is nArgs+1 for CALL)
+	// Actually: from OP_CALL, B = nArgs which is total args INCLUDING function slot
+	// So nArgs = B = total slots. pcall is at base, f is at base+1.
+	// The inner call has (nArgs - 2) extra args: stack[base+2..base+nArgs-1]
+	
+	fnBase := base + 1
+	innerNArgs := nArgs - 1 // f + its args (subtract pcall slot)
+	if innerNArgs < 1 {
+		// pcall() with no arguments — error
+		dst := e.reg(base)
+		dst.Tt = uint8(types.LUA_VFALSE)
+		dst.Value.Data_ = nil
+		dst2 := e.reg(base + 1)
+		*dst2 = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: "bad argument #1 to 'pcall' (value expected)"})
+		return true
+	}
+
+	// Use protectedCall which wraps executeCall + VM loop in recover
+	_, errVal := e.protectedCall(fnBase, innerNArgs, nResults)
+	
+	if errVal != nil {
+		// Error occurred — write false + error message at base
+		dst := e.reg(base)
+		dst.Tt = uint8(types.LUA_VFALSE)
+		dst.Value.Data_ = nil
+		
+		// Extract error message
+		dst2 := e.reg(base + 1)
+		switch ev := errVal.(type) {
+		case *luaErrorValue:
+			// LuaError from error() — extract the message TValue
+			variant, data := extractVariantAndData(ev.msg)
+			dst2.Tt = uint8(ev.msg.GetTag())
+			dst2.Value.Variant = variant
+			dst2.Value.Data_ = data
+		case string:
+			*dst2 = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: ev})
+		default:
+			*dst2 = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: fmt.Sprintf("%v", ev)})
+		}
+		return true
+	}
+	
+	// Success — results are already at fnBase (the function slot was overwritten by return values)
+	// We need to shift: stack[base] = true, stack[base+1..] = results from fnBase
+	// But results from the inner call are at fnBase-1 = base (the pcall slot) per OP_RETURN logic
+	// Actually, OP_RETURN copies results to calleeBase-1. calleeBase = fnBase+1 (base+2).
+	// So results go to base+1. We need base=true, base+1..=results.
+	// The results are already at base (the pcall slot) from OP_RETURN.
+	// We need to shift everything right by 1 and put true at base.
+	
+	// Actually: protectedCall runs executeCall which for Lua closures pushes a frame
+	// with base=fnBase+1, then runs VM loop. OP_RETURN copies results to calleeBase-1=fnBase.
+	// So after protectedCall, results are at fnBase = base+1. Perfect!
+	// We just need to set base = true.
+	
+	dst := e.reg(base)
+	dst.Tt = uint8(types.LUA_VTRUE)
+	dst.Value.Data_ = nil
+	return true
+}
+
+// handleXpcall implements xpcall(f, handler, ...) at the VM level.
+// Stack layout: stack[base]=xpcall, stack[base+1]=f, stack[base+2]=handler, stack[base+3..]=args
+func (e *Executor) handleXpcall(base, nArgs, nResults int) bool {
+	if nArgs < 3 {
+		dst := e.reg(base)
+		dst.Tt = uint8(types.LUA_VFALSE)
+		dst.Value.Data_ = nil
+		dst2 := e.reg(base + 1)
+		*dst2 = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: "bad argument #1 to 'xpcall' (value expected)"})
+		return true
+	}
+
+	// Save handler before overwriting stack
+	handler := *e.reg(base + 2)
+
+	// Move f and args to be contiguous: f at base+1, args at base+2..
+	// Currently: [xpcall, f, handler, arg1, arg2, ...]
+	// Need:      [xpcall, f, arg1, arg2, ...]
+	// Shift args left over handler slot
+	for i := base + 2; i < base + nArgs - 1; i++ {
+		src := e.reg(i + 1)
+		dst := e.reg(i)
+		*dst = *src
+	}
+
+	fnBase := base + 1
+	innerNArgs := nArgs - 2 // subtract xpcall and handler slots
+
+	_, errVal := e.protectedCall(fnBase, innerNArgs, nResults)
+
+	if errVal != nil {
+		// Error — call handler with error message
+		var errTValue TValue
+		switch ev := errVal.(type) {
+		case *luaErrorValue:
+			variant, data := extractVariantAndData(ev.msg)
+			errTValue.Tt = uint8(ev.msg.GetTag())
+			errTValue.Value.Variant = variant
+			errTValue.Value.Data_ = data
+		case string:
+			errTValue = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: ev})
+		default:
+			errTValue = bcConstantToTValue(&bcapi.Constant{Type: bcapi.ConstString, Str: fmt.Sprintf("%v", ev)})
+		}
+
+		// Try to call handler(errMsg)
+		// Put handler at base+1, errMsg at base+2
+		hDst := e.reg(base + 1)
+		*hDst = handler
+		eDst := e.reg(base + 2)
+		*eDst = errTValue
+
+		_, handlerErr := e.protectedCall(base+1, 2, 1)
+		
+		dst := e.reg(base)
+		dst.Tt = uint8(types.LUA_VFALSE)
+		dst.Value.Data_ = nil
+		
+		if handlerErr != nil {
+			// Handler also failed — use original error
+			dst2 := e.reg(base + 1)
+			*dst2 = errTValue
+		}
+		// else handler result is already at base+1
+		return true
+	}
+
+	// Success
+	dst := e.reg(base)
+	dst.Tt = uint8(types.LUA_VTRUE)
+	dst.Value.Data_ = nil
+	return true
+}
+
+// luaErrorValue wraps a LuaError panic value for type-safe extraction in handlePcall.
+type luaErrorValue struct {
+	msg types.TValue
 }

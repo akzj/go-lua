@@ -47,6 +47,11 @@ func (e *LuaError) Error() string {
 	return "(error object)"
 }
 
+// GetMsg returns the error message TValue. Used by VM executor for duck-typing.
+func (e *LuaError) GetMsg() types.TValue {
+	return e.Msg
+}
+
 // luaError is a helper that panics with a LuaError.
 func luaError(msg types.TValue) {
 	panic(&LuaError{Msg: msg})
@@ -558,6 +563,22 @@ func (w *goFuncWrapper) GetPointer() unsafe.Pointer { return nil }
 
 // unwrapGoFunc returns the underlying GoFunc for VM invocation.
 func (w *goFuncWrapper) unwrapGoFunc() vm.GoFunc { return w.fn }
+
+// pcallFuncWrapper wraps pcall's GoFunc with PcallTag so the VM can detect it.
+type pcallFuncWrapper struct {
+	goFuncWrapper
+}
+
+func (w *pcallFuncWrapper) IsPcall() bool { return true }
+func (w *pcallFuncWrapper) GetValue() interface{} { return w }
+
+// xpcallFuncWrapper wraps xpcall's GoFunc with XpcallTag so the VM can detect it.
+type xpcallFuncWrapper struct {
+	goFuncWrapper
+}
+
+func (w *xpcallFuncWrapper) IsXpcall() bool { return true }
+func (w *xpcallFuncWrapper) GetValue() interface{} { return w }
 
 // setGlobal registers a Go function in the global environment table.
 func (L *LuaState) setGlobal(name string, fn vm.GoFunc) {
@@ -1637,8 +1658,11 @@ func (L *LuaState) openBaseLib() {
 
 	// Phase 2 base functions
 	L.setGlobal("error", berror)
-	L.setGlobal("pcall", bpcall)
-	L.setGlobal("xpcall", bxpcall)
+	// pcall/xpcall use special wrappers so the VM can detect them for protected calls
+	pcallKey := types.NewTValueString("pcall")
+	L.global.Registry().Set(pcallKey, &pcallFuncWrapper{goFuncWrapper{fn: bpcall}})
+	xpcallKey := types.NewTValueString("xpcall")
+	L.global.Registry().Set(xpcallKey, &xpcallFuncWrapper{goFuncWrapper{fn: bxpcall}})
 	L.setGlobal("select", bselect)
 	L.setGlobal("next", bnext)
 	L.setGlobal("ipairs", bipairs)
