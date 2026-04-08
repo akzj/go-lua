@@ -742,18 +742,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// The caller expects results starting at the function slot (calleeBase - 1).
 		calleeBase := e.currentFrame().base
 
-		// DEBUG: trace OP_RETURN
-		fmt.Printf("DEBUG OP_RETURN: a=%d b=%d base=%d calleeBase=%d nRet=%d\n", a, b, base, calleeBase, nRet)
-		for di := 0; di < 6; di++ {
-			r := e.reg(base + di)
-			fmt.Printf("  R[%d] (abs %d): Tt=%d Data=%v\n", di, base+di, r.Tt, r.Value.Data_)
-		}
-
 		// Copy return values to caller's expected position (function slot)
 		for i := 0; i < nRet; i++ {
 			src := e.reg(base + a + i)
 			dst := e.reg(calleeBase - 1 + i)
-			fmt.Printf("  COPY: src=R[%d](abs %d) -> dst=abs %d, srcTt=%d srcData=%v\n", a+i, base+a+i, calleeBase-1+i, src.Tt, src.Value.Data_)
 				*dst = *src
 		}
 
@@ -1151,6 +1143,7 @@ type GoFunc func(stack []TValue, base int) int
 // executeCall handles function calls (LClosure, CClosure, LightCFunction).
 func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	fn := e.reg(base)
+
 		if fn.IsNil() {
 		e.err = fmt.Errorf("attempt to call nil value")
 		return false
@@ -1380,7 +1373,6 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 	// In Lua, we count until we hit a nil or reach the end
 	numArgs := nArgs - 1 // nArgs includes the function itself
 	if numArgs < 1 {
-		fmt.Println()
 		os.Stdout.Sync()
 		return
 	}
@@ -1419,7 +1411,6 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 			fmt.Print("\t")
 		}
 	}
-	fmt.Println()
 		os.Stdout.Sync()
 }
 
