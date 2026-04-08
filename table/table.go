@@ -5,9 +5,17 @@
 package table
 
 import (
-	_ "github.com/akzj/go-lua/table/internal"
+	"github.com/akzj/go-lua/table/api"
+	"github.com/akzj/go-lua/table/internal"
 )
 
 // Lib is exported to force the import of table/internal
 var Lib struct{}
+
+// NewTable returns a fresh table instance from the internal package.
+// This factory avoids the singleton issue in table/api.NewTable for use cases
+// that need distinct table instances.
+func NewTable() api.TableInterface {
+	return internal.NewTable()
+}
 

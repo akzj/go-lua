@@ -469,8 +469,8 @@ func (L *LuaState) absoluteIndex(idx int) int {
 
 func createRegistry(alloc memapi.Allocator) tableapi.TableInterface {
 	// Create a new table for the registry
-	// Use the table factory - returns the default implementation
-	registry := tableapi.NewTable(alloc)
+	// Use the internal package directly to get fresh table instances
+	registry := table.NewTable()
 	return registry
 }
 
@@ -516,6 +516,61 @@ func (L *LuaState) setGlobal(name string, fn vm.GoFunc) {
 	key := types.NewTValueString(name)
 	val := &goFuncWrapper{fn: fn}
 	L.global.Registry().Set(key, val)
+}
+
+// setGlobalValue registers an arbitrary TValue in the global environment table.
+func (L *LuaState) setGlobalValue(name string, val types.TValue) {
+	key := types.NewTValueString(name)
+	L.global.Registry().Set(key, val)
+}
+
+// tableWrapper wraps a tableapi.TableInterface so it can be stored as a types.TValue.
+// Implements types.TValue (all 27 methods).
+// Note: IsCollectable returns false to avoid triggering the GC code path in the VM.
+// Tables are managed by the Go GC, not Lua's GC system.
+type tableWrapper struct {
+	tbl tableapi.TableInterface
+}
+
+func (w *tableWrapper) IsNil() bool             { return w.tbl == nil }
+func (w *tableWrapper) IsBoolean() bool          { return false }
+func (w *tableWrapper) IsNumber() bool           { return false }
+func (w *tableWrapper) IsInteger() bool          { return false }
+func (w *tableWrapper) IsFloat() bool            { return false }
+func (w *tableWrapper) IsString() bool           { return false }
+func (w *tableWrapper) IsTable() bool            { return w.tbl != nil }
+func (w *tableWrapper) IsFunction() bool         { return false }
+func (w *tableWrapper) IsThread() bool            { return false }
+func (w *tableWrapper) IsUserData() bool         { return false }
+func (w *tableWrapper) IsLightUserData() bool    { return false }
+func (w *tableWrapper) IsCollectable() bool     { return false } // Key fix: not collectable, avoids GC code path
+func (w *tableWrapper) IsTrue() bool             { return true }
+func (w *tableWrapper) IsFalse() bool            { return false }
+func (w *tableWrapper) IsLClosure() bool        { return false }
+func (w *tableWrapper) IsCClosure() bool         { return false }
+func (w *tableWrapper) IsLightCFunction() bool   { return false }
+func (w *tableWrapper) IsClosure() bool          { return false }
+func (w *tableWrapper) IsProto() bool            { return false }
+func (w *tableWrapper) IsUpval() bool            { return false }
+func (w *tableWrapper) IsShortString() bool      { return false }
+func (w *tableWrapper) IsLongString() bool       { return false }
+func (w *tableWrapper) IsEmpty() bool            { return w.tbl == nil }
+func (w *tableWrapper) GetTag() int              { return int(types.Ctb(int(types.LUA_VTABLE))) }
+func (w *tableWrapper) GetBaseType() int         { return int(types.LUA_TTABLE) }
+func (w *tableWrapper) GetValue() interface{}    { return w.tbl }
+func (w *tableWrapper) GetGC() *types.GCObject   { return nil }
+func (w *tableWrapper) GetInteger() types.LuaInteger { return 0 }
+func (w *tableWrapper) GetFloat() types.LuaNumber   { return 0 }
+func (w *tableWrapper) GetPointer() unsafe.Pointer { return nil }
+
+// newTable creates a new empty table wrapped as a types.TValue.
+func newTableTValue() types.TValue {
+	return &tableWrapper{tbl: table.NewTable()}
+}
+
+// createModuleTable is a helper to create a fresh module table.
+func createModuleTable() tableapi.TableInterface {
+	return table.NewTable()
 }
 
 // =============================================================================
@@ -683,11 +738,75 @@ func btonumber(stack []types.TValue, base int) int {
 	return 1
 }
 
+// makeRequire creates a require GoFunc that captures the registry.
+// This allows require to look up modules in package.loaded.
+func makeRequire(registry tableapi.TableInterface) vm.GoFunc {
+	return func(stack []types.TValue, base int) int {
+		if base+1 >= len(stack) {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+
+		modNameVal := stack[base+1]
+		if !modNameVal.IsString() {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+
+		modName := modNameVal.GetValue().(string)
+
+		// Look up the module in the global environment (registry)
+		key := types.NewTValueString(modName)
+		result := registry.Get(key)
+		if result != nil && !result.IsNil() {
+			stack[base] = result
+			return 1
+		}
+
+		// Module not found - return nil (graceful degradation, not an error)
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+}
+
 // openBaseLib registers base library functions in the global environment.
 func (L *LuaState) openBaseLib() {
+	// Register base functions
 	L.setGlobal("print", bprint)
 	L.setGlobal("type", btype)
 	L.setGlobal("assert", bassert)
 	L.setGlobal("tostring", btostring)
 	L.setGlobal("tonumber", btonumber)
+
+	// Create package table with loaded and preload sub-tables
+	// Use createModuleTable() to get fresh table instances
+	packageTbl := createModuleTable()
+	loadedTbl := createModuleTable()
+	preloadTbl := createModuleTable()
+
+	// Pre-populate package.loaded with stub module tables
+	moduleNames := []string{"debug", "string", "math", "table", "io", "os", "coroutine", "utf8"}
+	for _, name := range moduleNames {
+		modTbl := createModuleTable()
+		key := types.NewTValueString(name)
+		loadedTbl.Set(key, &tableWrapper{tbl: modTbl})
+		// Also make each module accessible as a global
+		L.setGlobalValue(name, &tableWrapper{tbl: modTbl})
+	}
+
+	// Set package.loaded and package.preload in package table
+	loadedKey := types.NewTValueString("loaded")
+	preloadKey := types.NewTValueString("preload")
+	packageTbl.Set(loadedKey, &tableWrapper{tbl: loadedTbl})
+	packageTbl.Set(preloadKey, &tableWrapper{tbl: preloadTbl})
+
+	// Set package itself in package.loaded
+	selfKey := types.NewTValueString("package")
+	loadedTbl.Set(selfKey, &tableWrapper{tbl: packageTbl})
+
+	// Register package as a global
+	L.setGlobalValue("package", &tableWrapper{tbl: packageTbl})
+
+	// Register require function (closure captures registry)
+	L.setGlobal("require", makeRequire(L.global.Registry()))
 }
