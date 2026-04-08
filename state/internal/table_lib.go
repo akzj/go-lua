@@ -30,8 +30,13 @@ func checkTable(stack []types.TValue, base int, argn int, fname string) tableapi
 	if tw, ok := tv.(*tableWrapper); ok {
 		return tw.tbl
 	}
-	// Tables created by the VM via OP_NEWTABLE use internal types.
-	// We don't have a direct path to convert those here.
+	// VM-internal TValues store tables as *table.TableImpl in GetValue().
+	// Try extracting via the tableapi.TableInterface interface.
+	if val := tv.GetValue(); val != nil {
+		if tbl, ok := val.(tableapi.TableInterface); ok {
+			return tbl
+		}
+	}
 	return nil
 }
 

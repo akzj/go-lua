@@ -1117,8 +1117,10 @@ func bipairs(stack []types.TValue, base int) int {
 	// Return: iterator function, table, 0
 	iterFn := makeIpairsIter(tbl)
 	stack[base] = &goFuncWrapper{fn: iterFn}
-	stack[base+1] = stack[base+1] // table (invariant state) - already there
-	stack[base+2] = types.NewTValueInteger(0) // initial control variable
+	// stack[base+1] already has the table (invariant state)
+	if base+2 < len(stack) {
+		stack[base+2] = types.NewTValueInteger(0) // initial control variable
+	}
 	return 3
 }
 
