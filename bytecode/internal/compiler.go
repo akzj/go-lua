@@ -152,6 +152,32 @@ func (fs *FuncState) compileStat(stat astapi.StatNode) error {
 	}
 }
 
+
+// patchLastCallForMultiReturn checks if the last argument in args is a function call.
+// If so, it patches the last emitted CALL instruction to have C=0 (variable results)
+// so that all return values are passed to the outer call.
+// Returns true if the last arg was a FuncCall (caller should emit B=0 on outer CALL).
+func (fs *FuncState) patchLastCallForMultiReturn(args []astapi.ExpNode) bool {
+	if len(args) == 0 {
+		return false
+	}
+	lastArg := args[len(args)-1]
+	if _, ok := lastArg.(astapi.FuncCall); !ok {
+		return false
+	}
+	// Find the last CALL instruction and patch its C field to 0
+	for i := len(fs.Proto.code) - 1; i >= 0; i-- {
+		op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
+		if op == opcodes.OP_CALL || op == opcodes.OP_TAILCALL {
+			// Patch C to 0: clear bits [24:31] (C field)
+			fs.Proto.code[i] &= 0x00FFFFFF // clear C
+			// C=0 means variable results
+			break
+		}
+	}
+	return true
+}
+
 // compileCallStat compiles a function call statement.
 func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 	var call astapi.FuncCall
@@ -205,8 +231,12 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		} else {
 			fs.Proto.maxstacksize = uint8(funcReg + 2)
 		}
-		// Emit CALL
-		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
+		// Emit CALL — if last arg is a FuncCall, use B=0 for multi-return
+		bArg := len(args)+1
+		if fs.patchLastCallForMultiReturn(args) {
+			bArg = 0
+		}
+		fs.emitABC(int(opcodes.OP_CALL), funcReg, bArg, 1)
 		fs.freeReg(funcReg)
 		return nil
 	}
@@ -251,7 +281,12 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		
 		// Emit CALL R(funcReg), nArgs+1, 1
 		// +1 because: function + args (no self)
-		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
+		// If last arg is a FuncCall, use B=0 for multi-return propagation
+		bArg := len(args)+1
+		if fs.patchLastCallForMultiReturn(args) {
+			bArg = 0
+		}
+		fs.emitABC(int(opcodes.OP_CALL), funcReg, bArg, 1)
 		
 	} else if name, ok := funcExp.(nameAccess); ok {
 		funcName := name.GetName()
@@ -295,7 +330,12 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		
 		// Emit CALL R(funcReg), nArgs+1, 1
 		// B includes the function itself: if 1 arg, B=2 (function + 1 arg)
-		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
+		// If last arg is a FuncCall, use B=0 for multi-return propagation
+		bArg := len(args)+1
+		if fs.patchLastCallForMultiReturn(args) {
+			bArg = 0
+		}
+		fs.emitABC(int(opcodes.OP_CALL), funcReg, bArg, 1)
 		
 	} else {
 		// Fallback: treat as any expression (handles binopExp, etc.)
@@ -322,8 +362,12 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 			}
 		}
 		
-		// Emit CALL
-		fs.emitABC(int(opcodes.OP_CALL), funcReg, len(args)+1, 1)
+		// Emit CALL — if last arg is a FuncCall, use B=0 for multi-return
+		bArg := len(args)+1
+		if fs.patchLastCallForMultiReturn(args) {
+			bArg = 0
+		}
+		fs.emitABC(int(opcodes.OP_CALL), funcReg, bArg, 1)
 		fs.freeReg(funcReg)
 	}
 	
@@ -1681,7 +1725,12 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 
 		// Emit CALL R(destReg), nArgs+1, 2 (1 result into destReg)
 		// C=2 means 1 result (C-1), since expToReg is called when the value is needed
-		fs.emitABC(int(opcodes.OP_CALL), destReg, nArgs+1, 2)
+		// If last arg is a FuncCall, use B=0 for multi-return propagation
+		bArg := nArgs+1
+		if fs.patchLastCallForMultiReturn(args) {
+			bArg = 0
+		}
+		fs.emitABC(int(opcodes.OP_CALL), destReg, bArg, 2)
 	case interface{ NumFields() int; NumRecords() int }:
 		// Table constructor — MUST be before Kind() since TableConstructorImpl has Kind()
 		fs.compileTableConstructor(e, destReg)

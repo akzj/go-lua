@@ -284,6 +284,8 @@ type Executor struct {
 	globalEnv tableapi.TableInterface // Global environment table for variable lookups
 	globalEnvPtr *globalEnvWrapper    // Pointer wrapper for lightuserdata extraction
 	stringMetatable tableapi.TableInterface // Shared metatable for all strings (__index = string lib)
+	lastCallNRet int                  // Number of results from last GoFunc call (for multi-return propagation)
+	lastCallBase int                  // Base register of last call (for B=0 arg count computation)
 }
 
 type Frame struct {
@@ -738,10 +740,18 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
-		// b = number of arguments (0 means variable args)
-		// If b == 0, args are until a nil or end of code
-		// Otherwise b is the actual count
+		// b = number of arguments: b-1 fixed args (b includes func slot)
+		// b == 0 means variable args — use lastCallNRet to determine count
 		nArgs := b
+		if b == 0 && e.lastCallNRet > 0 {
+			// Variable args: B=0 means "use top".
+			// The previous call placed lastCallNRet results starting at lastCallBase.
+			// This call's function is at frameBase+a.
+			// nArgs = (lastCallBase - (frameBase+a)) + lastCallNRet
+			// This accounts for any fixed args between the function and the multi-return.
+			outerBase := frameBase(e) + a
+			nArgs = (e.lastCallBase - outerBase) + e.lastCallNRet
+		}
 		return e.executeCall(frameBase(e)+a, nArgs, c)
 
 	case opcodes.OP_RETURN:
@@ -760,8 +770,23 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		nRet := 0
 		if b >= 2 {
 			nRet = b - 1
+		} else if b == 0 {
+			// Multi-return: return all values from R[A] to top
+			// Use lastCallNRet as a hint, or count non-nil values
+			nRet = e.lastCallNRet
+			if nRet == 0 {
+				// Fallback: count non-nil values from R[A]
+				for i := 0; i < 256; i++ {
+					r := e.reg(base + a + i)
+					if r.Tt == uint8(types.LUA_TNIL) || r.Tt == 0 {
+						break
+					}
+					nRet++
+				}
+			}
 		}
-		// b==0 (multi-return) and b==1 (no returns) both handled: nRet=0
+		// b==1 means no return values: nRet=0
+		e.lastCallNRet = nRet
 
 		// The caller's frame is below the current one.
 		// The caller expects results starting at the function slot (calleeBase - 1).
@@ -1167,6 +1192,7 @@ type GoFunc func(stack []TValue, base int) int
 
 // executeCall handles function calls (LClosure, CClosure, LightCFunction).
 func (e *Executor) executeCall(base, nArgs, nResults int) bool {
+	e.lastCallBase = base
 	fn := e.reg(base)
 
 		if fn.IsNil() {
@@ -1198,7 +1224,8 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// Dereferencing: *(*interface{})(rawPtr) gives us fn_variable.
 		gf := *(*interface{})(rawPtr)
 		if f, ok := gf.(GoFunc); ok {
-			f(e.stack, base)
+			nRet := f(e.stack, base)
+			e.lastCallNRet = nRet
 			return true
 		}
 		e.err = fmt.Errorf("attempt to call non-Go-function light C function")
@@ -1210,7 +1237,8 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// CClosure stores its function value in a wrapper accessed via fn.GetValue()
 		// Try GoFunc duck-type from the stored value
 		if gf, ok := fn.GetValue().(GoFunc); ok {
-			gf(e.stack, base)
+			nRet := gf(e.stack, base)
+			e.lastCallNRet = nRet
 			return true
 		}
 		e.err = fmt.Errorf("attempt to call non-Go-function CClosure")
@@ -1244,6 +1272,7 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 				args[gfBase+i] = e.reg(base + i)
 			}
 			nRet := apiFunc(args, gfBase)
+			e.lastCallNRet = nRet
 			// Copy results back: GoFunc writes to args[gfBase..gfBase+nRet-1]
 			for i := 0; i < nRet; i++ {
 				result := args[gfBase+i]
@@ -1272,7 +1301,8 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 
 		// Check for internal GoFunc (direct GoFunc storage)
 		if gf, ok := val.(GoFunc); ok {
-			gf(e.stack, base)
+			nRet := gf(e.stack, base)
+			e.lastCallNRet = nRet
 			return true
 		}
 
@@ -1289,6 +1319,7 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 				args[gfBase+i] = e.reg(base + i)
 			}
 			nRet := apiFunc(args, gfBase)
+			e.lastCallNRet = nRet
 			for i := 0; i < nRet; i++ {
 				result := args[gfBase+i]
 				dst := e.reg(base + i)
