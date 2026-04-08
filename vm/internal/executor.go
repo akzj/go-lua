@@ -224,31 +224,31 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_MOVE:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
-		dst := e.reg(a)
+		dst := e.RA(a)
 		src := e.reg(frameBase(e) + b)
 		e.copyValue(dst, src)
 
 	case opcodes.OP_LOADI:
 		a := vmapi.GetArgA(inst)
 		bx := vmapi.GetsBx(inst)
-		e.setInteger(e.reg(a), types.LuaInteger(bx))
+		e.setInteger(e.RA(a), types.LuaInteger(bx))
 
 	case opcodes.OP_LOADF:
 		a := vmapi.GetArgA(inst)
 		bx := vmapi.GetsBx(inst)
-		e.setFloat(e.reg(a), types.LuaNumber(bx))
+		e.setFloat(e.RA(a), types.LuaNumber(bx))
 
 	case opcodes.OP_LOADK:
 		a := vmapi.GetArgA(inst)
 		bx := vmapi.GetArgBx(inst)
-		e.setReg(a, e.k(bx))
+		e.setReg(frameBase(e)+a, e.k(bx))
 
 	case opcodes.OP_LOADKX:
 		a := vmapi.GetArgA(inst)
 		e.pc++
 		if e.pc < len(e.code) {
 			ax := vmapi.GetArgAx(e.code[e.pc-1])
-			e.copyValue(e.reg(a), e.k(ax))
+			e.copyValue(e.RA(a), e.k(ax))
 		}
 
 	case opcodes.OP_LOADFALSE:
@@ -265,7 +265,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		for i := 0; i <= b; i++ {
-			e.setNil(e.reg(a + i))
+			e.setNil(e.reg(frameBase(e) + a + i))
 		}
 
 	case opcodes.OP_GETUPVAL:
@@ -273,9 +273,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
-			e.copyValue(e.reg(a), &frame.upvals[b].Value)
+			e.copyValue(e.RA(a), &frame.upvals[b].Value)
 		} else {
-			e.setNil(e.reg(a))
+			e.setNil(e.RA(a))
 		}
 
 	case opcodes.OP_SETUPVAL:
@@ -296,7 +296,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		
 		if hasUpvals {
 			// Normal path: get upval from frame
-			e.finishGet(e.reg(a), &frame.upvals[b].Value, e.rk(c))
+			e.finishGet(e.RA(a), &frame.upvals[b].Value, e.rk(c))
 		} else if b == 0 && c >= 256 {
 			// No upvals (b==0 means upval[0]/_ENV) - look up in globalEnv.
 			// c >= 256 means it's a string constant, c - 256 is the constant index.
@@ -305,32 +305,32 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
 					Tt:    uint8(types.LUA_VLIGHTUSERDATA),
 				}
-				e.finishGet(e.reg(a), globalTValue, e.rk(c))
+				e.finishGet(e.RA(a), globalTValue, e.rk(c))
 			} else {
-				e.setNil(e.reg(a))
+				e.setNil(e.RA(a))
 			}
 		} else {
-			e.setNil(e.reg(a))
+			e.setNil(e.RA(a))
 		}
 
 	case opcodes.OP_GETTABLE:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
-		e.finishGet(e.reg(a), e.reg(frameBase(e)+b), e.rk(c))
+		e.finishGet(e.RA(a), e.reg(frameBase(e)+b), e.rk(c))
 		_ = a
 
 	case opcodes.OP_GETI:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
-		e.finishGet(e.reg(a), e.reg(frameBase(e)+b), newIntValue(types.LuaInteger(c)))
+		e.finishGet(e.RA(a), e.reg(frameBase(e)+b), newIntValue(types.LuaInteger(c)))
 
 	case opcodes.OP_GETFIELD:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
-		e.finishGet(e.reg(a), e.reg(frameBase(e)+b), e.k(c))
+		e.finishGet(e.RA(a), e.reg(frameBase(e)+b), e.k(c))
 
 	case opcodes.OP_SETTABUP:
 		a := vmapi.GetArgA(inst)
@@ -369,14 +369,14 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 
 	case opcodes.OP_NEWTABLE:
 		a := vmapi.GetArgA(inst)
-		e.setTable(e.reg(a), tableapi.NewTable(nil))
+		e.setTable(e.RA(a), tableapi.NewTable(nil))
 
 	case opcodes.OP_SELF:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
-		e.copyValue(e.reg(a+1), e.reg(frameBase(e)+b))
-		e.finishGet(e.reg(a), e.reg(frameBase(e)+b), e.k(c))
+		e.copyValue(e.reg(frameBase(e) + a+1), e.reg(frameBase(e)+b))
+		e.finishGet(e.RA(a), e.reg(frameBase(e)+b), e.k(c))
 
 	// Arithmetic opcodes
 	case opcodes.OP_ADDI:
@@ -464,7 +464,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_NOT:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
-		e.setBoolean(e.reg(a), !e.reg(frameBase(e)+b).IsTrue())
+		e.setBoolean(e.RA(a), !e.reg(frameBase(e)+b).IsTrue())
 
 	case opcodes.OP_LEN:
 		a := vmapi.GetArgA(inst)
@@ -472,7 +472,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		rb := e.reg(frameBase(e) + b)
 		if rb.IsTable() {
 			if tbl := e.getTable(rb); tbl != nil {
-				e.setInteger(e.reg(a), types.LuaInteger(tbl.Len()))
+				e.setInteger(e.RA(a), types.LuaInteger(tbl.Len()))
 			}
 		}
 
@@ -544,7 +544,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if isFalse != vmapi.HasKBit(inst) {
 			e.pc++
 		} else {
-			e.copyValue(e.reg(a), rb)
+			e.copyValue(e.RA(a), rb)
 		}
 
 	// Control flow opcodes
@@ -669,9 +669,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_FORLOOP:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetsBx(inst)
-		ra := e.reg(a)
-		ra1 := e.reg(a + 1)
-		ra2 := e.reg(a + 2)
+		ra := e.RA(a)
+		ra1 := e.reg(frameBase(e) + a + 1)
+		ra2 := e.reg(frameBase(e) + a + 2)
 		if ra.IsInteger() && ra1.IsInteger() {
 			step := getInt(ra1)
 			idx := getInt(ra2)
@@ -692,7 +692,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_TFORLOOP:
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetsBx(inst)
-		if !e.reg(a + 3).IsNil() {
+		if !e.reg(frameBase(e) + a + 3).IsNil() {
 			e.pc -= b
 		}
 
@@ -701,10 +701,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		vb := int(inst>>opcodes.POS_vB) & ((1 << opcodes.SIZE_vB) - 1)
 		vc := int(inst>>opcodes.POS_vC) & ((1 << opcodes.SIZE_vC) - 1)
-		tbl := e.getTable(e.reg(a))
+		tbl := e.getTable(e.RA(a))
 		if tbl != nil && vb > 0 {
 			for i := 1; i <= vb; i++ {
-				tbl.SetInt(types.LuaInteger(int(vc)+i), e.reg(a+i))
+				tbl.SetInt(types.LuaInteger(int(vc)+i), e.reg(frameBase(e) + a+i))
 			}
 		}
 
@@ -745,7 +745,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		c := vmapi.GetArgC(inst)
 		for i := 0; i < c-1; i++ {
-			e.setNil(e.reg(a + i))
+			e.setNil(e.reg(frameBase(e) + a + i))
 		}
 
 	case opcodes.OP_GETVARG:
@@ -756,11 +756,11 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		result := ""
 		for i := 0; i < b; i++ {
-			if r := e.reg(a + i); r.IsString() {
+			if r := e.reg(frameBase(e) + a + i); r.IsString() {
 				result += e.toString(r)
 			}
 		}
-		e.setString(e.reg(a), result)
+		e.setString(e.RA(a), result)
 
 	case opcodes.OP_CLOSE, opcodes.OP_TBC:
 		// No-op for now
@@ -770,7 +770,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 
 	case opcodes.OP_ERRNNIL:
 		a := vmapi.GetArgA(inst)
-		if !e.reg(a).IsNil() {
+		if !e.RA(a).IsNil() {
 			e.err = fmt.Errorf("value is not nil")
 			return false
 		}
@@ -808,6 +808,12 @@ func (e *Executor) reg(pos int) *TValue {
 		e.stack = append(e.stack, TValue{})
 	}
 	return &e.stack[pos]
+}
+
+// RA returns a pointer to register A relative to the current frame base.
+// Use this for ALL instruction register operands in the main dispatch loop.
+func (e *Executor) RA(a int) *TValue {
+	return e.reg(frameBase(e) + a)
 }
 
 func (e *Executor) setReg(pos int, val *TValue) {
@@ -872,8 +878,7 @@ type GoFunc func(stack []TValue, base int) int
 // executeCall handles function calls (LClosure, CClosure, LightCFunction).
 func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	fn := e.reg(base)
-
-	if fn.IsNil() {
+		if fn.IsNil() {
 		e.err = fmt.Errorf("attempt to call nil value")
 		return false
 	}
