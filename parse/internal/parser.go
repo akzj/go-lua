@@ -3,7 +3,9 @@ package internal
 
 import (
 	"fmt"
+	"math"
 	"strconv"
+	"strings"
 
 	astapi "github.com/akzj/go-lua/ast/api"
 	lexapi "github.com/akzj/go-lua/lex/api"
@@ -2369,25 +2371,32 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 	case lexapi.TOKEN_INTEGER:
 		tok := p.current()
 		p.next()
-		val, err := strconv.ParseInt(tok.Value, 0, 64)
-		if err != nil {
-			// Try parsing as unsigned (e.g., 0xFFFFFFFFFFFFFFFF)
-			uval, uerr := strconv.ParseUint(tok.Value, 0, 64)
-			if uerr != nil {
-				val = 0
-			} else {
-				val = int64(uval)
+		s := tok.Value
+		var ival int64
+		if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+			// Hex integer: parse with base 16 (skip 0x prefix)
+			v, err := strconv.ParseInt(s[2:], 16, 64)
+			if err != nil {
+				// Try unsigned (e.g., 0xFFFFFFFFFFFFFFFF)
+				uv, uerr := strconv.ParseUint(s[2:], 16, 64)
+				if uerr == nil {
+					v = int64(uv)
+				}
+			}
+			ival = v
+		} else {
+			// Decimal integer: base 10 (Lua has no octal literals)
+			v, err := strconv.ParseInt(s, 10, 64)
+			if err == nil {
+				ival = v
 			}
 		}
-		expr = &integerExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}
+		expr = &integerExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: ival}
 
 	case lexapi.TOKEN_NUMBER:
 		tok := p.current()
 		p.next()
-		val, err := strconv.ParseFloat(tok.Value, 64)
-		if err != nil {
-			val = 0
-		}
+		val := parseFloatLiteral(tok.Value)
 		expr = &floatExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}
 
 	case lexapi.TOKEN_STRING:
@@ -2849,4 +2858,76 @@ func (p *parser) consume(t lexapi.TokenType) bool {
 		return true
 	}
 	return false
+}
+
+// parseFloatLiteral parses a Lua float literal, including hex floats (0xF0.0, 0x1p10).
+func parseFloatLiteral(s string) float64 {
+	if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		return parseHexFloat(s[2:])
+	}
+	val, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return val
+}
+
+// parseHexFloat parses a hex float literal (after the 0x prefix).
+// Supports: F0.0, F0.ABp2, .FF, FF, FFp-2
+func parseHexFloat(s string) float64 {
+	s = strings.ToLower(s)
+	var intPart, fracPart string
+	var expPart string
+
+	// Split on 'p' for exponent
+	if idx := strings.IndexByte(s, 'p'); idx >= 0 {
+		expPart = s[idx+1:]
+		s = s[:idx]
+	}
+
+	// Split on '.' for integer and fractional parts
+	if idx := strings.IndexByte(s, '.'); idx >= 0 {
+		intPart = s[:idx]
+		fracPart = s[idx+1:]
+	} else {
+		intPart = s
+	}
+
+	// Parse integer part
+	var result float64
+	if intPart != "" {
+		iv, err := strconv.ParseUint(intPart, 16, 64)
+		if err != nil {
+			return 0
+		}
+		result = float64(iv)
+	}
+
+	// Parse fractional part
+	if fracPart != "" {
+		frac := 0.0
+		for i, c := range fracPart {
+			var digit float64
+			if c >= '0' && c <= '9' {
+				digit = float64(c - '0')
+			} else if c >= 'a' && c <= 'f' {
+				digit = float64(c - 'a' + 10)
+			} else {
+				break
+			}
+			frac += digit / math.Pow(16, float64(i+1))
+		}
+		result += frac
+	}
+
+	// Apply binary exponent (p/P)
+	if expPart != "" {
+		exp, err := strconv.ParseInt(expPart, 10, 64)
+		if err != nil {
+			return result
+		}
+		result *= math.Pow(2, float64(exp))
+	}
+
+	return result
 }
