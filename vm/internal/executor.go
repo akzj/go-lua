@@ -85,7 +85,7 @@ func (t *TValue) IsThread() bool            { return int(t.Tt) == types.Ctb(int(
 func (t *TValue) IsLightUserData() bool      { return int(t.Tt) == types.LUA_VLIGHTUSERDATA }
 func (t *TValue) IsUserData() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VUSERDATA)) }
 func (t *TValue) IsCollectable() bool       { return int(t.Tt)&types.BIT_ISCOLLECTABLE != 0 }
-func (t *TValue) IsTrue() bool              { return int(t.Tt) == types.LUA_VTRUE }
+func (t *TValue) IsTrue() bool              { return !t.IsNil() && !t.IsFalse() }
 func (t *TValue) IsFalse() bool             { return int(t.Tt) == types.LUA_VFALSE }
 func (t *TValue) IsLClosure() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VLCL)) }
 func (t *TValue) IsCClosure() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VCCL)) }
@@ -119,15 +119,16 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 	if v.IsNil() {
 		return types.ValueGC, nil
 	}
-	// Check IsFunction BEFORE IsTrue (goFuncWrapper returns true for both)
+	// Check IsFunction BEFORE IsBoolean (goFuncWrapper returns true for both)
 	if v.IsFunction() {
 		return types.ValueGC, v.GetValue()
 	}
-	if v.IsTrue() {
+	// Check boolean by type tag, not IsTrue/IsFalse (which have Lua truthiness semantics)
+	if v.IsBoolean() {
+		if v.IsFalse() {
+			return types.ValueGC, false
+		}
 		return types.ValueGC, true
-	}
-	if v.IsFalse() {
-		return types.ValueGC, false
 	}
 	if v.IsTable() {
 		return types.ValueGC, v.GetValue()
@@ -1117,7 +1118,9 @@ func (e *Executor) setFloat(dst *TValue, n types.LuaNumber) {
 }
 
 func (e *Executor) setString(dst *TValue, s string) {
-	dst.Tt = uint8(types.LUA_VNIL)
+	dst.Tt = uint8(types.Ctb(int(types.LUA_VSHRSTR)))
+	dst.Value.Variant = types.ValueGC
+	dst.Value.Data_ = s
 }
 
 func (e *Executor) setTable(dst *TValue, tbl tableapi.TableInterface) {
@@ -1136,13 +1139,28 @@ func (e *Executor) getTable(tval *TValue) tableapi.TableInterface {
 }
 
 func (e *Executor) toString(tval *TValue) string {
+	if tval.IsString() {
+		if s, ok := tval.Value.Data_.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", tval.Value.Data_)
+	}
 	if tval.IsInteger() {
 		return fmt.Sprintf("%d", tval.GetInteger())
 	}
 	if tval.IsFloat() {
 		return fmt.Sprintf("%g", tval.GetFloat())
 	}
-	return ""
+	if tval.IsNil() {
+		return "nil"
+	}
+	if tval.IsFalse() {
+		return "false"
+	}
+	if tval.IsBoolean() {
+		return "true"
+	}
+	return fmt.Sprintf("%v", tval.Value.Data_)
 }
 
 func (e *Executor) finishGet(ra, t, key *TValue) {

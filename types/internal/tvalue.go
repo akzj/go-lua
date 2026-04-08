@@ -66,7 +66,7 @@ func (t *TValue) IsThread() bool           { return int(t.Tt) == api.Ctb(int(api
 func (t *TValue) IsLightUserData() bool    { return int(t.Tt) == api.LUA_VLIGHTUSERDATA }
 func (t *TValue) IsUserData() bool         { return int(t.Tt) == api.Ctb(int(api.LUA_VUSERDATA)) }
 func (t *TValue) IsCollectable() bool      { return int(t.Tt)&api.BIT_ISCOLLECTABLE != 0 }
-func (t *TValue) IsTrue() bool            { return int(t.Tt) == api.LUA_VTRUE }
+func (t *TValue) IsTrue() bool            { return !t.IsNil() && !t.IsFalse() }
 func (t *TValue) IsFalse() bool           { return int(t.Tt) == api.LUA_VFALSE }
 func (t *TValue) IsLClosure() bool         { return int(t.Tt) == api.Ctb(int(api.LUA_VLCL)) }
 func (t *TValue) IsCClosure() bool         { return int(t.Tt) == api.Ctb(int(api.LUA_VCCL)) }
