@@ -2,8 +2,8 @@
 package internal
 
 import (
-	"fmt"
 	"unsafe"
+	"fmt"
 
 	gc "github.com/akzj/go-lua/gc"
 	memapi "github.com/akzj/go-lua/mem/api"
@@ -474,13 +474,47 @@ func createRegistry(alloc memapi.Allocator) tableapi.TableInterface {
 	return registry
 }
 
+// goFuncWrapper wraps a GoFunc so it can be stored in tables.
+// Implements types.TValue (all 27 methods).
+type goFuncWrapper struct {
+	fn vm.GoFunc
+}
+
+func (w *goFuncWrapper) IsNil() bool             { return false }
+func (w *goFuncWrapper) IsBoolean() bool          { return false }
+func (w *goFuncWrapper) IsNumber() bool           { return false }
+func (w *goFuncWrapper) IsInteger() bool          { return false }
+func (w *goFuncWrapper) IsFloat() bool            { return false }
+func (w *goFuncWrapper) IsString() bool           { return false }
+func (w *goFuncWrapper) IsTable() bool            { return false }
+func (w *goFuncWrapper) IsFunction() bool         { return true }
+func (w *goFuncWrapper) IsThread() bool            { return false }
+func (w *goFuncWrapper) IsUserData() bool         { return false }
+func (w *goFuncWrapper) IsLightUserData() bool    { return false }
+func (w *goFuncWrapper) IsCollectable() bool     { return true }
+func (w *goFuncWrapper) IsTrue() bool             { return true }
+func (w *goFuncWrapper) IsFalse() bool            { return false }
+func (w *goFuncWrapper) IsLClosure() bool        { return true }
+func (w *goFuncWrapper) IsCClosure() bool         { return false }
+func (w *goFuncWrapper) IsLightCFunction() bool   { return false }
+func (w *goFuncWrapper) IsClosure() bool          { return true }
+func (w *goFuncWrapper) IsProto() bool            { return false }
+func (w *goFuncWrapper) IsUpval() bool            { return false }
+func (w *goFuncWrapper) IsShortString() bool      { return false }
+func (w *goFuncWrapper) IsLongString() bool       { return false }
+func (w *goFuncWrapper) IsEmpty() bool            { return false }
+func (w *goFuncWrapper) GetTag() int              { return int(types.LUA_VLCL) }
+func (w *goFuncWrapper) GetBaseType() int         { return int(types.LUA_TFUNCTION) }
+func (w *goFuncWrapper) GetValue() interface{}   { return w.fn }
+func (w *goFuncWrapper) GetGC() *types.GCObject  { return nil }
+func (w *goFuncWrapper) GetInteger() types.LuaInteger { return 0 }
+func (w *goFuncWrapper) GetFloat() types.LuaNumber   { return 0 }
+func (w *goFuncWrapper) GetPointer() unsafe.Pointer { return nil }
+
 // setGlobal registers a Go function in the global environment table.
-// It stores the function as a LightUserData TValue wrapping the GoFunc interface{}.
-// The executor will type-assert it back to vm.GoFunc when calling.
 func (L *LuaState) setGlobal(name string, fn vm.GoFunc) {
-	// Store the GoFunc interface{} as the Data_ of a LightUserData TValue
 	key := types.NewTValueString(name)
-	val := types.NewTValueLightUserData(unsafe.Pointer(&fn))
+	val := &goFuncWrapper{fn: fn}
 	L.global.Registry().Set(key, val)
 }
 
