@@ -295,6 +295,8 @@ type Frame struct {
 	savedPC  int
 	kvalues  []TValue
 	upvals   []*UpVal
+	varargs  []TValue  // Vararg values (extra args beyond fixed params)
+	nArgs    int        // Number of actual arguments passed to this call
 }
 
 type UpVal struct {
@@ -743,14 +745,19 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// b = number of arguments: b-1 fixed args (b includes func slot)
 		// b == 0 means variable args — use lastCallNRet to determine count
 		nArgs := b
-		if b == 0 && e.lastCallNRet > 0 {
+		if b == 0 && e.lastCallBase > 0 {
 			// Variable args: B=0 means "use top".
-			// The previous call placed lastCallNRet results starting at lastCallBase.
-			// This call's function is at frameBase+a.
+			// The previous operation (CALL or VARARG) placed lastCallNRet results
+			// starting at lastCallBase. This call's function is at frameBase+a.
 			// nArgs = (lastCallBase - (frameBase+a)) + lastCallNRet
 			// This accounts for any fixed args between the function and the multi-return.
+			// When lastCallNRet==0 (e.g., empty varargs), this correctly counts
+			// only the fixed args.
 			outerBase := frameBase(e) + a
 			nArgs = (e.lastCallBase - outerBase) + e.lastCallNRet
+			if nArgs < 1 {
+				nArgs = 1 // at minimum, the function slot itself
+			}
 		}
 		return e.executeCall(frameBase(e)+a, nArgs, c)
 
@@ -1048,10 +1055,27 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		dst.Value.Data_ = newClosure
 
 	case opcodes.OP_VARARG:
+		// OP_VARARG A C — copy varargs to R[A], R[A+1], ...
+		// C-1 = number of values to copy (C=0 means all varargs)
 		a := vmapi.GetArgA(inst)
 		c := vmapi.GetArgC(inst)
-		for i := 0; i < c-1; i++ {
-			e.setNil(e.reg(frameBase(e) + a + i))
+		frame := e.currentFrame()
+		nVarargs := len(frame.varargs)
+		nWant := c - 1
+		if c == 0 {
+			nWant = nVarargs
+			// Set lastCallNRet for B=0 propagation
+			e.lastCallNRet = nVarargs
+			e.lastCallBase = frameBase(e) + a
+		}
+		base := frameBase(e)
+		for i := 0; i < nWant; i++ {
+			dst := e.reg(base + a + i)
+			if i < nVarargs {
+				*dst = frame.varargs[i]
+			} else {
+				e.setNil(dst)
+			}
 		}
 
 	case opcodes.OP_GETVARG:
@@ -1090,7 +1114,33 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			return false
 		}
 
-	case opcodes.OP_VARARGPREP, opcodes.OP_EXTRAARG:
+	case opcodes.OP_VARARGPREP:
+		// OP_VARARGPREP — adjust varargs at function entry.
+		// Read nFixed from the prototype's numparams (like real Lua).
+		// The caller placed nArgs values starting at base.
+		// Fixed params occupy R[0]..R[nFixed-1] (relative to base).
+		// Extra args beyond nFixed are varargs — save them in frame.varargs.
+		frame := e.currentFrame()
+		base := frame.base
+		nActual := frame.nArgs
+		// Get nFixed from prototype numparams
+		nFixed := 0
+		if lc, ok := frame.Closure.GetValue().(luaClosure); ok {
+			nFixed = int(lc.GetProto().NumParams() & 0x7F)
+		}
+		if nActual > nFixed {
+			// Save extra args as varargs
+			frame.varargs = make([]TValue, nActual-nFixed)
+			for i := 0; i < nActual-nFixed; i++ {
+				frame.varargs[i] = *e.reg(base + nFixed + i)
+			}
+			// Clear the vararg slots so they don't interfere with locals
+			for i := nFixed; i < nActual; i++ {
+				e.setNil(e.reg(base + i))
+			}
+		}
+
+	case opcodes.OP_EXTRAARG:
 		// No-op
 
 	default:
@@ -1368,6 +1418,7 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 			prev:    e.currentFrame(),
 			savedPC: 0,
 			kvalues: kvals,
+			nArgs:   nArgs - 1, // nArgs includes func slot; subtract 1 for actual arg count
 		}
 		// Copy upvalues from the closure to the frame so GETTABUP/GETUPVAL can find them
 		if lci, ok := lc.(*luaClosureImpl); ok && lci.upvals != nil {

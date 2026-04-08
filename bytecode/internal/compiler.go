@@ -162,20 +162,32 @@ func (fs *FuncState) patchLastCallForMultiReturn(args []astapi.ExpNode) bool {
 		return false
 	}
 	lastArg := args[len(args)-1]
-	if _, ok := lastArg.(astapi.FuncCall); !ok {
-		return false
-	}
-	// Find the last CALL instruction and patch its C field to 0
-	for i := len(fs.Proto.code) - 1; i >= 0; i-- {
-		op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
-		if op == opcodes.OP_CALL || op == opcodes.OP_TAILCALL {
-			// Patch C to 0: clear bits [24:31] (C field)
-			fs.Proto.code[i] &= 0x00FFFFFF // clear C
-			// C=0 means variable results
-			break
+	
+	// Check if last arg is a FuncCall — patch last CALL's C to 0
+	if _, ok := lastArg.(astapi.FuncCall); ok {
+		for i := len(fs.Proto.code) - 1; i >= 0; i-- {
+			op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
+			if op == opcodes.OP_CALL || op == opcodes.OP_TAILCALL {
+				fs.Proto.code[i] &= 0x00FFFFFF // clear C to 0
+				break
+			}
 		}
+		return true
 	}
-	return true
+	
+	// Check if last arg is a vararg expression (...) — patch last VARARG's C to 0
+	if kinded, ok := lastArg.(interface{ Kind() astapi.ExpKind }); ok && kinded.Kind() == astapi.EXP_VARARG {
+		for i := len(fs.Proto.code) - 1; i >= 0; i-- {
+			op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
+			if op == opcodes.OP_VARARG {
+				fs.Proto.code[i] &= 0x00FFFFFF // clear C to 0 (all varargs)
+				break
+			}
+		}
+		return true
+	}
+	
+	return false
 }
 
 // compileCallStat compiles a function call statement.
@@ -1560,6 +1572,13 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 	// Reserve registers for parameters so allocReg() doesn't reuse them
 	nestedProto.maxstacksize = uint8(len(funcDef.GetParams()))
 	
+	// Emit OP_VARARGPREP for vararg functions (must be first instruction)
+	if funcDef.IsVarArg() {
+		nFixed := len(funcDef.GetParams())
+		nestedFs.emitABC(int(opcodes.OP_VARARGPREP), 0, 0, nFixed)
+		nestedProto.flag |= 1 // Mark as vararg
+	}
+
 	// Compile the function body
 	block := funcDef.GetBlock()
 	if block != nil {
@@ -1743,6 +1762,11 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 			fs.emit(int(opcodes.OP_LOADFALSE), destReg, 0, 0)
 		case astapi.EXP_NIL:
 			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+		case astapi.EXP_VARARG:
+			// Vararg expression: ...
+			// Emit OP_VARARG A C — copy varargs to R[A]
+			// C=2 means 1 value (when used as expression, default to 1 result)
+			fs.emitABC(int(opcodes.OP_VARARG), destReg, 0, 2)
 		case astapi.EXP_FUNC:
 			// Anonymous function expression: function() ... end
 			// Cast to FuncDef and compile like local function
