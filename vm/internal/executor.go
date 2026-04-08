@@ -283,6 +283,7 @@ type Executor struct {
 	frames    []*Frame
 	globalEnv tableapi.TableInterface // Global environment table for variable lookups
 	globalEnvPtr *globalEnvWrapper    // Pointer wrapper for lightuserdata extraction
+	stringMetatable tableapi.TableInterface // Shared metatable for all strings (__index = string lib)
 }
 
 type Frame struct {
@@ -319,6 +320,11 @@ func NewExecutor() vmapi.VMExecutor {
 		stack:  make([]TValue, 32),
 		frames: make([]*Frame, 0),
 	}
+}
+
+// SetStringMetatable sets the shared metatable for all string values.
+func (e *Executor) SetStringMetatable(mt tableapi.TableInterface) {
+	e.stringMetatable = mt
 }
 
 // SetGlobalEnv sets the global environment table for the executor
@@ -1513,7 +1519,6 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 	// Handle lightuserdata (globalEnv pointer stored as LUA_VLIGHTUSERDATA)
 	if t.IsLightUserData() {
 		if ptr := t.GetPointer(); ptr != nil {
-			// Cast to globalEnvWrapper and extract the table
 			wrapper := (*globalEnvWrapper)(ptr)
 			if wrapper != nil && wrapper.env != nil {
 				tval := &TValue{
@@ -1523,12 +1528,10 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 				tbl2 := e.getTable(tval)
 				if tbl2 != nil {
 					result := tbl2.Get(key)
-					if result == nil {
+					if result == nil || result.IsNil() {
 						e.setNil(ra)
 						return
 					}
-					// result is *table/internal.TValue which implements types.TValue
-					// Use extractVariantAndData to get the data
 					variant, data := extractVariantAndData(result)
 					ra.Tt = uint8(result.GetTag())
 					ra.Value.Variant = variant
@@ -1541,24 +1544,153 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 		return
 	}
 
+	// String metatable: when indexing a string, use __index from string metatable
+	if t.IsString() {
+		if e.stringMetatable != nil {
+			e.finishGetWithMetatable(ra, e.stringMetatable, t, key)
+			return
+		}
+		e.setNil(ra)
+		return
+	}
+
 	if !t.IsTable() {
 		e.setNil(ra)
 		return
 	}
-	if tbl := e.getTable(t); tbl != nil {
-		result := tbl.Get(key)
+	tbl := e.getTable(t)
+	if tbl == nil {
+		e.setNil(ra)
+		return
+	}
+	result := tbl.Get(key)
+	if result != nil && !result.IsNil() {
+		// Key found in table — copy result to ra
 		if rv, ok := result.(*TValue); ok {
 			e.copyValue(ra, rv)
 		} else {
-			// Wrap interface in concrete
 			variant, data := extractVariantAndData(result)
 			ra.Tt = uint8(result.GetTag())
 			ra.Value.Variant = variant
 			ra.Value.Data_ = data
 		}
-	} else {
-		e.setNil(ra)
+		return
 	}
+	// Key not found — check metatable __index chain
+	mt := tbl.GetMetatable()
+	if mt == nil {
+		e.setNil(ra)
+		return
+	}
+	mtTbl := tableapi.WrapRawTableFactory(mt)
+	if mtTbl == nil {
+		e.setNil(ra)
+		return
+	}
+	e.finishGetWithMetatable(ra, mtTbl, t, key)
+}
+
+// finishGetWithMetatable looks up __index in a metatable and resolves the key.
+// Handles __index as table (recursive) or function (call).
+// Uses MAXTAGLOOP to prevent infinite metatable chains.
+func (e *Executor) finishGetWithMetatable(ra *TValue, mtTbl tableapi.TableInterface, origObj, key *TValue) {
+	indexKey := &TValue{
+		Value: Value{Variant: types.ValueGC, Data_: "__index"},
+		Tt:    uint8(types.Ctb(int(types.LUA_VSHRSTR))),
+	}
+	for loop := 0; loop < MAXTAGLOOP; loop++ {
+		indexVal := mtTbl.Get(indexKey)
+		if indexVal == nil || indexVal.IsNil() {
+			e.setNil(ra)
+			return
+		}
+		// __index is a table: look up key in that table
+		if indexVal.IsTable() {
+			if idxTbl, ok := indexVal.GetValue().(tableapi.TableInterface); ok {
+				result := idxTbl.Get(key)
+				if result != nil && !result.IsNil() {
+					if rv, ok := result.(*TValue); ok {
+						e.copyValue(ra, rv)
+					} else {
+						variant, data := extractVariantAndData(result)
+						ra.Tt = uint8(result.GetTag())
+						ra.Value.Variant = variant
+						ra.Value.Data_ = data
+					}
+					return
+				}
+				// Not found in __index table — check ITS metatable
+				nextMt := idxTbl.GetMetatable()
+				if nextMt == nil {
+					e.setNil(ra)
+					return
+				}
+				mtTbl = tableapi.WrapRawTableFactory(nextMt)
+				if mtTbl == nil {
+					e.setNil(ra)
+					return
+				}
+				continue // loop to check next level
+			}
+		}
+		// __index is a function: call it with (origObj, key)
+		if indexVal.IsFunction() || indexVal.IsLClosure() || indexVal.IsCClosure() || indexVal.IsLightCFunction() {
+			// Save ra's offset so we can recompute it after stack reallocation
+			raOffset := int(uintptr(unsafe.Pointer(ra)) - uintptr(unsafe.Pointer(&e.stack[0]))) / int(unsafe.Sizeof(TValue{}))
+
+			// Copy origObj and key BEFORE append — append may reallocate the stack,
+			// invalidating any pointers into it
+			origObjCopy := *origObj
+			keyCopy := *key
+
+			// Pre-extend stack with 3 slots, then compute callBase
+			e.stack = append(e.stack, TValue{}, TValue{}, TValue{})
+			callBase := len(e.stack) - 3
+
+			fnSlot := &e.stack[callBase]
+			variant, data := extractVariantAndData(indexVal)
+			fnSlot.Tt = uint8(indexVal.GetTag())
+			fnSlot.Value.Variant = variant
+			fnSlot.Value.Data_ = data
+
+			e.stack[callBase + 1] = origObjCopy
+			e.stack[callBase + 2] = keyCopy
+
+			// Save caller state
+			savedPC := e.pc
+			savedCode := e.code
+			savedKvalues := e.kvalues
+			savedFrameCount := len(e.frames)
+
+			e.currentFrame().savedPC = e.pc
+			e.executeCall(callBase, 3, 2)
+
+			// If executeCall pushed a Lua closure frame, run it to completion
+			if len(e.frames) > savedFrameCount {
+				for len(e.frames) > savedFrameCount {
+					if !e.executeNext() {
+						break
+					}
+				}
+				// Restore caller state
+				e.pc = savedPC
+				e.code = savedCode
+				e.kvalues = savedKvalues
+			}
+
+			// Result is at callBase. Copy to ra (recomputed after potential realloc)
+			result := e.stack[callBase]
+			ra = &e.stack[raOffset]
+			*ra = result
+			// Shrink stack back
+			e.stack = e.stack[:callBase]
+			return
+		}
+		// __index is neither table nor function
+		e.setNil(ra)
+		return
+	}
+	e.err = fmt.Errorf("'__index' chain too long; possible loop")
 }
 
 func (e *Executor) finishSet(t, key, value *TValue) {

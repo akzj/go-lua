@@ -91,3 +91,7 @@ func NewTable(alloc memapi.Allocator) TableInterface {
 	// Fallback: should never happen after init
 	return DefaultTable
 }
+
+// WrapRawTableFactory wraps a types.Table back into a TableInterface.
+// Set by table/internal.init() to avoid circular imports.
+var WrapRawTableFactory func(t api.Table) TableInterface

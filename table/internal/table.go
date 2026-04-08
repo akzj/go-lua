@@ -1060,7 +1060,7 @@ func WrapRawTable(t typesapi.Table) *TableImpl {
 		return nil
 	}
 	tbl, ok := t.(*Table)
-	if !ok {
+	if !ok || tbl == nil {
 		return nil
 	}
 	return &TableImpl{
