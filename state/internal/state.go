@@ -556,6 +556,9 @@ func (w *goFuncWrapper) GetInteger() types.LuaInteger { return 0 }
 func (w *goFuncWrapper) GetFloat() types.LuaNumber   { return 0 }
 func (w *goFuncWrapper) GetPointer() unsafe.Pointer { return nil }
 
+// unwrapGoFunc returns the underlying GoFunc for VM invocation.
+func (w *goFuncWrapper) unwrapGoFunc() vm.GoFunc { return w.fn }
+
 // setGlobal registers a Go function in the global environment table.
 func (L *LuaState) setGlobal(name string, fn vm.GoFunc) {
 	key := types.NewTValueString(name)

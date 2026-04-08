@@ -144,6 +144,11 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 // =============================================================================
 
 // globalEnvWrapper wraps an interface value to allow pointer extraction
+
+// goFuncUnwrapper allows VM to call GoFuncs stored in tables via goFuncWrapper.
+type goFuncUnwrapper interface {
+    unwrapGoFunc() vmapi.GoFunc
+}
 type globalEnvWrapper struct {
 	env tableapi.TableInterface
 }
@@ -1020,6 +1025,35 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// Check for internal GoFunc (direct GoFunc storage)
 		if gf, ok := val.(GoFunc); ok {
 			gf(e.stack, base)
+			return true
+		}
+
+		// Check for goFuncWrapper (GoFunc stored in module tables like string, math).
+		// fn.GetValue() returns *goFuncWrapper. We need to unwrap it.
+		if unwrapper, ok := val.(goFuncUnwrapper); ok {
+			apiFunc := unwrapper.unwrapGoFunc()
+			// Bridge: convert []TValue to []types.TValue for the call.
+			args := make([]types.TValue, nArgs+1)
+			for i := 0; i <= nArgs; i++ {
+				args[i] = e.reg(base + i)
+			}
+			nRet := apiFunc(args, 0)
+			for i := 0; i < nRet; i++ {
+				result := args[i]
+				dst := e.reg(base + i)
+				variant, data := extractVariantAndData(result)
+				dst.Tt = uint8(result.GetTag())
+				dst.Value.Variant = variant
+				dst.Value.Data_ = data
+			}
+			if nResults > nRet && nResults != -1 {
+				for i := nRet; i < nResults; i++ {
+					dst := e.reg(base + i)
+					dst.Tt = uint8(types.LUA_TNIL)
+					dst.Value.Variant = types.ValueGC
+					dst.Value.Data_ = nil
+				}
+			}
 			return true
 		}
 
