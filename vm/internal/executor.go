@@ -1649,8 +1649,10 @@ func (e *Executor) opBitwise(inst opcodes.Instruction, op func(a, b types.LuaInt
 	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	rc := e.reg(frameBase(e) + c)
-	if rb.IsInteger() && rc.IsInteger() {
-		e.setInteger(ra, op(rb.GetInteger(), rc.GetInteger()))
+	bi, bok := coerceToInteger(rb)
+	ci, cok := coerceToInteger(rc)
+	if bok && cok {
+		e.setInteger(ra, op(bi, ci))
 	}
 	// Note: pc++ removed - executeNext() already increments pc
 }
@@ -1662,8 +1664,10 @@ func (e *Executor) opBitwiseK(inst opcodes.Instruction, op func(a, b types.LuaIn
 	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	kc := e.k(c)
-	if rb.IsInteger() && kc.IsInteger() {
-		e.setInteger(ra, op(rb.GetInteger(), kc.GetInteger()))
+	bi, bok := coerceToInteger(rb)
+	ci, cok := coerceToInteger(kc)
+	if bok && cok {
+		e.setInteger(ra, op(bi, ci))
 	}
 	// Note: pc++ removed - executeNext() already increments pc
 }
@@ -1677,7 +1681,16 @@ func (e *Executor) opShiftI(inst opcodes.Instruction, left bool) {
 		sc -= 1 << opcodes.SIZE_C
 	}
 	ra := e.RA(a)
-	rb := e.reg(frameBase(e) + b)
+	rb_raw := e.reg(frameBase(e) + b)
+	// Coerce string to integer for shift operations
+	var rb *TValue
+	if bi, ok := coerceToInteger(rb_raw); ok && !rb_raw.IsInteger() {
+		tmp := &TValue{}
+		e.setInteger(tmp, bi)
+		rb = tmp
+	} else {
+		rb = rb_raw
+	}
 	if rb.IsInteger() {
 		ib := rb.GetInteger()
 		if left {
@@ -1978,11 +1991,16 @@ func coerceStringToNumber(tval *TValue) (types.LuaNumber, bool) {
 	if err == nil {
 		return types.LuaNumber(f), true
 	}
-	// Try parsing hex: 0x or 0X prefix
+	// Try parsing hex: 0x or 0X prefix (integers and hex floats)
 	if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		// Try hex integer first
 		i, err := strconv.ParseInt(s[2:], 16, 64)
 		if err == nil {
 			return types.LuaNumber(i), true
+		}
+		// Try hex float (0xAA.0, 0xF0.ABp2, etc.)
+		if hf, ok := parseHexFloatString(s[2:]); ok {
+			return types.LuaNumber(hf), true
 		}
 	}
 	return 0, false
@@ -2008,14 +2026,28 @@ func coerceToInteger(tval *TValue) (types.LuaInteger, bool) {
 			return 0, false
 		}
 		s = strings.TrimSpace(s)
-		// Try integer first
-		i, err := strconv.ParseInt(s, 0, 64)
+		// Try decimal integer first (base 10, no octal)
+		i, err := strconv.ParseInt(s, 10, 64)
 		if err == nil {
 			return types.LuaInteger(i), true
 		}
+		// Try hex integer
+		if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+			hi, herr := strconv.ParseInt(s[2:], 16, 64)
+			if herr == nil {
+				return types.LuaInteger(hi), true
+			}
+			// Try hex float → truncate to int
+			if hf, ok := parseHexFloatString(s[2:]); ok {
+				fi := int64(hf)
+				if hf == float64(fi) {
+					return types.LuaInteger(fi), true
+				}
+			}
+		}
 		// Try float, convert to int if whole
-		f, err := strconv.ParseFloat(s, 64)
-		if err == nil {
+		f, ferr := strconv.ParseFloat(s, 64)
+		if ferr == nil {
 			fi := int64(f)
 			if f == float64(fi) {
 				return types.LuaInteger(fi), true
@@ -2024,6 +2056,84 @@ func coerceToInteger(tval *TValue) (types.LuaInteger, bool) {
 		return 0, false
 	}
 	return 0, false
+}
+
+// parseHexFloatString parses a hex float string (after the 0x prefix).
+// Supports: F0.0, F0.ABp2, .FF, FF, FFp-2
+func parseHexFloatString(s string) (float64, bool) {
+	s = strings.ToLower(s)
+	var intPart, fracPart string
+	var expPart string
+
+	// Split on 'p' for binary exponent
+	if idx := strings.IndexByte(s, 'p'); idx >= 0 {
+		expPart = s[idx+1:]
+		s = s[:idx]
+	}
+
+	// Split on '.' for integer and fractional parts
+	if idx := strings.IndexByte(s, '.'); idx >= 0 {
+		intPart = s[:idx]
+		fracPart = s[idx+1:]
+	} else {
+		intPart = s
+	}
+
+	if intPart == "" && fracPart == "" {
+		return 0, false
+	}
+
+	// Parse integer part
+	var result float64
+	if intPart != "" {
+		iv, err := strconv.ParseUint(intPart, 16, 64)
+		if err != nil {
+			return 0, false
+		}
+		result = float64(iv)
+	}
+
+	// Parse fractional part
+	if fracPart != "" {
+		frac := 0.0
+		for i, c := range fracPart {
+			var digit float64
+			if c >= '0' && c <= '9' {
+				digit = float64(c - '0')
+			} else if c >= 'a' && c <= 'f' {
+				digit = float64(c - 'a' + 10)
+			} else {
+				return 0, false
+			}
+			scale := 1.0
+			for j := 0; j <= i; j++ {
+				scale *= 16
+			}
+			frac += digit / scale
+		}
+		result += frac
+	}
+
+	// Apply binary exponent (p/P)
+	if expPart != "" {
+		exp, err := strconv.ParseInt(expPart, 10, 64)
+		if err != nil {
+			return result, true
+		}
+		pow := 1.0
+		if exp >= 0 {
+			for i := int64(0); i < exp; i++ {
+				pow *= 2
+			}
+		} else {
+			for i := int64(0); i > exp; i-- {
+				pow /= 2
+			}
+		}
+		result *= pow
+	}
+
+	return result, true
 }
 
 // isNumeric returns true if the TValue is a number or a string that can be coerced to a number.
