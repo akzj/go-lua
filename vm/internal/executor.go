@@ -967,8 +967,17 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		result := ""
 		for i := 0; i < b; i++ {
-			if r := e.reg(frameBase(e) + a + i); r.IsString() {
+			r := e.reg(frameBase(e) + a + i)
+			if r.IsString() {
 				result += e.toString(r)
+			} else if r.IsInteger() {
+				result += fmt.Sprintf("%d", r.GetInteger())
+			} else if r.IsFloat() {
+				// Use %.14g like Lua for float formatting
+				result += fmt.Sprintf("%.14g", r.GetFloat())
+			} else {
+				e.err = fmt.Errorf("attempt to concatenate a non-string value")
+				return false
 			}
 		}
 		e.setString(e.RA(a), result)
