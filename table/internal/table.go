@@ -413,6 +413,16 @@ func hashint(t *Table, key typesapi.LuaInteger) *Node {
 	return gnode(t, int(key)&(size-1))
 }
 
+// fnv1aHash computes FNV-1a hash for a string (content-based, not pointer-based).
+func fnv1aHash(s string) uint64 {
+	h := uint64(14695981039346656037)
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211
+	}
+	return h
+}
+
 // mainposition returns the main position for a key.
 func mainposition(t *Table, key typesapi.TValue) *Node {
 	if key.IsInteger() {
@@ -426,7 +436,15 @@ func mainposition(t *Table, key typesapi.TValue) *Node {
 		size := sizenode(t)
 		return gnode(t, int(math.Float64bits(float64(key.GetFloat())))%size)
 	}
-	// For other types, use pointer hash
+	// For strings, use content-based FNV-1a hash
+	if key.IsString() {
+		if s, ok := key.GetValue().(string); ok {
+			h := fnv1aHash(s)
+			size := sizenode(t)
+			return gnode(t, int(h)&(size-1))
+		}
+	}
+	// For other types (tables, functions, userdata), use pointer hash
 	h := uintptr(0)
 	if key.GetValue() != nil {
 		h = reflect.ValueOf(key.GetValue()).Pointer()
@@ -673,6 +691,11 @@ func (ti *TableImpl) SetMetatable(t typesapi.Table) {
 // - If mp is occupied: traverse collision chain from mp, find free slot f,
 //   move the node at mp to f if its main position is in the collision chain,
 //   then store the new key-value at mp.
+// nodeIndex returns the index of node n in the table's node array.
+func nodeIndex(t *Table, n *Node) int {
+	return int(uintptr(unsafe.Pointer(n))-uintptr(unsafe.Pointer(t.Node))) / int(unsafe.Sizeof(Node{}))
+}
+
 func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 	mp := mainposition(ti.tbl, key)
 	if mp == nil {
@@ -693,55 +716,65 @@ func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 		setnodummy(ti.tbl)
 		return
 	}
-	// Collision: main position occupied.
-	// Find a free slot to hold the displaced node at mp.
-	f := ti.getfreepos()
-	if f == nil {
-		// No free slot -- rehash to grow the table
-		ti.rehash()
-		// Retry insertion after rehash
-		ti.newkey(key, value)
-		return
-	}
-	// Check if the displaced node (at mp) can be moved to f.
-	// Traverse the collision chain starting at mp.
-	// A node can be moved if its main position is NOT in the chain.
-	n := mp
-	for {
-		other := mainposition(ti.tbl, getnodekey(n))
-		if other == nil {
-			break
+	// Collision: main position is occupied.
+	// Check if the occupant belongs here (its main position == mp).
+	othermain := mainposition(ti.tbl, getnodekey(mp))
+	if othermain != mp {
+		// Case A: Occupant is NOT in its main position (displaced here by earlier insertion).
+		// Move the occupant to a free slot, put our key at mp (its rightful position).
+		f := ti.getfreepos()
+		if f == nil {
+			ti.rehash()
+			ti.newkey(key, value)
+			return
 		}
-		// Check if 'other' is in the chain from mp
-		reachable := false
-		check := mp
+		// Walk from othermain's chain to find the predecessor of mp, so we can relink.
+		prev := othermain
 		for {
-			if check == other {
-				reachable = true
+			nextOff := gnext(prev)
+			if nextOff == 0 {
 				break
 			}
-			if gnext(check) == 0 {
+			prevIdx := nodeIndex(ti.tbl, prev)
+			nextNode := gnode(ti.tbl, prevIdx+nextOff)
+			if nextNode == mp {
+				// Relink: prev -> f instead of prev -> mp
+				fIdx := nodeIndex(ti.tbl, f)
+				prev.KeyNext = int32(fIdx - prevIdx)
 				break
 			}
-			nextIdx := int(uintptr(unsafe.Pointer(check))-uintptr(unsafe.Pointer(ti.tbl.Node)))/int(unsafe.Sizeof(Node{})) + gnext(check)
-			check = gnode(ti.tbl, nextIdx)
+			prev = nextNode
 		}
-		if !reachable {
-			// 'other' is not in the chain -- mp can be moved to f
-			break
+		// Copy mp (the displaced occupant) to f, preserving its chain link
+		*f = *mp
+		// Clear mp and store our new key
+		mp.KeyNext = 0
+		setnodekey(mp, key)
+		mp.Val = *value
+	} else {
+		// Case B: Occupant IS in its main position — genuine hash collision.
+		// Put new key in a free slot and chain it from mp.
+		f := ti.getfreepos()
+		if f == nil {
+			ti.rehash()
+			ti.newkey(key, value)
+			return
 		}
-		if gnext(n) == 0 {
-			break
+		// Insert f into the chain: f.next = mp.next, mp.next -> f
+		fIdx := nodeIndex(ti.tbl, f)
+		mpIdx := nodeIndex(ti.tbl, mp)
+		if gnext(mp) != 0 {
+			// f inherits mp's old next link
+			oldNextIdx := mpIdx + gnext(mp)
+			f.KeyNext = int32(oldNextIdx - fIdx)
+		} else {
+			f.KeyNext = 0
 		}
-		nextIdx := int(uintptr(unsafe.Pointer(n))-uintptr(unsafe.Pointer(ti.tbl.Node)))/int(unsafe.Sizeof(Node{})) + gnext(n)
-		n = gnode(ti.tbl, nextIdx)
+		// mp now points to f
+		mp.KeyNext = int32(fIdx - mpIdx)
+		setnodekey(f, key)
+		f.Val = *value
 	}
-	// Move node at mp to free slot f
-	*f = *mp
-	setempty(gval(mp))
-	// Store new key-value at mp
-	setnodekey(mp, key)
-	mp.Val = *value
 }
 
 // rehash grows the hash table by one level.
@@ -768,41 +801,31 @@ func (ti *TableImpl) rehash() {
 	ti.tbl.Node = (*Node)(unsafe.Pointer(&newNodes[0]))
 	setnodummy(ti.tbl)
 
-	// Reinsert all old entries
+	// Initialize all gnext to 0 (no chain links)
+	for i := 0; i < newSize; i++ {
+		n := gnode(ti.tbl, i)
+		n.KeyNext = 0
+	}
+
+	// Collect old entries (key-value pairs)
+	type kv struct {
+		key typesapi.TValue
+		val TValue
+	}
+	var entries []kv
 	for i := 0; i < oldCount; i++ {
 		oldNode := (*Node)(unsafe.Pointer(uintptr(unsafe.Pointer(oldBase)) + uintptr(i)*unsafe.Sizeof(Node{})))
 		if keyisnil(oldNode) || oldNode.KeyIsDead() || isempty(gval(oldNode)) {
 			continue
 		}
-		ti.reinsertNode(oldNode)
-	}
-}
-
-// reinsertNode inserts a node from the old table into the current table.
-// Called during rehash with the current table's mainposition.
-func (ti *TableImpl) reinsertNode(oldNode *Node) {
-	key := getnodekey(oldNode)
-	val := oldNode.Val
-
-	mp := mainposition(ti.tbl, key)
-	if mp == nil || isempty(gval(mp)) || isdummy(ti.tbl) {
-		// Free slot -- store directly
-		setnodekey(mp, key)
-		mp.Val = val
-		return
+		entries = append(entries, kv{key: getnodekey(oldNode), val: oldNode.Val})
 	}
 
-	// Collision: find free slot
-	f := ti.getfreepos()
-	if f == nil {
-		// This should not happen after rehash increased size
-		return
+	// Reinsert all entries using newkey (which correctly manages collision chains)
+	for _, e := range entries {
+		val := e.val
+		ti.newkey(e.key, &val)
 	}
-	// Move mp to f, store new key at mp
-	*f = *mp
-	setempty(gval(mp))
-	setnodekey(mp, key)
-	mp.Val = val
 }
 
 // deleteKey removes a key from the hash table.
