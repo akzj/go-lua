@@ -331,11 +331,13 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 }
 
 // compileGlobalFuncStat compiles global function declaration: function name(args) body end
+// Handles simple names (function f()), dotted names (function a.x()), and
+// method syntax (function a:m() — parser stores as "a.m" with dots).
 func (fs *FuncState) compileGlobalFuncStat(stat astapi.StatNode) error {
 	// Get the FuncDef from the stat
 	gf, ok := stat.(interface{ GetFuncDef() astapi.FuncDef })
 	if !ok || gf == nil {
-		return fs.errorf("invalid global function statement") // Should not happen in normal flow
+		return fs.errorf("invalid global function statement")
 	}
 	
 	funcDef := gf.GetFuncDef()
@@ -343,7 +345,7 @@ func (fs *FuncState) compileGlobalFuncStat(stat astapi.StatNode) error {
 		return fs.errorf("nil FuncDef in global function")
 	}
 	
-	// Get the function name
+	// Get the function name (may be dotted: "a.x" or "a.b.c")
 	name := ""
 	if gn, ok := stat.(interface{ GetName() string }); ok {
 		name = gn.GetName()
@@ -359,15 +361,61 @@ func (fs *FuncState) compileGlobalFuncStat(stat astapi.StatNode) error {
 	funcIdx := fs.addConstant(&Constant{Type: ConstFunction, Func: funcProto})
 	
 	// Emit CLOSURE to load function into a register
-	reg := fs.allocReg()
-	fs.emitABx(int(opcodes.OP_CLOSURE), reg, funcIdx)
+	closureReg := fs.allocReg()
+	fs.emitABx(int(opcodes.OP_CLOSURE), closureReg, funcIdx)
 	
-	// Emit SETTABUP to store the function in the global environment (_ENV is upvalue 0)
-	nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
-	fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, reg)
+	// Check if name is dotted (e.g., "a.x" or "a.b.c")
+	parts := splitDottedName(name)
+	if len(parts) == 1 {
+		// Simple name: store as global
+		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
+		fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, closureReg)
+	} else {
+		// Dotted name: load the table chain, then SETTABLE the last field
+		// e.g., "a.b.c" → load a, GETFIELD b, SETTABLE c = closure
+		tableReg := fs.allocReg()
+		
+		// Load the first part (root table)
+		firstName := parts[0]
+		if localReg := fs.locals.Find(firstName); localReg >= 0 {
+			fs.emitABC(int(opcodes.OP_MOVE), tableReg, localReg, 0)
+		} else if uvIdx := fs.resolveUpvalue(firstName); uvIdx >= 0 {
+			fs.emitABC(int(opcodes.OP_GETUPVAL), tableReg, uvIdx, 0)
+		} else {
+			envIdx := fs.ensureEnvUpvalue()
+			nameK := fs.addConstant(&Constant{Type: ConstString, Str: firstName})
+			fs.emitABC(int(opcodes.OP_GETTABUP), tableReg, envIdx, nameK)
+		}
+		
+		// Navigate intermediate fields (all but first and last)
+		for i := 1; i < len(parts)-1; i++ {
+			fieldK := fs.addConstant(&Constant{Type: ConstString, Str: parts[i]})
+			fs.emitABC(int(opcodes.OP_GETFIELD), tableReg, tableReg, fieldK)
+		}
+		
+		// Set the last field to the closure
+		lastFieldK := fs.addConstant(&Constant{Type: ConstString, Str: parts[len(parts)-1]})
+		fs.emitABC(int(opcodes.OP_SETFIELD), tableReg, lastFieldK, closureReg)
+		
+		fs.freeReg(tableReg)
+	}
 	
-	fs.freeReg(reg)
+	fs.freeReg(closureReg)
 	return nil
+}
+
+// splitDottedName splits a dotted name like "a.b.c" into ["a", "b", "c"].
+func splitDottedName(name string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(name); i++ {
+		if name[i] == '.' {
+			parts = append(parts, name[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, name[start:])
+	return parts
 }
 
 // compileGlobalVarStat compiles global variable declaration (Lua 5.4): global name = expr
