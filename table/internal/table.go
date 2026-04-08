@@ -899,51 +899,78 @@ func (ti *TableImpl) deleteKey(key typesapi.TValue) {
 }
 
 func (ti *TableImpl) Next(key typesapi.TValue) (typesapi.TValue, typesapi.TValue, bool) {
-	// findindex: find starting position
 	asize := ti.tbl.Asize
-	var startIdx uint32 = 0
-	
-	if !key.IsNil() {
-		// Key provided, find its position
-		if key.IsInteger() {
-			idx := ikeyinarray(ti.tbl, key.GetInteger())
-			if idx > 0 {
-				startIdx = idx
-			} else {
-				// Search hash
-				startIdx = asize + 1 // Mark as hash search
+
+	if key.IsNil() {
+		// nil key: return first element (array first, then hash)
+		for i := uint32(0); i < asize; i++ {
+			if i < uint32(len(ti.tbl.Array)) && ti.tbl.Array[i] != nil && !ti.tbl.Array[i].IsNil() {
+				return NewTValueInteger(typesapi.LuaInteger(i + 1)), ti.tbl.Array[i], true
 			}
-		} else {
-			// Search hash
-			startIdx = asize + 1
+		}
+		// No array entries, try hash
+		if ti.tbl.Node != nil {
+			size := sizenode(ti.tbl)
+			for i := 0; i < size; i++ {
+				n := gnode(ti.tbl, i)
+				if n != nil && gval(n) != nil && !isempty(gval(n)) && !n.KeyIsDead() {
+					return getnodekey(n), gval(n), true
+				}
+			}
+		}
+		return NewTValueNil(), NewTValueNil(), false
+	}
+
+	// Key provided: find its position, then return the NEXT element after it.
+	// Check if key is in the array part
+	if key.IsInteger() {
+		idx := ikeyinarray(ti.tbl, key.GetInteger())
+		if idx > 0 {
+			// Found in array at position idx (0-based). Search from idx+1 onward.
+			for i := idx; i < asize; i++ {
+				if i < uint32(len(ti.tbl.Array)) && ti.tbl.Array[i] != nil && !ti.tbl.Array[i].IsNil() {
+					return NewTValueInteger(typesapi.LuaInteger(i + 1)), ti.tbl.Array[i], true
+				}
+			}
+			// Fall through to hash part (start from beginning)
+			if ti.tbl.Node != nil {
+				size := sizenode(ti.tbl)
+				for i := 0; i < size; i++ {
+					n := gnode(ti.tbl, i)
+					if n != nil && gval(n) != nil && !isempty(gval(n)) && !n.KeyIsDead() {
+						return getnodekey(n), gval(n), true
+					}
+				}
+			}
+			return NewTValueNil(), NewTValueNil(), false
 		}
 	}
-	
-	// Search array part
-	for i := startIdx; i < asize; i++ {
-		if i < uint32(len(ti.tbl.Array)) && ti.tbl.Array[i] != nil && !ti.tbl.Array[i].IsNil() {
-			return NewTValueInteger(typesapi.LuaInteger(i+1)), ti.tbl.Array[i], true
-		}
-	}
-	
-	// Search hash part
-	hashStart := uint32(0)
-	if startIdx > asize {
-		// Start from beginning of hash
-	} else if startIdx > 0 {
-		hashStart = 0 // Start from beginning since we already checked array
-	}
-	
+
+	// Key is in the hash part: find it, then return the next hash entry
 	if ti.tbl.Node != nil {
 		size := sizenode(ti.tbl)
-		for i := hashStart; i < uint32(size); i++ {
-			n := gnode(ti.tbl, int(i))
-			if n != nil && gval(n) != nil && !isempty(gval(n)) && !n.KeyIsDead() {
-				return getnodekey(n), gval(n), true
+		// First, find the node matching this key
+		for i := 0; i < size; i++ {
+			n := gnode(ti.tbl, i)
+			if n == nil || gval(n) == nil || isempty(gval(n)) || n.KeyIsDead() {
+				continue
+			}
+			if equalkey(key, n) {
+				// Found the current key at hash index i.
+				// Return the next non-empty hash entry after i.
+				for j := i + 1; j < size; j++ {
+					n2 := gnode(ti.tbl, j)
+					if n2 != nil && gval(n2) != nil && !isempty(gval(n2)) && !n2.KeyIsDead() {
+						return getnodekey(n2), gval(n2), true
+					}
+				}
+				// No more hash entries
+				return NewTValueNil(), NewTValueNil(), false
 			}
 		}
 	}
-	
+
+	// Key not found in table — invalid key for next
 	return NewTValueNil(), NewTValueNil(), false
 }
 
