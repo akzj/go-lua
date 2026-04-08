@@ -1669,7 +1669,8 @@ func (e *Executor) opShiftI(inst opcodes.Instruction, left bool) {
 		if left {
 			e.setInteger(ra, ib<<types.LuaInteger(sc))
 		} else {
-			e.setInteger(ra, ib>>types.LuaInteger(sc))
+			// Lua >> is logical right shift (unsigned)
+			e.setInteger(ra, types.LuaInteger(uint64(ib)>>uint64(sc)))
 		}
 	}
 	// Note: pc++ removed - executeNext() already increments pc
@@ -1688,7 +1689,8 @@ func (e *Executor) opShift(inst opcodes.Instruction, left bool) {
 		if left {
 			e.setInteger(ra, ib<<ic)
 		} else {
-			e.setInteger(ra, ib>>ic)
+			// Lua >> is logical right shift (unsigned)
+			e.setInteger(ra, types.LuaInteger(uint64(ib)>>uint64(ic)))
 		}
 	}
 	// Note: pc++ removed - executeNext() already increments pc
