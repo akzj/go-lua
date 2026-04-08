@@ -2753,6 +2753,7 @@ func (p *parser) parseFunctionCall(prefix astapi.ExpNode) (astapi.ExpNode, error
 	var funcNode astapi.ExpNode = prefix
 
 	// Check for method call: obj:method()
+	isMethodCall := false
 	if p.peek(lexapi.TOKEN_COLON) {
 		p.next()
 		methodName := p.current().Value
@@ -2764,6 +2765,7 @@ func (p *parser) parseFunctionCall(prefix astapi.ExpNode) (astapi.ExpNode, error
 			key:   &stringExp{baseNode: baseNode{line: methodTok.Line, column: methodTok.Column}, value: methodName},
 			baseNode: baseNode{line: tok.Line, column: tok.Column},
 		}
+		isMethodCall = true
 	} else if p.peek(lexapi.TOKEN_NAME) {
 		// Direct function call: prefix.name()
 		name := p.current().Value
@@ -2780,6 +2782,11 @@ func (p *parser) parseFunctionCall(prefix astapi.ExpNode) (astapi.ExpNode, error
 	args, err := p.parseArgs()
 	if err != nil {
 		return nil, err
+	}
+
+	// For method calls (colon syntax), prepend self (the object) as first argument
+	if isMethodCall {
+		args = append([]astapi.ExpNode{prefix}, args...)
 	}
 
 	return &funcCall{
