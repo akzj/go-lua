@@ -1047,6 +1047,58 @@ func (p *parser) parseRepeat() {
 }
 
 // =============================================================================
+
+// parseParamList parses a parameter list: '(' [name {',' name} [',' '...']] | '...' ')'
+// Returns parameter names and whether function is vararg.
+// Assumes '(' has already been consumed.
+func (p *parser) parseParamList() ([]string, bool) {
+	var params []string
+	isVarArg := false
+
+	// Empty param list
+	if p.peek(lexapi.TOKEN_RPAREN) {
+		p.next() // consume ')'
+		return params, isVarArg
+	}
+
+	// Check for lone '...'
+	if p.peek(lexapi.TOKEN_DOTS) {
+		isVarArg = true
+		p.next() // consume '...'
+		if p.peek(lexapi.TOKEN_RPAREN) {
+			p.next() // consume ')'
+		}
+		return params, isVarArg
+	}
+
+	// Parse first param name
+	if p.current().Type == lexapi.TOKEN_NAME {
+		params = append(params, p.current().Value)
+		p.next()
+	}
+
+	// Parse remaining params
+	for p.peek(lexapi.TOKEN_COMMA) {
+		p.next() // consume ','
+		if p.peek(lexapi.TOKEN_DOTS) {
+			isVarArg = true
+			p.next() // consume '...'
+			break
+		}
+		if p.current().Type == lexapi.TOKEN_NAME {
+			params = append(params, p.current().Value)
+			p.next()
+		}
+	}
+
+	// Consume ')'
+	if p.peek(lexapi.TOKEN_RPAREN) {
+		p.next()
+	}
+
+	return params, isVarArg
+}
+
 // Function Definition: function <name> ['.' <name>]* [':' <name>] '(' [params] ')' <block> end
 // =============================================================================
 
@@ -1102,31 +1154,7 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 		return
 	}
 	p.next() // consume '('
-	
-	// Skip to ')' - for stub, we don't need to parse parameters
-	// Fixed: don't consume token after closing paren
-	depth := 1
-	for {
-		if p.peek(lexapi.TOKEN_LPAREN) {
-			depth++
-			p.next()
-		} else if p.peek(lexapi.TOKEN_RPAREN) {
-			depth--
-			p.next() // consume ')'
-			if depth == 0 {
-				break // stop after consuming ')'
-			}
-		} else if p.peek(lexapi.TOKEN_EOS) {
-			break
-		} else {
-			p.next()
-		}
-	}
-	
-	if p.peek(lexapi.TOKEN_EOS) || p.current().Type == lexapi.TOKEN_EOS {
-		p.errorAt(p.current(), "'(' expected")
-		return
-	}
+	params, isVarArg := p.parseParamList()
 	
 	// Parse function body block
 	// Save outer block reference since parseBlock will set p.block = nil
@@ -1150,8 +1178,8 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 		func_: &funcDefImpl{
 			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
 			isLocal:   false,
-			params:    []string{},
-			varArg:    false,
+			params:    params,
+			varArg:    isVarArg,
 			block:     body,
 			lastLine:  nameTok.Line,
 		},
@@ -1203,31 +1231,7 @@ func (p *parser) parseLocalFunction() {
 		return
 	}
 	p.next() // consume '('
-	
-	// Skip to ')' - for stub, we don't need to parse parameters
-	// Fixed: don't consume token after closing paren
-	depth := 1
-	for {
-		if p.peek(lexapi.TOKEN_LPAREN) {
-			depth++
-			p.next()
-		} else if p.peek(lexapi.TOKEN_RPAREN) {
-			depth--
-			p.next() // consume ')'
-			if depth == 0 {
-				break // stop after consuming ')'
-			}
-		} else if p.peek(lexapi.TOKEN_EOS) {
-			break
-		} else {
-			p.next()
-		}
-	}
-	
-	if p.peek(lexapi.TOKEN_EOS) || p.current().Type == lexapi.TOKEN_EOS {
-		p.errorAt(p.current(), "'(' expected")
-		return
-	}
+	params, isVarArg := p.parseParamList()
 	
 	// Parse function body block
 	// Save outer block reference since parseBlock will set p.block = nil
@@ -1251,8 +1255,8 @@ func (p *parser) parseLocalFunction() {
 		func_: &funcDefImpl{
 			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
 			isLocal:   false,
-			params:    []string{},
-			varArg:    false,
+			params:    params,
+			varArg:    isVarArg,
 			block:     body,
 			lastLine:  nameTok.Line,
 		},
@@ -2644,27 +2648,12 @@ func (p *parser) parseAnonFunction() astapi.ExpNode {
 	tok := p.current() // 'function' token
 	p.next() // consume 'function'
 	
-	// Anonymous function - no name, just parse parameters and body
-	// Skip to ')' for parameter parsing
+	// Parse parameters
+	var params []string
+	isVarArg := false
 	if p.peek(lexapi.TOKEN_LPAREN) {
 		p.next() // consume '('
-		depth := 1
-		for {
-			if p.peek(lexapi.TOKEN_LPAREN) {
-				depth++
-				p.next()
-			} else if p.peek(lexapi.TOKEN_RPAREN) {
-				depth--
-				p.next()
-				if depth == 0 {
-					break
-				}
-			} else if p.peek(lexapi.TOKEN_EOS) {
-				break
-			} else {
-				p.next()
-			}
-		}
+		params, isVarArg = p.parseParamList()
 	}
 	
 	// Parse function body
@@ -2679,8 +2668,8 @@ func (p *parser) parseAnonFunction() astapi.ExpNode {
 	return &funcDefImpl{
 		baseNode:  baseNode{line: tok.Line, column: tok.Column},
 		isLocal:   true, // anonymous functions are local
-		params:    []string{},
-		varArg:    false,
+		params:    params,
+		varArg:    isVarArg,
 		block:     body,
 		lastLine:  tok.Line,
 	}

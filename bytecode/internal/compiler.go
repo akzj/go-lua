@@ -1369,10 +1369,18 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 		Proto:        nestedProto,
 		pc:           0,
 		C:            fs.C,
+		locals:       NewLocals(),
 		labelScopes:  []map[string]int{make(map[string]int)},
 		pendingGotos: make(map[string][]int),
 		gotoScopes:   make(map[int]int),
 	}
+	
+	// Register parameters as local variables (registers 0..nParams-1)
+	for i, paramName := range funcDef.GetParams() {
+		nestedFs.locals.Add(paramName, i, 0)
+	}
+	// Reserve registers for parameters so allocReg() doesn't reuse them
+	nestedProto.maxstacksize = uint8(len(funcDef.GetParams()))
 	
 	// Compile the function body
 	block := funcDef.GetBlock()

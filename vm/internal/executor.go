@@ -594,13 +594,13 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// b==0 (multi-return) and b==1 (no returns) both handled: nRet=0
 
 		// The caller's frame is below the current one.
-		// The caller expects results starting at the callee's base (the function slot).
+		// The caller expects results starting at the function slot (calleeBase - 1).
 		calleeBase := e.currentFrame().base
 
-		// Copy return values to caller's expected position
+		// Copy return values to caller's expected position (function slot)
 		for i := 0; i < nRet; i++ {
 			src := e.reg(base + a + i)
-			dst := e.reg(calleeBase + i)
+			dst := e.reg(calleeBase - 1 + i)
 				*dst = *src
 		}
 
@@ -628,7 +628,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 
 		// Clear the function slot (caller expects nil for 0-return functions)
 		calleeBase := e.currentFrame().base
-		e.setNil(e.reg(calleeBase))
+		e.setNil(e.reg(calleeBase - 1))
 
 		// Pop current frame and restore caller state
 		e.frames = e.frames[:len(e.frames)-1]
@@ -655,10 +655,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			return false
 		}
 
-		// Copy single return value to caller's expected position
+		// Copy single return value to caller's expected position (function slot)
 		calleeBase := e.currentFrame().base
 		src := e.reg(base + a)
-		dst := e.reg(calleeBase)
+		dst := e.reg(calleeBase - 1)
 		*dst = *src
 
 		// Pop current frame and restore caller state
@@ -1105,7 +1105,7 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		closureCopy := &TValue{Value: fn.Value, Tt: fn.Tt}
 		newFrame := &Frame{
 			Closure: closureCopy,
-			base:    base,
+			base:    base + 1, // +1: skip function slot, register 0 = first parameter
 			prev:    e.currentFrame(),
 			savedPC: 0,
 			kvalues: kvals,
@@ -1365,7 +1365,7 @@ func (e *Executor) opArithI(inst opcodes.Instruction, iop func(a, b types.LuaInt
 		sc -= 1 << opcodes.SIZE_C
 	}
 	rb := e.reg(frameBase(e) + b)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	if rb.IsInteger() {
 		e.setInteger(ra, iop(rb.GetInteger(), types.LuaInteger(sc)))
 	} else if rb.IsFloat() {
@@ -1378,7 +1378,7 @@ func (e *Executor) opArith(inst opcodes.Instruction, iop func(a, b types.LuaInte
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	rc := e.reg(frameBase(e) + c)
 	if rb.IsInteger() && rc.IsInteger() {
@@ -1393,7 +1393,7 @@ func (e *Executor) opArithK(inst opcodes.Instruction, iop func(a, b types.LuaInt
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	kc := e.k(c)
 	if rb.IsInteger() && kc.IsInteger() {
@@ -1408,7 +1408,7 @@ func (e *Executor) opArithfK(inst opcodes.Instruction, fop func(a, b types.LuaNu
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	e.setFloat(ra, fop(getFloat(e.reg(frameBase(e)+b)), getFloat(e.k(c))))
 	// Note: pc++ removed - executeNext() already increments pc
 }
@@ -1417,7 +1417,7 @@ func (e *Executor) opArithf(inst opcodes.Instruction, fop func(a, b types.LuaNum
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	e.setFloat(ra, fop(getFloat(e.reg(frameBase(e)+b)), getFloat(e.reg(frameBase(e)+c))))
 	// Note: pc++ removed - executeNext() already increments pc
 }
@@ -1426,7 +1426,7 @@ func (e *Executor) opBitwise(inst opcodes.Instruction, op func(a, b types.LuaInt
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	rc := e.reg(frameBase(e) + c)
 	if rb.IsInteger() && rc.IsInteger() {
@@ -1439,7 +1439,7 @@ func (e *Executor) opBitwiseK(inst opcodes.Instruction, op func(a, b types.LuaIn
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	kc := e.k(c)
 	if rb.IsInteger() && kc.IsInteger() {
@@ -1456,7 +1456,7 @@ func (e *Executor) opShiftI(inst opcodes.Instruction, left bool) {
 	if sc >= 1<<(opcodes.SIZE_C-1) {
 		sc -= 1 << opcodes.SIZE_C
 	}
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	if rb.IsInteger() {
 		ib := rb.GetInteger()
@@ -1473,7 +1473,7 @@ func (e *Executor) opShift(inst opcodes.Instruction, left bool) {
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
 	c := vmapi.GetArgC(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	rc := e.reg(frameBase(e) + c)
 	if rb.IsInteger() && rc.IsInteger() {
@@ -1491,7 +1491,7 @@ func (e *Executor) opShift(inst opcodes.Instruction, left bool) {
 func (e *Executor) opUnary(inst opcodes.Instruction, iop func(v types.LuaInteger) types.LuaInteger, fop func(v types.LuaNumber) types.LuaNumber) {
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
-	ra := e.reg(a)
+	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	if rb.IsInteger() {
 		e.setInteger(ra, iop(rb.GetInteger()))
