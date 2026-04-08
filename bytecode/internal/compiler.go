@@ -1021,15 +1021,16 @@ func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 		}
 	}
 
-	// Emit TFORCALL: call R[A](R[A+1], R[A+2]), results to R[A+4..A+3+C]
+	// Emit TFORCALL: call R[A](R[A+1], R[A+2]), results to R[A+3..A+3+C-1]
+	tforcallIdx := len(fs.Proto.code)
 	fs.emitABC(int(opcodes.OP_TFORCALL), baseReg, 0, nVars)
 
-	// Emit TFORLOOP: if R[A+2] ~= nil then pc -= sBx
+	// Emit TFORLOOP: if R[A+3] ~= nil then jump back to body start
 	tforLoopIdx := fs.emitAsBx(int(opcodes.OP_TFORLOOP), baseReg, 0)
 
 	// Patch jumps:
-	// TFORPREP jumps forward to TFORLOOP
-	fs.patchAsBxJump(tforPrepIdx, tforLoopIdx)
+	// TFORPREP jumps forward to TFORCALL (so iterator is called before first check)
+	fs.patchAsBxJump(tforPrepIdx, tforcallIdx)
 
 	// TFORLOOP jumps back to the start of the body (tforPrepIdx + 1)
 	fs.patchAsBxJump(tforLoopIdx, tforPrepIdx+1)
