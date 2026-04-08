@@ -934,8 +934,8 @@ func (ti *TableImpl) Next(key typesapi.TValue) (typesapi.TValue, typesapi.TValue
 		hashStart = 0 // Start from beginning since we already checked array
 	}
 	
-	size := sizenode(ti.tbl)
-	if ti.tbl.Node != nil && !isdummy(ti.tbl) {
+	if ti.tbl.Node != nil {
+		size := sizenode(ti.tbl)
 		for i := hashStart; i < uint32(size); i++ {
 			n := gnode(ti.tbl, int(i))
 			if n != nil && gval(n) != nil && !isempty(gval(n)) && !n.KeyIsDead() {
