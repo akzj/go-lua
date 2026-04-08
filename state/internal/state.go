@@ -4,6 +4,7 @@ package internal
 import (
 	"unsafe"
 	"fmt"
+	"strconv"
 
 	gc "github.com/akzj/go-lua/gc"
 	memapi "github.com/akzj/go-lua/mem/api"
@@ -13,6 +14,45 @@ import (
 	"github.com/akzj/go-lua/vm"
 	"github.com/akzj/go-lua/table"
 )
+
+// =============================================================================
+// LuaError — distinct error type for Lua error() mechanism
+// =============================================================================
+
+// LuaError is the panic value used by error(). pcall/xpcall catch this
+// specific type via recover() + type assertion, distinguishing Lua errors
+// from Go bugs.
+type LuaError struct {
+	Msg types.TValue // The error object (usually a string)
+}
+
+func (e *LuaError) Error() string {
+	if e.Msg == nil || e.Msg.IsNil() {
+		return "error object is nil"
+	}
+	if e.Msg.IsString() {
+		if s, ok := e.Msg.GetValue().(string); ok {
+			return s
+		}
+	}
+	if e.Msg.IsInteger() {
+		return fmt.Sprintf("%d", e.Msg.GetInteger())
+	}
+	if e.Msg.IsFloat() {
+		return fmt.Sprintf("%g", e.Msg.GetFloat())
+	}
+	return "(error object)"
+}
+
+// luaError is a helper that panics with a LuaError.
+func luaError(msg types.TValue) {
+	panic(&LuaError{Msg: msg})
+}
+
+// luaErrorString is a convenience helper for string error messages.
+func luaErrorString(msg string) {
+	panic(&LuaError{Msg: types.NewTValueString(msg)})
+}
 
 var _ = table.Lib // Force import of table package to trigger table/internal init()
 
@@ -647,26 +687,35 @@ func btype(stack []types.TValue, base int) int {
 }
 
 // bassert implements Lua's assert function.
+// Uses LuaError so pcall can catch assertion failures.
 func bassert(stack []types.TValue, base int) int {
 	nArgs := len(stack) - base - 1
 	if nArgs < 1 {
-		stack[base] = types.NewTValueNil()
-		return 1
+		luaErrorString("bad argument #1 to 'assert' (value expected)")
+		return 0
 	}
 	v := stack[base+1]
-	if v.IsFalse() || v.IsNil() {
+	if v == nil || v.IsFalse() || v.IsNil() {
 		msg := "assertion failed!"
 		if nArgs >= 2 && base+2 < len(stack) {
-			if m := stack[base+2]; !m.IsNil() {
+			if m := stack[base+2]; m != nil && !m.IsNil() {
 				if s, ok := m.GetValue().(string); ok {
 					msg = s
+				} else if m.IsInteger() {
+					msg = fmt.Sprintf("%d", m.GetInteger())
+				} else if m.IsFloat() {
+					msg = fmt.Sprintf("%g", m.GetFloat())
 				}
 			}
 		}
-		panic(msg)
+		luaErrorString(msg)
+		return 0
 	}
-	// Return the original value(s)
-	return 1
+	// Return all arguments (assert returns its arguments on success)
+	for i := 0; i < nArgs; i++ {
+		stack[base+i] = stack[base+1+i]
+	}
+	return nArgs
 }
 
 // btostring implements Lua's tostring function.
@@ -738,6 +787,614 @@ func btonumber(stack []types.TValue, base int) int {
 	return 1
 }
 
+// =============================================================================
+// Phase 2 Base Library Functions
+// =============================================================================
+
+// berror implements Lua's error(msg [, level]) function.
+// Raises a Lua error by panicking with LuaError.
+func berror(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaError(types.NewTValueNil())
+		return 0
+	}
+	msg := stack[base+1]
+	luaError(msg)
+	return 0 // unreachable
+}
+
+// bpcall implements Lua's pcall(f, ...) function.
+// Calls f in protected mode. If f raises an error, returns false + errmsg.
+// If f succeeds, returns true + results.
+func bpcall(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		stack[base] = types.NewTValueBoolean(false)
+		stack[base+1] = types.NewTValueString("bad argument #1 to 'pcall' (value expected)")
+		return 2
+	}
+
+	fn := stack[base+1]
+
+	// Build args for the called function: fn at [0], extra args at [1..]
+	extraArgs := nArgs - 1
+	callStack := make([]types.TValue, 1+extraArgs)
+	callStack[0] = fn
+	for i := 0; i < extraArgs; i++ {
+		callStack[i+1] = stack[base+2+i]
+	}
+
+	// Try to call the function, catching LuaError panics
+	var nRet int
+	var luaErr *LuaError
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if le, ok := r.(*LuaError); ok {
+					luaErr = le
+				} else {
+					// Re-panic for Go bugs (non-LuaError panics)
+					panic(r)
+				}
+			}
+		}()
+		// Extract the GoFunc from the function value
+		if gf, ok := fn.GetValue().(vm.GoFunc); ok {
+			nRet = gf(callStack, 0)
+		} else {
+			luaErr = &LuaError{Msg: types.NewTValueString("attempt to call a non-function value")}
+		}
+	}()
+
+	if luaErr != nil {
+		stack[base] = types.NewTValueBoolean(false)
+		if luaErr.Msg != nil {
+			stack[base+1] = luaErr.Msg
+		} else {
+			stack[base+1] = types.NewTValueNil()
+		}
+		return 2
+	}
+
+	// Success: return true + results
+	stack[base] = types.NewTValueBoolean(true)
+	for i := 0; i < nRet; i++ {
+		stack[base+1+i] = callStack[i]
+	}
+	return 1 + nRet
+}
+
+// bxpcall implements Lua's xpcall(f, handler, ...) function.
+// Like pcall but with a message handler function.
+func bxpcall(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 2 {
+		stack[base] = types.NewTValueBoolean(false)
+		stack[base+1] = types.NewTValueString("bad argument #1 to 'xpcall' (value expected)")
+		return 2
+	}
+
+	fn := stack[base+1]
+	handler := stack[base+2]
+
+	// Build args for the called function
+	extraArgs := nArgs - 2
+	callStack := make([]types.TValue, 1+extraArgs)
+	callStack[0] = fn
+	for i := 0; i < extraArgs; i++ {
+		callStack[i+1] = stack[base+3+i]
+	}
+
+	var nRet int
+	var luaErr *LuaError
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if le, ok := r.(*LuaError); ok {
+					luaErr = le
+				} else {
+					panic(r)
+				}
+			}
+		}()
+		if gf, ok := fn.GetValue().(vm.GoFunc); ok {
+			nRet = gf(callStack, 0)
+		} else {
+			luaErr = &LuaError{Msg: types.NewTValueString("attempt to call a non-function value")}
+		}
+	}()
+
+	if luaErr != nil {
+		// Call the handler with the error message
+		errMsg := luaErr.Msg
+		if errMsg == nil {
+			errMsg = types.NewTValueNil()
+		}
+
+		// Try to call handler
+		handlerStack := []types.TValue{handler, errMsg}
+		var handlerResult types.TValue
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Handler itself failed - use original error
+					handlerResult = errMsg
+				}
+			}()
+			if hf, ok := handler.GetValue().(vm.GoFunc); ok {
+				nH := hf(handlerStack, 0)
+				if nH > 0 {
+					handlerResult = handlerStack[0]
+				} else {
+					handlerResult = errMsg
+				}
+			} else {
+				handlerResult = errMsg
+			}
+		}()
+
+		stack[base] = types.NewTValueBoolean(false)
+		stack[base+1] = handlerResult
+		return 2
+	}
+
+	// Success
+	stack[base] = types.NewTValueBoolean(true)
+	for i := 0; i < nRet; i++ {
+		stack[base+1+i] = callStack[i]
+	}
+	return 1 + nRet
+}
+
+// bselect implements Lua's select(index, ...) function.
+func bselect(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'select' (number or string expected, got no value)")
+		return 0
+	}
+
+	idx := stack[base+1]
+
+	// select('#', ...) returns count of varargs
+	if idx.IsString() {
+		if s, ok := idx.GetValue().(string); ok && s == "#" {
+			count := nArgs - 1 // everything after the index arg
+			stack[base] = types.NewTValueInteger(types.LuaInteger(count))
+			return 1
+		}
+	}
+
+	// select(n, ...) returns from nth element onwards
+	var n int
+	if idx.IsInteger() {
+		n = int(idx.GetInteger())
+	} else if idx.IsFloat() {
+		n = int(idx.GetFloat())
+	} else {
+		luaErrorString("bad argument #1 to 'select' (number or string expected)")
+		return 0
+	}
+
+	varargCount := nArgs - 1
+	if n < 0 {
+		n = varargCount + n + 1
+	}
+	if n < 1 {
+		luaErrorString("bad argument #1 to 'select' (index out of range)")
+		return 0
+	}
+	if n > varargCount {
+		return 0
+	}
+
+	// Return from nth vararg onwards
+	nRet := varargCount - n + 1
+	for i := 0; i < nRet; i++ {
+		stack[base+i] = stack[base+1+n+i]
+	}
+	return nRet
+}
+
+// extractTable extracts a tableapi.TableInterface from a TValue.
+func extractTable(v types.TValue) tableapi.TableInterface {
+	if v == nil || v.IsNil() {
+		return nil
+	}
+	if !v.IsTable() {
+		return nil
+	}
+	val := v.GetValue()
+	if tbl, ok := val.(tableapi.TableInterface); ok {
+		return tbl
+	}
+	return nil
+}
+
+// bnext implements Lua's next(table [, index]) function.
+func bnext(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'next' (table expected, got no value)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'next' (table expected)")
+		return 0
+	}
+
+	var key types.TValue
+	if nArgs >= 2 && stack[base+2] != nil {
+		key = stack[base+2]
+	} else {
+		key = types.NewTValueNil()
+	}
+
+	nextKey, nextVal, ok := tbl.Next(key)
+	if !ok {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+	stack[base] = nextKey
+	stack[base+1] = nextVal
+	return 2
+}
+
+// bipairsIter is the iterator function for ipairs.
+// It captures the table and returns the next integer key-value pair.
+func makeIpairsIter(tbl tableapi.TableInterface) vm.GoFunc {
+	return func(stack []types.TValue, base int) int {
+		// stack[base+1] = table (invariant state), stack[base+2] = control variable (index)
+		var idx types.LuaInteger
+		nArgs := len(stack) - base - 1
+		if nArgs >= 2 && stack[base+2] != nil && stack[base+2].IsInteger() {
+			idx = stack[base+2].GetInteger()
+		}
+		idx++
+
+		val := tbl.GetInt(idx)
+		if val == nil || val.IsNil() {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+		stack[base] = types.NewTValueInteger(idx)
+		stack[base+1] = val
+		return 2
+	}
+}
+
+// bipairs implements Lua's ipairs(t) function.
+// Returns iterator function, table, 0
+func bipairs(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'ipairs' (table expected, got no value)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'ipairs' (table expected)")
+		return 0
+	}
+
+	// Return: iterator function, table, 0
+	iterFn := makeIpairsIter(tbl)
+	stack[base] = &goFuncWrapper{fn: iterFn}
+	stack[base+1] = stack[base+1] // table (invariant state) - already there
+	stack[base+2] = types.NewTValueInteger(0) // initial control variable
+	return 3
+}
+
+// makePairsIter creates the iterator function for pairs.
+func makePairsIter(tbl tableapi.TableInterface) vm.GoFunc {
+	return func(stack []types.TValue, base int) int {
+		nArgs := len(stack) - base - 1
+		var key types.TValue
+		if nArgs >= 2 && stack[base+2] != nil {
+			key = stack[base+2]
+		} else {
+			key = types.NewTValueNil()
+		}
+
+		nextKey, nextVal, ok := tbl.Next(key)
+		if !ok {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+		stack[base] = nextKey
+		stack[base+1] = nextVal
+		return 2
+	}
+}
+
+// bpairs implements Lua's pairs(t) function.
+// Returns next, table, nil
+func bpairs(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'pairs' (table expected, got no value)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'pairs' (table expected)")
+		return 0
+	}
+
+	// Return: next function, table, nil
+	iterFn := makePairsIter(tbl)
+	stack[base] = &goFuncWrapper{fn: iterFn}
+	stack[base+1] = stack[base+1] // table
+	stack[base+2] = types.NewTValueNil() // initial key
+	return 3
+}
+
+// brawget implements Lua's rawget(table, index) function.
+func brawget(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 2 {
+		luaErrorString("bad argument #1 to 'rawget' (table expected)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'rawget' (table expected)")
+		return 0
+	}
+
+	key := stack[base+2]
+	result := tbl.Get(key)
+	if result == nil {
+		result = types.NewTValueNil()
+	}
+	stack[base] = result
+	return 1
+}
+
+// brawset implements Lua's rawset(table, index, value) function.
+func brawset(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 3 {
+		luaErrorString("bad argument #1 to 'rawset' (table expected)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'rawset' (table expected)")
+		return 0
+	}
+
+	key := stack[base+2]
+	value := stack[base+3]
+	tbl.Set(key, value)
+	// rawset returns the table
+	stack[base] = stack[base+1]
+	return 1
+}
+
+// brawlen implements Lua's rawlen(v) function.
+func brawlen(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'rawlen' (table or string expected)")
+		return 0
+	}
+
+	v := stack[base+1]
+	if v.IsString() {
+		if s, ok := v.GetValue().(string); ok {
+			stack[base] = types.NewTValueInteger(types.LuaInteger(len(s)))
+			return 1
+		}
+	}
+
+	tbl := extractTable(v)
+	if tbl != nil {
+		stack[base] = types.NewTValueInteger(types.LuaInteger(tbl.Len()))
+		return 1
+	}
+
+	luaErrorString("bad argument #1 to 'rawlen' (table or string expected)")
+	return 0
+}
+
+// brawequal implements Lua's rawequal(v1, v2) function.
+func brawequal(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 2 {
+		luaErrorString("bad argument #1 to 'rawequal' (value expected)")
+		return 0
+	}
+
+	v1 := stack[base+1]
+	v2 := stack[base+2]
+
+	equal := rawEqual(v1, v2)
+	stack[base] = types.NewTValueBoolean(equal)
+	return 1
+}
+
+// rawEqual performs raw equality comparison (no metamethods).
+func rawEqual(v1, v2 types.TValue) bool {
+	if v1 == nil && v2 == nil {
+		return true
+	}
+	if v1 == nil || v2 == nil {
+		return false
+	}
+	// Different base types are never equal
+	if v1.GetTag() != v2.GetTag() {
+		// Special case: both nil variants
+		if v1.IsNil() && v2.IsNil() {
+			return true
+		}
+		return false
+	}
+	// Same type
+	if v1.IsNil() {
+		return true
+	}
+	if v1.IsBoolean() {
+		return v1.IsTrue() == v2.IsTrue()
+	}
+	if v1.IsInteger() {
+		return v1.GetInteger() == v2.GetInteger()
+	}
+	if v1.IsFloat() {
+		return v1.GetFloat() == v2.GetFloat()
+	}
+	if v1.IsString() {
+		s1, ok1 := v1.GetValue().(string)
+		s2, ok2 := v2.GetValue().(string)
+		return ok1 && ok2 && s1 == s2
+	}
+	// For tables, functions, etc. — compare by identity (pointer)
+	return v1.GetValue() == v2.GetValue()
+}
+
+// bsetmetatable implements Lua's setmetatable(table, metatable) function.
+func bsetmetatable(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 2 {
+		luaErrorString("bad argument #1 to 'setmetatable' (table expected)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'setmetatable' (table expected)")
+		return 0
+	}
+
+	mt := stack[base+2]
+	if mt == nil || mt.IsNil() {
+		tbl.SetMetatable(nil)
+	} else {
+		mtTbl := extractTable(mt)
+		if mtTbl == nil {
+			luaErrorString("bad argument #2 to 'setmetatable' (nil or table expected)")
+			return 0
+		}
+		// SetMetatable expects a types.Table interface.
+		// Our TableImpl wraps a *Table which implements types.Table.
+		// We need to get the underlying *Table.
+		tbl.SetMetatable(getInternalTable(mtTbl))
+	}
+
+	// Return the original table
+	stack[base] = stack[base+1]
+	return 1
+}
+
+// getInternalTable extracts the underlying types.Table from a TableInterface.
+// This is needed because SetMetatable expects types.Table, not TableInterface.
+func getInternalTable(tbl tableapi.TableInterface) types.Table {
+	// Try direct type assertion to types.Table
+	if t, ok := interface{}(tbl).(types.Table); ok {
+		return t
+	}
+	// For our tableWrapper, extract the inner table
+	if tw, ok := interface{}(tbl).(*tableWrapper); ok {
+		if inner := tw.tbl; inner != nil {
+			if t, ok := interface{}(inner).(types.Table); ok {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
+// bgetmetatable implements Lua's getmetatable(object) function.
+func bgetmetatable(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'getmetatable' (value expected)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+
+	mt := tbl.GetMetatable()
+	if mt == nil {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+
+	// Wrap the metatable as a TValue
+	// GetMetatable returns types.Table, we need to wrap it as a TableInterface TValue
+	if mtImpl, ok := mt.(tableapi.TableInterface); ok {
+		stack[base] = &tableWrapper{tbl: mtImpl}
+	} else {
+		stack[base] = types.NewTValueNil()
+	}
+	return 1
+}
+
+// bunpack implements Lua's table.unpack(list [, i [, j]]) function.
+func bunpack(stack []types.TValue, base int) int {
+	nArgs := len(stack) - base - 1
+	if nArgs < 1 {
+		luaErrorString("bad argument #1 to 'unpack' (table expected)")
+		return 0
+	}
+
+	tbl := extractTable(stack[base+1])
+	if tbl == nil {
+		luaErrorString("bad argument #1 to 'unpack' (table expected)")
+		return 0
+	}
+
+	i := types.LuaInteger(1)
+	j := types.LuaInteger(tbl.Len())
+
+	if nArgs >= 2 && stack[base+2] != nil && stack[base+2].IsInteger() {
+		i = stack[base+2].GetInteger()
+	} else if nArgs >= 2 && stack[base+2] != nil && stack[base+2].IsFloat() {
+		i = types.LuaInteger(stack[base+2].GetFloat())
+	}
+	if nArgs >= 3 && stack[base+3] != nil && stack[base+3].IsInteger() {
+		j = stack[base+3].GetInteger()
+	} else if nArgs >= 3 && stack[base+3] != nil && stack[base+3].IsFloat() {
+		j = types.LuaInteger(stack[base+3].GetFloat())
+	}
+
+	if j < i {
+		return 0
+	}
+
+	n := int(j - i + 1)
+	for k := 0; k < n; k++ {
+		val := tbl.GetInt(i + types.LuaInteger(k))
+		if val == nil {
+			val = types.NewTValueNil()
+		}
+		stack[base+k] = val
+	}
+	return n
+}
+
+// bwarn implements Lua's warn() function (stub — prints to stderr).
+func bwarn(stack []types.TValue, base int) int {
+	// Stub: just ignore warnings for now
+	return 0
+}
+
+// =============================================================================
+// Suppress unused import
+// =============================================================================
+var _ = strconv.Itoa // keep strconv import
+
 // makeRequire creates a require GoFunc that captures the registry.
 // This allows require to look up modules in package.loaded.
 func makeRequire(registry tableapi.TableInterface) vm.GoFunc {
@@ -778,6 +1435,23 @@ func (L *LuaState) openBaseLib() {
 	L.setGlobal("tostring", btostring)
 	L.setGlobal("tonumber", btonumber)
 
+	// Phase 2 base functions
+	L.setGlobal("error", berror)
+	L.setGlobal("pcall", bpcall)
+	L.setGlobal("xpcall", bxpcall)
+	L.setGlobal("select", bselect)
+	L.setGlobal("next", bnext)
+	L.setGlobal("ipairs", bipairs)
+	L.setGlobal("pairs", bpairs)
+	L.setGlobal("rawget", brawget)
+	L.setGlobal("rawset", brawset)
+	L.setGlobal("rawlen", brawlen)
+	L.setGlobal("rawequal", brawequal)
+	L.setGlobal("setmetatable", bsetmetatable)
+	L.setGlobal("getmetatable", bgetmetatable)
+	L.setGlobal("unpack", bunpack)
+	L.setGlobal("warn", bwarn)
+
 	// Create package table with loaded and preload sub-tables
 	// Use createModuleTable() to get fresh table instances
 	packageTbl := createModuleTable()
@@ -786,12 +1460,22 @@ func (L *LuaState) openBaseLib() {
 
 	// Pre-populate package.loaded with stub module tables
 	moduleNames := []string{"debug", "string", "math", "table", "io", "os", "coroutine", "utf8"}
+	var tableMod tableapi.TableInterface
 	for _, name := range moduleNames {
 		modTbl := createModuleTable()
 		key := types.NewTValueString(name)
 		loadedTbl.Set(key, &tableWrapper{tbl: modTbl})
 		// Also make each module accessible as a global
 		L.setGlobalValue(name, &tableWrapper{tbl: modTbl})
+		if name == "table" {
+			tableMod = modTbl
+		}
+	}
+
+	// Register table.unpack
+	if tableMod != nil {
+		unpackKey := types.NewTValueString("unpack")
+		tableMod.Set(unpackKey, &goFuncWrapper{fn: bunpack})
 	}
 
 	// Set package.loaded and package.preload in package table
