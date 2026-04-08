@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/akzj/go-lua/state"
 )
@@ -64,23 +65,15 @@ func (r *Runner) Run() (passed, failed int, err error) {
 	return passed, failed, nil
 }
 
-// RunFile executes a single .lua test file.
+// fileTimeout is the maximum time allowed for a single test file.
+const fileTimeout = 3 * time.Second
+
+// RunFile executes a single .lua test file with a timeout.
 // lua-master/testes format: tests use assert() statements.
 // If all asserts pass, execution succeeds. If any assert fails, an error is raised.
 // Returns the test result.
-func (r *Runner) RunFile(path string) (result TestResult) {
+func (r *Runner) RunFile(path string) TestResult {
 	base := filepath.Base(path)
-
-	// Recover from Go panics (e.g. bassert uses panic() since pcall is not yet implemented)
-	defer func() {
-		if r := recover(); r != nil {
-			result = TestResult{
-				Name:   base,
-				Passed: false,
-				Error:  fmt.Sprintf("panic: %v", r),
-			}
-		}
-	}()
 
 	// Read the file
 	code, err := os.ReadFile(path)
@@ -92,24 +85,49 @@ func (r *Runner) RunFile(path string) (result TestResult) {
 		}
 	}
 
-	// Execute the code
-	// lua-master/testes rely on assert() - if execution returns nil, all tests passed
-	err = state.DoString(string(code))
+	type execResult struct {
+		err   error
+		panic interface{}
+	}
 
-	if err != nil {
-		// Extract a clean error message
-		errMsg := r.cleanError(err)
+	ch := make(chan execResult, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- execResult{panic: r}
+			}
+		}()
+		err := state.DoString(string(code))
+		ch <- execResult{err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.panic != nil {
+			return TestResult{
+				Name:   base,
+				Passed: false,
+				Error:  fmt.Sprintf("panic: %v", res.panic),
+			}
+		}
+		if res.err != nil {
+			return TestResult{
+				Name:   base,
+				Passed: false,
+				Error:  r.cleanError(res.err),
+			}
+		}
+		return TestResult{
+			Name:   base,
+			Passed: true,
+			Error:  "",
+		}
+	case <-time.After(fileTimeout):
 		return TestResult{
 			Name:   base,
 			Passed: false,
-			Error:  errMsg,
+			Error:  fmt.Sprintf("timeout after %v", fileTimeout),
 		}
-	}
-
-	return TestResult{
-		Name:   base,
-		Passed: true,
-		Error:  "",
 	}
 }
 
