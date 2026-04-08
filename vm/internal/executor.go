@@ -679,7 +679,12 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if ra.IsInteger() {
 			cond = ra.GetInteger() == types.LuaInteger(b)
 		} else if ra.IsFloat() {
-			cond = float64(ra.GetFloat()) == float64(b)
+			// Lua 5.4: convert float to int if exact, then compare as integers
+			f := float64(ra.GetFloat())
+			fi := int64(f)
+			if f == float64(fi) {
+				cond = fi == int64(b)
+			}
 		}
 		if cond != vmapi.HasKBit(inst) {
 			e.pc++
@@ -1822,8 +1827,15 @@ func (e *Executor) lessThan(a, b *TValue) bool {
 	if a.IsInteger() && b.IsInteger() {
 		return a.GetInteger() < b.GetInteger()
 	}
-	if a.IsNumber() && b.IsNumber() {
-		return numToFloat64(a) < numToFloat64(b)
+	if a.IsFloat() && b.IsFloat() {
+		return float64(a.GetFloat()) < float64(b.GetFloat())
+	}
+	// Mixed int/float: use luaLessThanMixed for precision
+	if a.IsInteger() && b.IsFloat() {
+		return intLessFloat(int64(a.GetInteger()), float64(b.GetFloat()))
+	}
+	if a.IsFloat() && b.IsInteger() {
+		return floatLessInt(float64(a.GetFloat()), int64(b.GetInteger()))
 	}
 	if a.IsString() && b.IsString() {
 		sa, _ := a.GetValue().(string)
@@ -1837,8 +1849,15 @@ func (e *Executor) lessEqual(a, b types.TValue) bool {
 	if a.IsInteger() && b.IsInteger() {
 		return a.GetInteger() <= b.GetInteger()
 	}
-	if a.IsNumber() && b.IsNumber() {
+	if a.IsFloat() && b.IsFloat() {
 		return numToFloat64(a) <= numToFloat64(b)
+	}
+	// Mixed int/float: use precision-safe helpers
+	if a.IsInteger() && b.IsFloat() {
+		return intLessEqualFloat(int64(a.GetInteger()), float64(b.GetFloat()))
+	}
+	if a.IsFloat() && b.IsInteger() {
+		return floatLessEqualInt(float64(a.GetFloat()), int64(b.GetInteger()))
 	}
 	if a.IsString() && b.IsString() {
 		sa, _ := a.GetValue().(string)
@@ -1846,6 +1865,65 @@ func (e *Executor) lessEqual(a, b types.TValue) bool {
 		return sa <= sb
 	}
 	return false
+}
+
+
+// Lua 5.4 mixed int/float comparison helpers.
+// These avoid precision loss by not converting large ints to float.
+
+// intLessFloat: is int64(i) < float64(f)?
+func intLessFloat(i int64, f float64) bool {
+	if math.IsNaN(f) {
+		return false // NaN is not less than anything
+	}
+	if f >= 9223372036854775808.0 { // f >= 2^63
+		return true // any int64 < f
+	}
+	if f < -9223372036854775808.0 { // f < -2^63
+		return false // any int64 > f
+	}
+	// f is in int64 range; truncate and compare
+	fi := int64(f)
+	if i < fi {
+		return true
+	}
+	if i > fi {
+		return false
+	}
+	// i == fi; check if f has a fractional part > 0
+	return float64(fi) < f
+}
+
+// floatLessInt: is float64(f) < int64(i)?
+func floatLessInt(f float64, i int64) bool {
+	if math.IsNaN(f) {
+		return false
+	}
+	if f >= 9223372036854775808.0 {
+		return false
+	}
+	if f < -9223372036854775808.0 {
+		return true
+	}
+	fi := int64(f)
+	if fi < i {
+		return true
+	}
+	if fi > i {
+		return false
+	}
+	// fi == i; check if f has a fractional part < 0 (i.e., f < fi)
+	return f < float64(fi)
+}
+
+// intLessEqualFloat: is int64(i) <= float64(f)?
+func intLessEqualFloat(i int64, f float64) bool {
+	return !floatLessInt(f, i)
+}
+
+// floatLessEqualInt: is float64(f) <= int64(i)?
+func floatLessEqualInt(f float64, i int64) bool {
+	return !intLessFloat(i, f)
 }
 
 func (e *Executor) equalValues(a, b *TValue) bool {
@@ -1858,9 +1936,27 @@ func (e *Executor) equalValues(a, b *TValue) bool {
 	if a.IsInteger() && b.IsInteger() {
 		return a.GetInteger() == b.GetInteger()
 	}
-	// Mixed int/float comparison
-	if a.IsNumber() && b.IsNumber() {
-		return numToFloat64(a) == numToFloat64(b)
+	if a.IsFloat() && b.IsFloat() {
+		return float64(a.GetFloat()) == float64(b.GetFloat())
+	}
+	// Mixed int/float comparison (Lua 5.4 semantics):
+	// Convert the float to int64. If exact match, compare as integers.
+	// Otherwise they are NOT equal (avoids precision loss).
+	if a.IsFloat() && b.IsInteger() {
+		f := float64(a.GetFloat())
+		fi := int64(f)
+		if f == float64(fi) {
+			return types.LuaInteger(fi) == b.GetInteger()
+		}
+		return false
+	}
+	if a.IsInteger() && b.IsFloat() {
+		f := float64(b.GetFloat())
+		fi := int64(f)
+		if f == float64(fi) {
+			return a.GetInteger() == types.LuaInteger(fi)
+		}
+		return false
 	}
 	if a.IsBoolean() && b.IsBoolean() {
 		return a.IsTrue() == b.IsTrue()
