@@ -1152,24 +1152,33 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// Check for vm/api.GoFunc (from goFuncWrapper via setGlobal).
 		// This uses []types.TValue, not the internal GoFunc type.
 		if apiFunc, ok := val.(vmapi.GoFunc); ok {
-			// Bridge: convert []TValue to []types.TValue for the call.
-			// nArgs already includes the function slot (B field from CALL).
-			args := make([]types.TValue, nArgs)
+			// Bridge: GoFuncs count args as len(stack)-base-1.
+			// Some GoFuncs return more values than args (e.g. ipairs returns 3
+			// from 2 args). We allocate extra space and offset args so the
+			// GoFunc sees the correct arg count.
+			extra := 4 // room for extra return values beyond nArgs
+			sliceSize := nArgs + 2*extra // extra before args (gfBase) + extra after args (returns)
+			args := make([]types.TValue, sliceSize)
+			gfBase := extra // args start at offset extra
 			for i := 0; i < nArgs; i++ {
-				args[i] = e.reg(base + i)
+				args[gfBase+i] = e.reg(base + i)
 			}
-			nRet := apiFunc(args, 0)
-			// Copy results back from args to VM stack.
-			// GoFuncs write results starting at args[0] (= stack[base]).
+			nRet := apiFunc(args, gfBase)
+			// Copy results back: GoFunc writes to args[gfBase..gfBase+nRet-1]
 			for i := 0; i < nRet; i++ {
-				result := args[i]
+				result := args[gfBase+i]
 				dst := e.reg(base + i)
+				if result == nil {
+					dst.Tt = uint8(types.LUA_TNIL)
+					dst.Value.Variant = types.ValueGC
+					dst.Value.Data_ = nil
+					continue
+				}
 				variant, data := extractVariantAndData(result)
 				dst.Tt = uint8(result.GetTag())
 				dst.Value.Variant = variant
 				dst.Value.Data_ = data
 			}
-			// Clear remaining slots if caller expects more results
 			if nResults > nRet && nResults != -1 {
 				for i := nRet; i < nResults; i++ {
 					dst := e.reg(base + i)
@@ -1191,16 +1200,24 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// fn.GetValue() returns *goFuncWrapper. We need to unwrap it.
 		if unwrapper, ok := val.(goFuncUnwrapper); ok {
 			apiFunc := unwrapper.unwrapGoFunc()
-			// Bridge: convert []TValue to []types.TValue for the call.
-			// nArgs already includes the function slot (B field from CALL).
-			args := make([]types.TValue, nArgs)
+			// Bridge: same gfBase offset approach as apiFunc bridge.
+			extra := 4
+			sliceSize := nArgs + 2*extra
+			args := make([]types.TValue, sliceSize)
+			gfBase := extra
 			for i := 0; i < nArgs; i++ {
-				args[i] = e.reg(base + i)
+				args[gfBase+i] = e.reg(base + i)
 			}
-			nRet := apiFunc(args, 0)
+			nRet := apiFunc(args, gfBase)
 			for i := 0; i < nRet; i++ {
-				result := args[i]
+				result := args[gfBase+i]
 				dst := e.reg(base + i)
+				if result == nil {
+					dst.Tt = uint8(types.LUA_TNIL)
+					dst.Value.Variant = types.ValueGC
+					dst.Value.Data_ = nil
+					continue
+				}
 				variant, data := extractVariantAndData(result)
 				dst.Tt = uint8(result.GetTag())
 				dst.Value.Variant = variant

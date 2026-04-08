@@ -686,6 +686,9 @@ func (ti *TableImpl) GetInt(key typesapi.LuaInteger) typesapi.TValue {
 		return NewTValueNil()
 	}
 	// Search in hash part
+	if ti.tbl.Node == nil {
+		return NewTValueNil()
+	}
 	n := hashint(ti.tbl, key)
 	for {
 		if keyisinteger(n) && keyival(n) == key {
