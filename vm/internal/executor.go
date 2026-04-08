@@ -130,7 +130,7 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 		return types.ValueGC, false
 	}
 	if v.IsTable() {
-		return types.ValueGC, v.GetGC()
+		return types.ValueGC, v.GetValue()
 	}
 	if v.IsLightCFunction() {
 		return types.ValueCFunction, v.GetPointer()
