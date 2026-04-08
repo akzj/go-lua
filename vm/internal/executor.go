@@ -325,6 +325,17 @@ func (e *Executor) SetGlobalEnv(env tableapi.TableInterface) {
 	e.globalEnvPtr = &globalEnvWrapper{env: env}
 }
 
+// SetGlobalEnvUpval initializes an UpVal to point to the global environment table.
+// Used to set up the main frame's _ENV upvalue.
+func (e *Executor) SetGlobalEnvUpval(uv *UpVal) {
+	if e.globalEnvPtr != nil {
+		uv.Value = TValue{
+			Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
+			Tt:    uint8(types.LUA_VLIGHTUSERDATA),
+		}
+	}
+}
+
 func (e *Executor) Execute(inst opcodes.Instruction) bool {
 	op := vmapi.GetOpCode(inst)
 	return e.executeOp(op, inst)
@@ -952,6 +963,13 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 					// Copy from parent's upvalue (chained capture)
 					if frame.upvals != nil && int(desc.Idx) < len(frame.upvals) {
 						newClosure.upvals[i] = frame.upvals[desc.Idx]
+					} else if desc.Name == "_ENV" && e.globalEnvPtr != nil {
+						// Main frame has no upvals array but child needs _ENV — use globalEnvPtr
+						envUpval := &UpVal{}
+						envUpval.Value.Tt = uint8(types.LUA_VLIGHTUSERDATA)
+						envUpval.Value.Value.Variant = types.ValuePointer
+						envUpval.Value.Value.Data_ = unsafe.Pointer(e.globalEnvPtr)
+						newClosure.upvals[i] = envUpval
 					} else {
 						// Fallback: create nil upvalue
 						newClosure.upvals[i] = &UpVal{}
