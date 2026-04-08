@@ -649,6 +649,10 @@ func bprint(stack []types.TValue, base int) int {
 			if s, ok := v.GetValue().(string); ok {
 				fmt.Print(s)
 			}
+		} else if v.IsFunction() {
+			fmt.Printf("function: %p", v.GetValue())
+		} else if v.IsTable() {
+			fmt.Printf("table: %p", v.GetValue())
 		} else {
 			fmt.Print(v.GetBaseType())
 		}
@@ -1483,6 +1487,9 @@ func makeRequire(registry tableapi.TableInterface, globalEnv tableapi.TableInter
 	}
 }
 
+// gcMode tracks the current GC mode for collectgarbage mode switching.
+var gcMode = "incremental" // Lua default
+
 // bcollectgarbage implements Lua's collectgarbage([opt [, arg]]) function.
 // Stub implementation — Go manages its own GC, so most operations are no-ops.
 func bcollectgarbage(stack []types.TValue, base int) int {
@@ -1505,10 +1512,14 @@ func bcollectgarbage(stack []types.TValue, base int) int {
 		stack[base] = types.NewTValueBoolean(true)
 		return 1
 	case "incremental":
-		stack[base] = types.NewTValueString("incremental")
+		prev := gcMode
+		gcMode = "incremental"
+		stack[base] = types.NewTValueString(prev)
 		return 1
 	case "generational":
-		stack[base] = types.NewTValueString("generational")
+		prev := gcMode
+		gcMode = "generational"
+		stack[base] = types.NewTValueString(prev)
 		return 1
 	case "stop", "restart":
 		stack[base] = types.NewTValueBoolean(true)

@@ -2197,16 +2197,18 @@ func (p *parser) parseAdd() (astapi.ExpNode, error) {
 
 // parsePow handles the power operator '^' which has the highest precedence
 // and is right-associative: a^b^c = a^(b^c)
+// Left operand is parsePrimary (NOT parseUnary) because unary ops have
+// lower precedence than ^: -2^2 = -(2^2), not (-2)^2
 func (p *parser) parsePow() (astapi.ExpNode, error) {
-	left, err := p.parseUnary()
+	left, err := p.parsePrimary()
 	if err != nil {
 		return nil, err
 	}
 	if p.current().Type == lexapi.TOKEN_POW {
 		tok := p.current()
 		p.next()
-		// Right-associative: parsePow instead of parseUnary
-		right, err := p.parsePow()
+		// Right-associative, but allow unary on right: 2^-3 = 2^(-3)
+		right, err := p.parseUnary()
 		if err != nil {
 			return nil, err
 		}
@@ -2216,7 +2218,7 @@ func (p *parser) parsePow() (astapi.ExpNode, error) {
 }
 
 func (p *parser) parseMul() (astapi.ExpNode, error) {
-	left, err := p.parsePow()
+	left, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
@@ -2234,7 +2236,7 @@ func (p *parser) parseMul() (astapi.ExpNode, error) {
 		}
 		tok := p.current()
 		p.next()
-		right, err := p.parsePow()
+		right, err := p.parseUnary()
 		if err != nil {
 			return nil, err
 		}
@@ -2283,7 +2285,7 @@ func (p *parser) parseUnary() (astapi.ExpNode, error) {
 		}
 		return &unopExp{op: astapi.UNOP_LEN, exp: exp, baseNode: baseNode{line: tok.Line, column: tok.Column}}, nil
 	}
-	return p.parsePrimary()
+	return p.parsePow()
 }
 
 func (p *parser) parsePrimary() (astapi.ExpNode, error) {
