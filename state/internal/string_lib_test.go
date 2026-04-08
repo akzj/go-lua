@@ -503,3 +503,245 @@ func TestBstringPacksize(t *testing.T) {
 		t.Fatalf("expected 7, got %d", stack[0].GetInteger())
 	}
 }
+
+// Additional pattern matching tests from Lua test suite scenarios
+func TestLuaPatternFindAdvanced(t *testing.T) {
+	tests := []struct {
+		name   string
+		src    string
+		pat    string
+		init   int
+		anchor bool
+		wantS  int
+		wantE  int
+		found  bool
+	}{
+		// Lazy quantifier
+		{"lazy -", "aaab", "a-b", 0, false, 0, 4, true},
+		{"lazy - minimal", "ab", "a-b", 0, false, 0, 2, true},
+		// Optional ?
+		{"optional ?", "ab", "a?b", 0, false, 0, 2, true},
+		{"optional ? no match", "b", "a?b", 0, false, 0, 1, true},
+		// Character classes
+		{"word %w", "hello world", "%w+", 0, false, 0, 5, true},
+		{"non-word %W", "hello world", "%W+", 0, false, 5, 6, true},
+		{"lower %l", "Hello", "%l+", 0, false, 1, 5, true},
+		{"upper %u", "Hello", "%u", 0, false, 0, 1, true},
+		{"punct %p", "hello, world", "%p", 0, false, 5, 6, true},
+		{"hex %x", "ff00", "%x+", 0, false, 0, 4, true},
+		{"ctrl %c", "a\nb", "%c", 0, false, 1, 2, true},
+		// Anchors
+		{"anchor $", "hello", "lo$", 0, false, 3, 5, true},
+		{"anchor $ fail", "hello!", "lo$", 0, false, 0, 0, false},
+		// Escaped special chars
+		{"escaped dot", "a.b", "a%.b", 0, false, 0, 3, true},
+		{"escaped dot no match", "axb", "a%.b", 0, false, 0, 0, false},
+		// Negated set
+		{"negated set", "abc123", "[^%d]+", 0, false, 0, 3, true},
+		// Init offset
+		{"init offset", "abcabc", "abc", 3, false, 3, 6, true},
+		// %g (printable non-space)
+		{"printable %g", "  hello  ", "%g+", 0, false, 2, 7, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, e, _, _, found := luaPatternFind(tt.src, tt.pat, tt.init, tt.anchor)
+			if found != tt.found {
+				t.Fatalf("found=%v, want %v", found, tt.found)
+			}
+			if found {
+				if s != tt.wantS || e != tt.wantE {
+					t.Fatalf("got (%d,%d), want (%d,%d)", s, e, tt.wantS, tt.wantE)
+				}
+			}
+		})
+	}
+}
+
+func TestLuaPatternMultiCapture(t *testing.T) {
+	// Two captures
+	s, e, caps, ncap, found := luaPatternFind("hello world", "(%w+)%s+(%w+)", 0, false)
+	if !found {
+		t.Fatal("expected match")
+	}
+	if s != 0 || e != 11 {
+		t.Fatalf("expected (0,11), got (%d,%d)", s, e)
+	}
+	if ncap != 2 {
+		t.Fatalf("expected 2 captures, got %d", ncap)
+	}
+	if caps[0].init != 0 || caps[0].len != 5 {
+		t.Fatalf("cap1: expected (0,5), got (%d,%d)", caps[0].init, caps[0].len)
+	}
+	if caps[1].init != 6 || caps[1].len != 5 {
+		t.Fatalf("cap2: expected (6,5), got (%d,%d)", caps[1].init, caps[1].len)
+	}
+}
+
+func TestLuaPatternPositionCapture(t *testing.T) {
+	_, _, caps, ncap, found := luaPatternFind("hello", "()()", 0, false)
+	if !found {
+		t.Fatal("expected match")
+	}
+	if ncap != 2 {
+		t.Fatalf("expected 2 captures, got %d", ncap)
+	}
+	if caps[0].len != capPosition || caps[0].init != 0 {
+		t.Fatalf("cap1: expected position capture at 0, got init=%d len=%d", caps[0].init, caps[0].len)
+	}
+}
+
+func TestBstringGmatch(t *testing.T) {
+	stack := makeStack(0,
+		types.NewTValueString("hello world foo"),
+		types.NewTValueString("%w+"),
+	)
+	nret := bstringGmatch(stack, 0)
+	if nret != 1 {
+		t.Fatalf("expected 1 return (iterator), got %d", nret)
+	}
+	// The result should be a function (goFuncWrapper)
+	if !stack[0].IsFunction() {
+		t.Fatalf("expected function, got tag %d", stack[0].GetTag())
+	}
+
+	// Call the iterator multiple times - use goFuncWrapper directly (internal package)
+	gfw := stack[0].(*goFuncWrapper)
+	iter := gfw.fn
+	
+	iterStack := make([]types.TValue, 5)
+	for i := range iterStack {
+		iterStack[i] = types.NewTValueNil()
+	}
+
+	// First call: "hello"
+	n := iter(iterStack, 0)
+	if n != 1 || iterStack[0].GetValue().(string) != "hello" {
+		t.Fatalf("iter 1: expected 'hello', got %v (n=%d)", iterStack[0].GetValue(), n)
+	}
+
+	// Second call: "world"
+	n = iter(iterStack, 0)
+	if n != 1 || iterStack[0].GetValue().(string) != "world" {
+		t.Fatalf("iter 2: expected 'world', got %v", iterStack[0].GetValue())
+	}
+
+	// Third call: "foo"
+	n = iter(iterStack, 0)
+	if n != 1 || iterStack[0].GetValue().(string) != "foo" {
+		t.Fatalf("iter 3: expected 'foo', got %v", iterStack[0].GetValue())
+	}
+
+	// Fourth call: nil (exhausted)
+	n = iter(iterStack, 0)
+	if n != 1 || !iterStack[0].IsNil() {
+		t.Fatalf("iter 4: expected nil, got %v", iterStack[0].GetValue())
+	}
+}
+
+func TestBstringFormatUnsigned(t *testing.T) {
+	// Lua's %x with negative should produce unsigned hex
+	stack := makeStack(0,
+		types.NewTValueString("%x"),
+		types.NewTValueInteger(-1),
+	)
+	nret := bstringFormat(stack, 0)
+	if nret != 1 {
+		t.Fatalf("expected 1 return, got %d", nret)
+	}
+	got := stack[0].GetValue().(string)
+	if got != "ffffffffffffffff" {
+		t.Fatalf("expected 'ffffffffffffffff', got %q", got)
+	}
+}
+
+func TestBstringGsubTable(t *testing.T) {
+	// Create a table with key "hello" -> "world"
+	tbl := createModuleTable()
+	tbl.Set(types.NewTValueString("hello"), types.NewTValueString("world"))
+
+	stack := makeStack(0,
+		types.NewTValueString("hello"),
+		types.NewTValueString("(%w+)"),
+		&tableWrapper{tbl: tbl},
+	)
+	nret := bstringGsub(stack, 0)
+	if nret != 2 {
+		t.Fatalf("expected 2 returns, got %d", nret)
+	}
+	got := stack[0].GetValue().(string)
+	if got != "world" {
+		t.Fatalf("expected 'world', got %q", got)
+	}
+}
+
+func TestBstringFindInit(t *testing.T) {
+	// string.find with init parameter
+	stack := makeStack(0,
+		types.NewTValueString("abcabc"),
+		types.NewTValueString("abc"),
+		types.NewTValueInteger(2),
+	)
+	nret := bstringFind(stack, 0)
+	if nret != 2 {
+		t.Fatalf("expected 2 returns, got %d", nret)
+	}
+	if stack[0].GetInteger() != 4 {
+		t.Fatalf("expected start=4, got %d", stack[0].GetInteger())
+	}
+	if stack[1].GetInteger() != 6 {
+		t.Fatalf("expected end=6, got %d", stack[1].GetInteger())
+	}
+}
+
+func TestBstringMatchMultiCapture(t *testing.T) {
+	stack := makeStackWithResults(0, 5,
+		types.NewTValueString("2023-01-15"),
+		types.NewTValueString("(%d+)-(%d+)-(%d+)"),
+	)
+	nret := bstringMatch(stack, 0)
+	if nret != 3 {
+		t.Fatalf("expected 3 returns, got %d", nret)
+	}
+	if stack[0].GetValue().(string) != "2023" {
+		t.Fatalf("cap1: expected '2023', got %q", stack[0].GetValue())
+	}
+	if stack[1].GetValue().(string) != "01" {
+		t.Fatalf("cap2: expected '01', got %q", stack[1].GetValue())
+	}
+	if stack[2].GetValue().(string) != "15" {
+		t.Fatalf("cap3: expected '15', got %q", stack[2].GetValue())
+	}
+}
+
+func TestBstringSubNegativeIndices(t *testing.T) {
+	// string.sub("123456789", mini, -4) == "123456"
+	stack := makeStack(0,
+		types.NewTValueString("123456789"),
+		types.NewTValueInteger(-1000000),
+		types.NewTValueInteger(-4),
+	)
+	nret := bstringSub(stack, 0)
+	if nret != 1 {
+		t.Fatalf("expected 1 return, got %d", nret)
+	}
+	got := stack[0].GetValue().(string)
+	if got != "123456" {
+		t.Fatalf("expected '123456', got %q", got)
+	}
+}
+
+func TestBstringFindNullByte(t *testing.T) {
+	// Lua strings can contain null bytes
+	stack := makeStack(0,
+		types.NewTValueString("a\x00b"),
+		types.NewTValueString("b"),
+	)
+	nret := bstringFind(stack, 0)
+	if nret != 2 {
+		t.Fatalf("expected 2 returns, got %d", nret)
+	}
+	if stack[0].GetInteger() != 3 {
+		t.Fatalf("expected start=3, got %d", stack[0].GetInteger())
+	}
+}
