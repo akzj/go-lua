@@ -676,7 +676,31 @@ func (fs *FuncState) compileReturnStat(stat astapi.StatNode) error {
 	if firstReg == -1 {
 		firstReg = 0
 	}
-	fs.emitABC(int(opcodes.OP_RETURN), firstReg, n+1, 0)
+	// If last expression is a FuncCall or vararg, use B=0 (multi-return)
+	bField := n + 1
+	lastExp := exps[len(exps)-1]
+	if _, ok := lastExp.(astapi.FuncCall); ok {
+		// Patch last CALL's C to 0 (variable results)
+		for i := len(fs.Proto.code) - 1; i >= 0; i-- {
+			op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
+			if op == opcodes.OP_CALL || op == opcodes.OP_TAILCALL {
+				fs.Proto.code[i] &= 0x00FFFFFF
+				break
+			}
+		}
+		bField = 0
+	} else if kinded, ok := lastExp.(interface{ Kind() astapi.ExpKind }); ok && kinded.Kind() == astapi.EXP_VARARG {
+		// Patch last VARARG's C to 0 (all varargs)
+		for i := len(fs.Proto.code) - 1; i >= 0; i-- {
+			op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
+			if op == opcodes.OP_VARARG {
+				fs.Proto.code[i] &= 0x00FFFFFF
+				break
+			}
+		}
+		bField = 0
+	}
+	fs.emitABC(int(opcodes.OP_RETURN), firstReg, bField, 0)
 	
 	return nil
 }
@@ -1602,7 +1626,29 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 			if firstReg == -1 {
 				firstReg = 0
 			}
-			nestedFs.emitABC(int(opcodes.OP_RETURN), firstReg, n+1, 0)
+			// If last return expr is FuncCall or vararg, use B=0 (multi-return)
+			bField := n + 1
+			lastExp := retExp[len(retExp)-1]
+			if _, ok := lastExp.(astapi.FuncCall); ok {
+				for i := len(nestedProto.code) - 1; i >= 0; i-- {
+					op := opcodes.OpCode(nestedProto.code[i] & 0x7F)
+					if op == opcodes.OP_CALL || op == opcodes.OP_TAILCALL {
+						nestedProto.code[i] &= 0x00FFFFFF
+						break
+					}
+				}
+				bField = 0
+			} else if kinded, ok := lastExp.(interface{ Kind() astapi.ExpKind }); ok && kinded.Kind() == astapi.EXP_VARARG {
+				for i := len(nestedProto.code) - 1; i >= 0; i-- {
+					op := opcodes.OpCode(nestedProto.code[i] & 0x7F)
+					if op == opcodes.OP_VARARG {
+						nestedProto.code[i] &= 0x00FFFFFF
+						break
+					}
+				}
+				bField = 0
+			}
+			nestedFs.emitABC(int(opcodes.OP_RETURN), firstReg, bField, 0)
 		}
 		
 		// Add implicit return if last instruction is not a return

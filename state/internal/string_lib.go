@@ -228,6 +228,17 @@ func bstringRep(stack []types.TValue, base int) int {
 		return 1
 	}
 
+	// Check for resulting string too large
+	sLen := int64(len(s))
+	sepLen := int64(len(sep))
+	resultLen := sLen * int64(n)
+	if sep != "" {
+		resultLen += sepLen * int64(n-1)
+	}
+	if resultLen > 1<<30 || resultLen < 0 {
+		luaErrorString("resulting string too large")
+	}
+
 	if sep == "" {
 		stack[base] = types.NewTValueString(strings.Repeat(s, n))
 		return 1
