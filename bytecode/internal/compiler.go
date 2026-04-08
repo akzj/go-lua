@@ -424,7 +424,9 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	// Register the local variable
 	if funcName != "" {
 		fs.locals.Add(funcName, reg, 0)
-
+		// Also store in _ENV so nested functions can find it via GETTABUP
+		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
+		fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, reg)
 	}
 	
 	return nil
@@ -1861,6 +1863,19 @@ func (p *Prototype) GetSubProtos() []bcapi.Prototype {
 	result := make([]bcapi.Prototype, len(p.p))
 	for i, proto := range p.p {
 		result[i] = proto
+	}
+	return result
+}
+
+func (p *Prototype) GetUpvalues() []bcapi.UpvalueDesc {
+	result := make([]bcapi.UpvalueDesc, len(p.upvalues))
+	for i, uv := range p.upvalues {
+		result[i] = bcapi.UpvalueDesc{
+			Name:    uv.Name,
+			Instack: uv.Instack,
+			Idx:     uv.Idx,
+			Kind:    uv.Kind,
+		}
 	}
 	return result
 }

@@ -302,7 +302,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		
 		if hasUpvals {
 			// Normal path: get upval from frame
-			e.finishGet(e.RA(a), &frame.upvals[b].Value, e.rk(c))
+			// GETTABUP C field is always a constant index, use e.k() not e.rk()
+			e.finishGet(e.RA(a), &frame.upvals[b].Value, e.k(int(c)))
 		} else if b == 0 {
 			// b==0 means upval[0]/_ENV. c is raw 0-based constant index.
 			if e.globalEnvPtr != nil {
@@ -805,6 +806,23 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// This satisfies the luaClosure duck-type interface so executeCall can use it.
 		newClosure := &luaClosureImpl{proto: subProto}
 
+		// Propagate upvalues to the new closure.
+		// The compiler treats all non-local variables as global lookups via GETTABUP(upval[0]=_ENV).
+		// We must give the new closure upval[0] = _ENV so nested functions can access globals.
+		if frame.upvals != nil && len(frame.upvals) > 0 {
+			// Parent frame has upvals — copy them (includes _ENV at index 0)
+			newClosure.upvals = make([]*UpVal, len(frame.upvals))
+			copy(newClosure.upvals, frame.upvals)
+		} else if e.globalEnvPtr != nil {
+			// Top-level frame: create _ENV upval from globalEnvPtr
+			envUpval := &UpVal{}
+			envUpval.Value.Tt = uint8(types.LUA_VLIGHTUSERDATA)
+			envUpval.Value.Value.Variant = types.ValuePointer
+			envUpval.Value.Value.Data_ = unsafe.Pointer(e.globalEnvPtr)
+			newClosure.upvals = []*UpVal{envUpval}
+		} else {
+		}
+
 		// Set the result register to an LClosure TValue
 		dst := e.reg(frameBase(e) + a)
 		dst.Tt = uint8(types.Ctb(int(types.LUA_VLCL)))
@@ -1082,13 +1100,19 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// Build kvalues from prototype constants
 		kvals := convertProtoConstants(proto)
 
-		// Push new frame
+		// Push new frame — COPY the closure TValue so it survives stack mutations
+		// (OP_RETURN writes return values to calleeBase, which would overwrite fn)
+		closureCopy := &TValue{Value: fn.Value, Tt: fn.Tt}
 		newFrame := &Frame{
-			Closure: fn,
+			Closure: closureCopy,
 			base:    base,
 			prev:    e.currentFrame(),
 			savedPC: 0,
 			kvalues: kvals,
+		}
+		// Copy upvalues from the closure to the frame so GETTABUP/GETUPVAL can find them
+		if lci, ok := lc.(*luaClosureImpl); ok && lci.upvals != nil {
+			newFrame.upvals = lci.upvals
 		}
 		e.frames = append(e.frames, newFrame)
 
