@@ -3,6 +3,7 @@ package internal
 
 import (
 	"fmt"
+	"os"
 	"math"
 	"unsafe"
 
@@ -117,6 +118,10 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 	}
 	if v.IsNil() {
 		return types.ValueGC, nil
+	}
+	// Check IsFunction BEFORE IsTrue (goFuncWrapper returns true for both)
+	if v.IsFunction() {
+		return types.ValueGC, v.GetValue()
 	}
 	if v.IsTrue() {
 		return types.ValueGC, true
@@ -293,14 +298,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			// Normal path: get upval from frame
 			e.finishGet(e.reg(a), &frame.upvals[b].Value, e.rk(c))
 		} else if b == 0 && c >= 256 {
-			// No upvals - check if this is print("..."), otherwise use globalEnv
-			constIdx := c - 256
-			kval := e.k(constIdx)
-			if name, ok := kval.GetValue().(string); ok && name == "print" {
-				tv := newLightCFunctionValue(printBuiltin)
-				e.setReg(a, tv)
-			} else if e.globalEnvPtr != nil {
-				// Fallback to globalEnv for other globals (stored as lightuserdata)
+			// No upvals (b==0 means upval[0]/_ENV) - look up in globalEnv.
+			// c >= 256 means it's a string constant, c - 256 is the constant index.
+			if e.globalEnvPtr != nil {
 				globalTValue := &TValue{
 					Value: Value{Variant: types.ValuePointer, Data_: unsafe.Pointer(e.globalEnvPtr)},
 					Tt:    uint8(types.LUA_VLIGHTUSERDATA),
@@ -880,19 +880,32 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 
 	// Handle LightCFunction (raw C function pointer, e.g. builtin print)
 	if fn.IsLightCFunction() {
+		// fn.GetValue() returns Value.Data_. For setGlobal, this is the
+		// unsafe.Pointer value that was stored directly.
 		ptr := fn.GetValue()
-		if ptr == unsafe.Pointer(printBuiltin) {
+		if ptr == nil {
+			e.err = fmt.Errorf("attempt to call nil light C function")
+			return false
+		}
+		rawPtr, ok := ptr.(unsafe.Pointer)
+		if !ok {
+			e.err = fmt.Errorf("light C function has invalid pointer type")
+			return false
+		}
+		if rawPtr == unsafe.Pointer(printBuiltin) {
 			e.builtinPrint(base, nArgs)
 			return true
 		}
-		// For other light C functions, try GoFunc duck-type
-		if gf, ok := ptr.(GoFunc); ok {
-			gf(e.stack, base)
-			// The function pushed nRet results starting at stack[base]
-			// (callee's expected return area is the same as caller's expected area)
+		// Dereference the pointer to get the GoFunc interface{}.
+		// setGlobal stores: NewTValueLightCFunction(unsafe.Pointer(fn))
+		// So fn.GetValue() == unsafe.Pointer(fn) == &fn_variable.
+		// Dereferencing: *(*interface{})(rawPtr) gives us fn_variable.
+		gf := *(*interface{})(rawPtr)
+		if f, ok := gf.(GoFunc); ok {
+			f(e.stack, base)
 			return true
 		}
-		e.err = fmt.Errorf("attempt to call unsupported light C function")
+		e.err = fmt.Errorf("attempt to call non-Go-function light C function")
 		return false
 	}
 
@@ -910,7 +923,31 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 
 	// Handle Lua closures (LClosure)
 	if fn.IsLClosure() {
-		lc, ok := fn.GetValue().(luaClosure)
+		val := fn.GetValue()
+
+		// Check for vm/api.GoFunc (from goFuncWrapper via setGlobal).
+		// This uses []types.TValue, not the internal GoFunc type.
+		if apiFunc, ok := val.(vmapi.GoFunc); ok {
+			// Bridge: convert []TValue to []types.TValue for the call.
+			// Use reg() which auto-grows the stack.
+			args := make([]types.TValue, nArgs+1) // +1 for the function itself
+			for i := 0; i <= nArgs; i++ {
+				args[i] = e.reg(base + i)
+			}
+			nRet := apiFunc(args, 0)
+			// For now, assume nRet is pushed onto stack by the function itself.
+			_ = nRet
+			return true
+		}
+
+		// Check for internal GoFunc (direct GoFunc storage)
+		if gf, ok := val.(GoFunc); ok {
+			gf(e.stack, base)
+			return true
+		}
+
+		// Otherwise it's a real Lua closure
+		lc, ok := val.(luaClosure)
 		if !ok {
 			e.err = fmt.Errorf("LClosure value does not implement luaClosure interface")
 			return false
@@ -988,6 +1025,7 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 	numArgs := nArgs - 1 // nArgs includes the function itself
 	if numArgs < 1 {
 		fmt.Println()
+		os.Stdout.Sync()
 		return
 	}
 	
@@ -1026,6 +1064,7 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 		}
 	}
 	fmt.Println()
+		os.Stdout.Sync()
 }
 
 // printBuiltin is the actual print function implementation
@@ -1099,14 +1138,17 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 				tbl2 := e.getTable(tval)
 				if tbl2 != nil {
 					result := tbl2.Get(key)
-					if rv, ok := result.(*TValue); ok {
-						e.copyValue(ra, rv)
-					} else {
-						variant, data := extractVariantAndData(result)
-						ra.Tt = uint8(result.GetTag())
-						ra.Value.Variant = variant
-						ra.Value.Data_ = data
+					if result == nil {
+						e.setNil(ra)
+						return
 					}
+					// result is *table/internal.TValue which implements types.TValue
+					// Use extractVariantAndData to get the data
+					variant, data := extractVariantAndData(result)
+					// Apply Ctb to match IsLClosure() etc checks (expects BIT_ISCOLLECTABLE)
+					ra.Tt = uint8(types.Ctb(result.GetTag()))
+					ra.Value.Variant = variant
+					ra.Value.Data_ = data
 					return
 				}
 			}

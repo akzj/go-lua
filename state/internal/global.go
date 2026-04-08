@@ -6,6 +6,7 @@ import (
 	memapi "github.com/akzj/go-lua/mem/api"
 	"github.com/akzj/go-lua/state/api"
 	tableapi "github.com/akzj/go-lua/table/api"
+	"github.com/akzj/go-lua/vm"
 )
 
 // globalState is the concrete implementation of GlobalState.
@@ -15,6 +16,7 @@ type globalState struct {
 	registry  tableapi.TableInterface  // Global registry
 	mainThread *LuaState         // Main thread (the one that created this global state)
 	gc        gc.GCCollector     // Garbage collector
+	gofuncs   map[string]vm.GoFunc // Go function registry for global functions
 }
 
 func (g *globalState) Allocator() memapi.Allocator {
