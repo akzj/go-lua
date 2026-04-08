@@ -68,9 +68,20 @@ func (r *Runner) Run() (passed, failed int, err error) {
 // lua-master/testes format: tests use assert() statements.
 // If all asserts pass, execution succeeds. If any assert fails, an error is raised.
 // Returns the test result.
-func (r *Runner) RunFile(path string) TestResult {
+func (r *Runner) RunFile(path string) (result TestResult) {
 	base := filepath.Base(path)
-	
+
+	// Recover from Go panics (e.g. bassert uses panic() since pcall is not yet implemented)
+	defer func() {
+		if r := recover(); r != nil {
+			result = TestResult{
+				Name:   base,
+				Passed: false,
+				Error:  fmt.Sprintf("panic: %v", r),
+			}
+		}
+	}()
+
 	// Read the file
 	code, err := os.ReadFile(path)
 	if err != nil {
@@ -84,7 +95,7 @@ func (r *Runner) RunFile(path string) TestResult {
 	// Execute the code
 	// lua-master/testes rely on assert() - if execution returns nil, all tests passed
 	err = state.DoString(string(code))
-	
+
 	if err != nil {
 		// Extract a clean error message
 		errMsg := r.cleanError(err)
