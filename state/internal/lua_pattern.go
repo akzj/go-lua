@@ -90,6 +90,8 @@ func isClassChar(cl byte, ch byte) bool {
 		res = isAlnum(ch)
 	case 'x':
 		res = isXDigit(ch)
+	case 'g':
+		res = isPrint(ch) && !isSpace(ch)
 	default:
 		return cl == ch
 	}
@@ -363,6 +365,7 @@ func isAlnum(c byte) bool  { return isAlpha(c) || isDigit(c) }
 func isLower(c byte) bool  { return c >= 'a' && c <= 'z' }
 func isUpper(c byte) bool  { return c >= 'A' && c <= 'Z' }
 func isSpace(c byte) bool  { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v' }
+func isPrint(c byte) bool  { return c >= 0x20 && c <= 0x7e }
 func isCntrl(c byte) bool  { return c < 0x20 || c == 0x7f }
 func isPunct(c byte) bool  {
 	return (c >= 0x21 && c <= 0x2f) || (c >= 0x3a && c <= 0x40) || (c >= 0x5b && c <= 0x60) || (c >= 0x7b && c <= 0x7e)
