@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/akzj/go-lua/state/api"
+	"github.com/akzj/go-lua/table"
+	types "github.com/akzj/go-lua/types/api"
+	vm "github.com/akzj/go-lua/vm"
 )
 
 // =============================================================================
@@ -799,4 +802,298 @@ func TestLuaStateIdx2stackAndAbsoluteIndex(t *testing.T) {
 	// while absoluteIndex returns -1 for invalid indices
 	_ = L.absoluteIndex(-1000)
 	_ = L.idx2stack(-1000)
+}
+
+// =============================================================================
+// Phase 2 Base Library Function Tests
+// =============================================================================
+
+func TestLuaError(t *testing.T) {
+	le := &LuaError{Msg: types.NewTValueString("test error")}
+	if le.Error() != "test error" {
+		t.Errorf("LuaError.Error() = %q, want %q", le.Error(), "test error")
+	}
+}
+
+func TestBerror(t *testing.T) {
+	stack := make([]types.TValue, 5)
+	stack[1] = types.NewTValueString("boom")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("berror should panic")
+		}
+		le, ok := r.(*LuaError)
+		if !ok {
+			t.Fatalf("berror should panic with *LuaError, got %T", r)
+		}
+		if le.Error() != "boom" {
+			t.Errorf("LuaError msg = %q, want %q", le.Error(), "boom")
+		}
+	}()
+	berror(stack, 0)
+}
+
+func TestBpcallSuccess(t *testing.T) {
+	// pcall(function that returns 42)
+	innerFn := vm.GoFunc(func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueInteger(42)
+		return 1
+	})
+
+	stack := make([]types.TValue, 10)
+	stack[0] = nil // will be overwritten with result
+	stack[1] = &goFuncWrapper{fn: innerFn}
+
+	nRet := bpcall(stack, 0)
+	if nRet < 1 {
+		t.Fatalf("bpcall returned %d results, want >= 1", nRet)
+	}
+	if !stack[0].IsTrue() {
+		t.Error("pcall success should return true as first value")
+	}
+	if nRet >= 2 && stack[1].IsInteger() && stack[1].GetInteger() == 42 {
+		// good
+	} else if nRet >= 2 {
+		t.Errorf("pcall result = %v, want 42", stack[1])
+	}
+}
+
+func TestBpcallError(t *testing.T) {
+	// pcall(function that errors)
+	innerFn := vm.GoFunc(func(stack []types.TValue, base int) int {
+		luaErrorString("inner error")
+		return 0
+	})
+
+	stack := make([]types.TValue, 10)
+	stack[0] = nil
+	stack[1] = &goFuncWrapper{fn: innerFn}
+
+	nRet := bpcall(stack, 0)
+	if nRet != 2 {
+		t.Fatalf("bpcall on error returned %d results, want 2", nRet)
+	}
+	if !stack[0].IsFalse() {
+		t.Error("pcall error should return false as first value")
+	}
+	if !stack[1].IsString() {
+		t.Errorf("pcall error msg should be string, got tag %d", stack[1].GetTag())
+	} else if s, ok := stack[1].GetValue().(string); !ok || s != "inner error" {
+		t.Errorf("pcall error msg = %q, want %q", s, "inner error")
+	}
+}
+
+func TestBassertWithLuaError(t *testing.T) {
+	stack := make([]types.TValue, 5)
+	stack[1] = types.NewTValueBoolean(false)
+	stack[2] = types.NewTValueString("custom fail")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("bassert(false) should panic")
+		}
+		le, ok := r.(*LuaError)
+		if !ok {
+			t.Fatalf("bassert should panic with *LuaError, got %T", r)
+		}
+		if le.Error() != "custom fail" {
+			t.Errorf("assert error = %q, want %q", le.Error(), "custom fail")
+		}
+	}()
+	bassert(stack, 0)
+}
+
+func TestBselect(t *testing.T) {
+	// select('#', 10, 20, 30) -> 3
+	stack := make([]types.TValue, 10)
+	stack[1] = types.NewTValueString("#")
+	stack[2] = types.NewTValueInteger(10)
+	stack[3] = types.NewTValueInteger(20)
+	stack[4] = types.NewTValueInteger(30)
+
+	nRet := bselect(stack[:5], 0)
+	if nRet != 1 {
+		t.Fatalf("select('#',...) returned %d, want 1", nRet)
+	}
+	if !stack[0].IsInteger() || stack[0].GetInteger() != 3 {
+		t.Errorf("select('#', 10, 20, 30) = %v, want 3", stack[0])
+	}
+
+	// select(2, 10, 20, 30) -> 20, 30
+	stack2 := make([]types.TValue, 10)
+	stack2[1] = types.NewTValueInteger(2)
+	stack2[2] = types.NewTValueInteger(10)
+	stack2[3] = types.NewTValueInteger(20)
+	stack2[4] = types.NewTValueInteger(30)
+
+	nRet = bselect(stack2[:5], 0)
+	if nRet != 2 {
+		t.Fatalf("select(2,...) returned %d, want 2", nRet)
+	}
+	if !stack2[0].IsInteger() || stack2[0].GetInteger() != 20 {
+		t.Errorf("select(2, 10, 20, 30)[1] = %v, want 20", stack2[0])
+	}
+	if !stack2[1].IsInteger() || stack2[1].GetInteger() != 30 {
+		t.Errorf("select(2, 10, 20, 30)[2] = %v, want 30", stack2[1])
+	}
+}
+
+func TestRawEqual(t *testing.T) {
+	if !rawEqual(types.NewTValueInteger(5), types.NewTValueInteger(5)) {
+		t.Error("rawEqual(5, 5) should be true")
+	}
+	if rawEqual(types.NewTValueInteger(5), types.NewTValueInteger(6)) {
+		t.Error("rawEqual(5, 6) should be false")
+	}
+	if !rawEqual(types.NewTValueString("hello"), types.NewTValueString("hello")) {
+		t.Error("rawEqual('hello', 'hello') should be true")
+	}
+	if !rawEqual(types.NewTValueNil(), types.NewTValueNil()) {
+		t.Error("rawEqual(nil, nil) should be true")
+	}
+	if rawEqual(types.NewTValueInteger(5), types.NewTValueString("5")) {
+		t.Error("rawEqual(5, '5') should be false")
+	}
+}
+
+func TestBunpack(t *testing.T) {
+	tbl := table.NewTable()
+	tbl.SetInt(1, types.NewTValueInteger(10))
+	tbl.SetInt(2, types.NewTValueInteger(20))
+	tbl.SetInt(3, types.NewTValueInteger(30))
+
+	stack := make([]types.TValue, 10)
+	stack[1] = &tableWrapper{tbl: tbl}
+
+	nRet := bunpack(stack, 0)
+	if nRet != 3 {
+		t.Fatalf("unpack returned %d, want 3", nRet)
+	}
+	for i, want := range []types.LuaInteger{10, 20, 30} {
+		if !stack[i].IsInteger() || stack[i].GetInteger() != want {
+			t.Errorf("unpack[%d] = %v, want %d", i, stack[i], want)
+		}
+	}
+}
+
+func TestBrawgetBrawset(t *testing.T) {
+	tbl := table.NewTable()
+	
+	// rawset(t, "x", 42)
+	stack := make([]types.TValue, 10)
+	stack[1] = &tableWrapper{tbl: tbl}
+	stack[2] = types.NewTValueString("x")
+	stack[3] = types.NewTValueInteger(42)
+	brawset(stack, 0)
+
+	// rawget(t, "x") -> 42
+	stack2 := make([]types.TValue, 10)
+	stack2[1] = &tableWrapper{tbl: tbl}
+	stack2[2] = types.NewTValueString("x")
+	nRet := brawget(stack2, 0)
+	if nRet != 1 {
+		t.Fatalf("rawget returned %d, want 1", nRet)
+	}
+	if !stack2[0].IsInteger() || stack2[0].GetInteger() != 42 {
+		t.Errorf("rawget(t, 'x') = %v, want 42", stack2[0])
+	}
+}
+
+func TestBrawlen(t *testing.T) {
+	// rawlen on string
+	stack := make([]types.TValue, 5)
+	stack[1] = types.NewTValueString("hello")
+	nRet := brawlen(stack, 0)
+	if nRet != 1 || !stack[0].IsInteger() || stack[0].GetInteger() != 5 {
+		t.Errorf("rawlen('hello') = %v, want 5", stack[0])
+	}
+
+	// rawlen on table
+	tbl := table.NewTable()
+	tbl.SetInt(1, types.NewTValueInteger(10))
+	tbl.SetInt(2, types.NewTValueInteger(20))
+	stack2 := make([]types.TValue, 5)
+	stack2[1] = &tableWrapper{tbl: tbl}
+	nRet = brawlen(stack2, 0)
+	if nRet != 1 || !stack2[0].IsInteger() || stack2[0].GetInteger() != 2 {
+		t.Errorf("rawlen(table) = %v, want 2", stack2[0])
+	}
+}
+
+func TestBsetmetatableBgetmetatable(t *testing.T) {
+	tbl := table.NewTable()
+	mt := table.NewTable()
+
+	// setmetatable(t, mt)
+	stack := make([]types.TValue, 5)
+	stack[1] = &tableWrapper{tbl: tbl}
+	stack[2] = &tableWrapper{tbl: mt}
+	nRet := bsetmetatable(stack, 0)
+	if nRet != 1 {
+		t.Fatalf("setmetatable returned %d, want 1", nRet)
+	}
+
+	// getmetatable(t) -> mt
+	stack2 := make([]types.TValue, 5)
+	stack2[1] = &tableWrapper{tbl: tbl}
+	nRet = bgetmetatable(stack2, 0)
+	if nRet != 1 {
+		t.Fatalf("getmetatable returned %d, want 1", nRet)
+	}
+	if stack2[0].IsNil() {
+		t.Error("getmetatable should return non-nil after setmetatable")
+	}
+}
+
+func TestBxpcallSuccess(t *testing.T) {
+	innerFn := vm.GoFunc(func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueInteger(99)
+		return 1
+	})
+	handler := vm.GoFunc(func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueString("handled")
+		return 1
+	})
+
+	stack := make([]types.TValue, 10)
+	stack[1] = &goFuncWrapper{fn: innerFn}
+	stack[2] = &goFuncWrapper{fn: handler}
+
+	nRet := bxpcall(stack, 0)
+	if nRet < 1 {
+		t.Fatalf("xpcall returned %d, want >= 1", nRet)
+	}
+	if !stack[0].IsTrue() {
+		t.Error("xpcall success should return true")
+	}
+}
+
+func TestBxpcallError(t *testing.T) {
+	innerFn := vm.GoFunc(func(stack []types.TValue, base int) int {
+		luaErrorString("kaboom")
+		return 0
+	})
+	handler := vm.GoFunc(func(stack []types.TValue, base int) int {
+		// Transform error message
+		stack[base] = types.NewTValueString("handled: kaboom")
+		return 1
+	})
+
+	stack := make([]types.TValue, 10)
+	stack[1] = &goFuncWrapper{fn: innerFn}
+	stack[2] = &goFuncWrapper{fn: handler}
+
+	nRet := bxpcall(stack, 0)
+	if nRet != 2 {
+		t.Fatalf("xpcall on error returned %d, want 2", nRet)
+	}
+	if !stack[0].IsFalse() {
+		t.Error("xpcall error should return false")
+	}
+	if s, ok := stack[1].GetValue().(string); !ok || s != "handled: kaboom" {
+		t.Errorf("xpcall handler result = %v, want 'handled: kaboom'", stack[1])
+	}
 }

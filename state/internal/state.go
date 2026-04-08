@@ -1197,7 +1197,11 @@ func brawlen(stack []types.TValue, base int) int {
 
 	tbl := extractTable(v)
 	if tbl != nil {
-		stack[base] = types.NewTValueInteger(types.LuaInteger(tbl.Len()))
+		n := tbl.Len()
+		if n == 0 {
+			n = int(tableSequenceLen(tbl))
+		}
+		stack[base] = types.NewTValueInteger(types.LuaInteger(n))
 		return 1
 	}
 
@@ -1294,19 +1298,18 @@ func bsetmetatable(stack []types.TValue, base int) int {
 }
 
 // getInternalTable extracts the underlying types.Table from a TableInterface.
-// This is needed because SetMetatable expects types.Table, not TableInterface.
+// Uses duck-type interface matching TableImpl.RawTable().
 func getInternalTable(tbl tableapi.TableInterface) types.Table {
 	// Try direct type assertion to types.Table
 	if t, ok := interface{}(tbl).(types.Table); ok {
 		return t
 	}
-	// For our tableWrapper, extract the inner table
-	if tw, ok := interface{}(tbl).(*tableWrapper); ok {
-		if inner := tw.tbl; inner != nil {
-			if t, ok := interface{}(inner).(types.Table); ok {
-				return t
-			}
-		}
+	// Use RawTable() duck-type (matches table/internal.TableImpl)
+	type rawTableProvider interface {
+		RawTable() types.Table
+	}
+	if p, ok := interface{}(tbl).(rawTableProvider); ok {
+		return p.RawTable()
 	}
 	return nil
 }
@@ -1331,10 +1334,10 @@ func bgetmetatable(stack []types.TValue, base int) int {
 		return 1
 	}
 
-	// Wrap the metatable as a TValue
-	// GetMetatable returns types.Table, we need to wrap it as a TableInterface TValue
-	if mtImpl, ok := mt.(tableapi.TableInterface); ok {
-		stack[base] = &tableWrapper{tbl: mtImpl}
+	// Wrap the raw types.Table back into a TableInterface via table.WrapRawTable
+	wrapped := table.WrapRawTable(mt)
+	if wrapped != nil {
+		stack[base] = &tableWrapper{tbl: wrapped}
 	} else {
 		stack[base] = types.NewTValueNil()
 	}
@@ -1356,17 +1359,27 @@ func bunpack(stack []types.TValue, base int) int {
 	}
 
 	i := types.LuaInteger(1)
-	j := types.LuaInteger(tbl.Len())
-
-	if nArgs >= 2 && stack[base+2] != nil && stack[base+2].IsInteger() {
-		i = stack[base+2].GetInteger()
-	} else if nArgs >= 2 && stack[base+2] != nil && stack[base+2].IsFloat() {
-		i = types.LuaInteger(stack[base+2].GetFloat())
+	// Compute j: use Len() first, but if 0, probe with GetInt to find actual length
+	jVal := types.LuaInteger(tbl.Len())
+	if jVal == 0 {
+		// Len() may return 0 for hash-only tables; probe for actual length
+		jVal = tableSequenceLen(tbl)
 	}
-	if nArgs >= 3 && stack[base+3] != nil && stack[base+3].IsInteger() {
-		j = stack[base+3].GetInteger()
-	} else if nArgs >= 3 && stack[base+3] != nil && stack[base+3].IsFloat() {
-		j = types.LuaInteger(stack[base+3].GetFloat())
+	j := jVal
+
+	if nArgs >= 2 && stack[base+2] != nil && !stack[base+2].IsNil() {
+		if stack[base+2].IsInteger() {
+			i = stack[base+2].GetInteger()
+		} else if stack[base+2].IsFloat() {
+			i = types.LuaInteger(stack[base+2].GetFloat())
+		}
+	}
+	if nArgs >= 3 && stack[base+3] != nil && !stack[base+3].IsNil() {
+		if stack[base+3].IsInteger() {
+			j = stack[base+3].GetInteger()
+		} else if stack[base+3].IsFloat() {
+			j = types.LuaInteger(stack[base+3].GetFloat())
+		}
 	}
 
 	if j < i {
@@ -1382,6 +1395,19 @@ func bunpack(stack []types.TValue, base int) int {
 		stack[base+k] = val
 	}
 	return n
+}
+
+// tableSequenceLen probes a table with GetInt to find the sequence length.
+// This handles tables where Len() returns 0 because all integer keys are in hash.
+func tableSequenceLen(tbl tableapi.TableInterface) types.LuaInteger {
+	var n types.LuaInteger
+	for {
+		n++
+		val := tbl.GetInt(n)
+		if val == nil || val.IsNil() {
+			return n - 1
+		}
+	}
 }
 
 // bwarn implements Lua's warn() function (stub — prints to stderr).
