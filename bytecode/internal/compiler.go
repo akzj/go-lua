@@ -616,8 +616,23 @@ func (fs *FuncState) compileBlock(block astapi.Block) error {
 	}
 	for _, stat := range block.Stats() {
 		if stat != nil {
+			// Save register allocation state before each statement.
+			savedMax := fs.Proto.maxstacksize
 			if err := fs.compileStat(stat); err != nil {
 				return err
+			}
+			// Track peak for VM stack allocation
+			if fs.Proto.maxstacksize > fs.peakStack {
+				fs.peakStack = fs.Proto.maxstacksize
+			}
+			// Reset allocation pointer to reclaim temp registers.
+			// Use max(savedMax, nLocals) because the statement may have
+			// added new locals (STAT_LOCAL_VAR, STAT_LOCAL_FUNC).
+			nLocals := uint8(fs.locals.Count())
+			if nLocals > savedMax {
+				fs.Proto.maxstacksize = nLocals
+			} else {
+				fs.Proto.maxstacksize = savedMax
 			}
 		}
 	}
@@ -1661,13 +1676,15 @@ func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumR
 		if iter, ok := tc.(interface {
 			GetArrayField(int) astapi.ExpNode
 		}); ok {
+			// Allocate ONE temp register and reuse for each field
+			tmpReg := fs.allocReg()
 			for i := 0; i < nArray; i++ {
 				field := iter.GetArrayField(i)
-				tmpReg := fs.allocReg()
 				fs.expToReg(field, tmpReg)
 				// SETI A B C: R[A][B] = R[C]  (B is integer key, 1-based)
 				fs.emitABC(int(opcodes.OP_SETI), destReg, i+1, tmpReg)
 			}
+			fs.freeReg(tmpReg)
 		}
 	}
 
