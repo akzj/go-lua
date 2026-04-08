@@ -1223,9 +1223,10 @@ func (fs *FuncState) compileAssignStat(stat astapi.StatNode) error {
 		nExprs := len(exprs)
 		
 		// Special handling for multi-value assignment: a,b = f()
-		// When len(vars) < len(exprs) and last expr is a function call
-		// the function call may return multiple values
-		if nVars > 0 && nExprs > 0 && nVars < nExprs {
+		// When there are more vars than exprs and last expr is a function call,
+		// the function call returns multiple values to fill the remaining vars.
+		// Also handles equal counts where last is a call (a,b = f()).
+		if nVars > 0 && nExprs > 0 && nVars >= nExprs {
 			// Check if last expression is a function call
 			lastExp := exprs[nExprs-1]
 			if _, isFuncCall := lastExp.(astapi.FuncCall); isFuncCall {
