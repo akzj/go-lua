@@ -618,7 +618,12 @@ func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
 					}
 				}
 				// CALL reg, nArgs+1, nResults+1
-				fs.emitABC(int(opcodes.OP_CALL), reg, nArgs+1, nResults+1)
+				// If last arg is a FuncCall or vararg, use B=0 for multi-return
+				bArg := nArgs + 1
+				if fs.patchLastCallForMultiReturn(args) {
+					bArg = 0
+				}
+				fs.emitABC(int(opcodes.OP_CALL), reg, bArg, nResults+1)
 				// Register all remaining locals
 				for j := i; j < nVars; j++ {
 					if names[j] != "" {
@@ -1500,7 +1505,12 @@ func (fs *FuncState) compileFuncCallToVars(call astapi.FuncCall, nVars int) (int
 	// Emit CALL: R[funcReg], nArgs+1, nVars+1
 	// B = nArgs + 1 (includes function itself)
 	// C = nVars + 1 (number of results including function slot)
-	fs.emitABC(int(opcodes.OP_CALL), funcReg, nArgs+1, nVars+1)
+	// If last arg is a FuncCall or vararg, use B=0 for multi-return propagation
+	bArg := nArgs + 1
+	if fs.patchLastCallForMultiReturn(args) {
+		bArg = 0
+	}
+	fs.emitABC(int(opcodes.OP_CALL), funcReg, bArg, nVars+1)
 	
 	return funcReg, nil
 }
