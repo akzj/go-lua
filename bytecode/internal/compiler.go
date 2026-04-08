@@ -109,6 +109,12 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 		}
 	}
 
+	// Finalize maxstacksize: use the peak (high-water mark) if scoping
+	// caused the allocation pointer to reset below the peak.
+	if fs.peakStack > proto.maxstacksize {
+		proto.maxstacksize = fs.peakStack
+	}
+
 	return proto, nil
 }
 
@@ -608,9 +614,11 @@ func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
 
 	// Compile then block with new label scope
 	if thenBlock := ifStmt.GetThenBlock(); thenBlock != nil {
+		saved := fs.enterScope()
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(thenBlock)
 		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		fs.leaveScope(saved)
 		if err != nil {
 			return err
 		}
@@ -625,9 +633,11 @@ func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
 
 	// Compile else block with new label scope
 	if elseBlock := ifStmt.GetElseBlock(); elseBlock != nil {
+		saved := fs.enterScope()
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(elseBlock)
 		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		fs.leaveScope(saved)
 		if err != nil {
 			return err
 		}
@@ -646,11 +656,13 @@ func (fs *FuncState) compileDoStat(stat astapi.StatNode) error {
 		return fs.errorf("invalid do statement")
 	}
 	if block := doStmt.GetBlock(); block != nil {
+		saved := fs.enterScope()
 		// Push a new label scope for the do...end block
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(block)
 		// Pop the label scope when exiting the block
 		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		fs.leaveScope(saved)
 		return err
 	}
 	return nil
@@ -686,9 +698,11 @@ func (fs *FuncState) compileWhileStat(stat astapi.StatNode) error {
 
 	// Compile loop body with new label scope
 	if block := whileStmt.GetBlock(); block != nil {
+		saved := fs.enterScope()
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(block)
 		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		fs.leaveScope(saved)
 		if err != nil {
 			fs.pendingBreaks = savedPendingBreaks
 			fs.loopExitIdx = savedLoopExitIdx
@@ -738,11 +752,14 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 
 	// Compile loop body
 	if block := repeatStmt.GetBlock(); block != nil {
+		saved := fs.enterScope()
 		if err := fs.compileBlock(block); err != nil {
+			fs.leaveScope(saved)
 			fs.pendingBreaks = savedPendingBreaks
 			fs.loopExitIdx = savedLoopExitIdx
 			return err
 		}
+		fs.leaveScope(saved)
 	}
 
 	// Compile condition to a register
@@ -878,9 +895,11 @@ func (fs *FuncState) compileForNum(stat astapi.StatNode) error {
 
 	// Compile loop body with new label scope
 	if bodyBlock != nil {
+		saved := fs.enterScope()
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(bodyBlock)
 		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		fs.leaveScope(saved)
 		if err != nil {
 			fs.pendingBreaks = savedPendingBreaks
 			fs.loopExitIdx = savedLoopExitIdx
@@ -1009,9 +1028,11 @@ func (fs *FuncState) compileForIn(stat astapi.StatNode) error {
 
 	// Compile loop body
 	if bodyBlock != nil {
+		saved := fs.enterScope()
 		fs.labelScopes = append(fs.labelScopes, make(map[string]int))
 		err := fs.compileBlock(bodyBlock)
 		fs.labelScopes = fs.labelScopes[:len(fs.labelScopes)-1]
+		fs.leaveScope(saved)
 		if err != nil {
 			fs.pendingBreaks = savedPendingBreaks
 			fs.loopExitIdx = savedLoopExitIdx
@@ -1397,6 +1418,11 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 		}
 	}
 	
+	// Finalize maxstacksize for nested function
+	if nestedFs.peakStack > nestedProto.maxstacksize {
+		nestedProto.maxstacksize = nestedFs.peakStack
+	}
+
 	return nestedProto, nil
 }
 
@@ -1968,6 +1994,7 @@ type FuncState struct {
 	gotoScopes    map[int]int      // goto instruction PC -> scope index where it was created
 	loopExitIdx   int              // instruction index of loop exit point (for break statement)
 	pendingBreaks []int            // pending break jump indices to patch to loop exit
+	peakStack     uint8            // high-water mark of register usage (for VM stack sizing)
 }
 
 // NewFuncState creates a new FuncState.
@@ -2329,3 +2356,38 @@ func (l *Locals) Find(name string) int {
 func (l *Locals) Count() int {
 	return len(l.vars)
 }
+
+// Truncate removes all locals added after the given count.
+// Used to restore scope when exiting a block (do...end, if, while, for, etc.).
+func (l *Locals) Truncate(n int) {
+	if n < len(l.vars) {
+		l.vars = l.vars[:n]
+	}
+}
+// scopeState captures the compiler state at block entry for later restoration.
+type scopeState struct {
+	nLocals      int
+	maxStackSize uint8
+}
+
+// enterScope saves the current locals and register state.
+func (fs *FuncState) enterScope() scopeState {
+	return scopeState{
+		nLocals:      fs.locals.Count(),
+		maxStackSize: fs.Proto.maxstacksize,
+	}
+}
+
+// leaveScope restores locals and register allocation pointer to the state
+// saved by enterScope. The peak stack size is preserved separately so
+// the VM allocates enough stack slots.
+func (fs *FuncState) leaveScope(saved scopeState) {
+	fs.locals.Truncate(saved.nLocals)
+	// Track peak for VM stack allocation
+	if fs.Proto.maxstacksize > fs.peakStack {
+		fs.peakStack = fs.Proto.maxstacksize
+	}
+	// Reset allocation pointer to reuse registers
+	fs.Proto.maxstacksize = saved.maxStackSize
+}
+
