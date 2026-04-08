@@ -519,15 +519,20 @@ func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
 	// Handle case where names and exps may have different lengths
 	nVars := len(names)
 	nExps := len(exps)
-	
-	// Compile expressions to registers
+
+	// Pre-allocate ALL local registers upfront. This prevents expression
+	// compilation temps (e.g. compileIndexExpr uses destReg+1 for table)
+	// from clobbering the next local's register.
+	baseReg := int(fs.Proto.maxstacksize)
+	for i := 0; i < nVars; i++ {
+		fs.allocReg()
+	}
+
+	// Compile expressions into pre-allocated registers
 	for i, exp := range exps {
+		reg := baseReg + i
 		if exp == nil {
-			reg := fs.allocReg()
 			fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
-			if i < nVars && names[i] != "" {
-				fs.locals.Add(names[i], reg, fs.pc)
-			}
 			continue
 		}
 		// Check if this is the last expression AND it's a function call
@@ -535,38 +540,51 @@ func (fs *FuncState) compileLocalVarStat(stat astapi.StatNode) error {
 		if i == nExps-1 && nVars > i+1 {
 			if fc, ok := exp.(astapi.FuncCall); ok {
 				nResults := nVars - i
-				funcReg, err := fs.compileFuncCallToVars(fc, nResults)
-				if err != nil {
-					return err
-				}
-				// Register all remaining locals from funcReg onwards
-				for j := i; j < nVars; j++ {
-					if names[j] != "" {
-						fs.locals.Add(names[j], funcReg+j-i, fs.pc)
+				// Compile function call with multiple results starting at reg
+				funcExp := fc.Func()
+				args := fc.Args()
+				fs.expToReg(funcExp, reg)
+				for j, arg := range args {
+					argReg := reg + 1 + j
+					fs.expToReg(arg, argReg)
+					if argReg+1 > int(fs.Proto.maxstacksize) {
+						fs.Proto.maxstacksize = uint8(argReg + 1)
 					}
 				}
-				// Allocate registers for the extra results (funcReg+1..funcReg+nResults-1)
-				// compileFuncCallToVars already allocated funcReg, allocate the rest
-				for j := 1; j < nResults; j++ {
-					fs.allocReg()
+				nArgs := len(args)
+				if nArgs > 0 {
+					if reg+1+nArgs > int(fs.Proto.maxstacksize) {
+						fs.Proto.maxstacksize = uint8(reg + 1 + nArgs)
+					}
+				} else {
+					if reg+2 > int(fs.Proto.maxstacksize) {
+						fs.Proto.maxstacksize = uint8(reg + 2)
+					}
 				}
-				return nil // All vars handled by multi-return
+				// CALL reg, nArgs+1, nResults+1
+				fs.emitABC(int(opcodes.OP_CALL), reg, nArgs+1, nResults+1)
+				// Register all remaining locals
+				for j := i; j < nVars; j++ {
+					if names[j] != "" {
+						fs.locals.Add(names[j], baseReg+j, fs.pc)
+					}
+				}
+				return nil
 			}
 		}
 		// Normal single-value expression
-		reg := fs.allocReg()
 		fs.expToReg(exp, reg)
-		if i < nVars && names[i] != "" {
-			fs.locals.Add(names[i], reg, fs.pc)
-		}
 	}
-	
-	// Handle extra variables without expressions (local x, y)
+
+	// Fill extra variables without expressions with nil
 	for i := nExps; i < nVars; i++ {
-		reg := fs.allocReg()
-		fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
+		fs.emitABC(int(opcodes.OP_LOADNIL), baseReg+i, 0, 0)
+	}
+
+	// Register ALL locals at once (after all expressions compiled)
+	for i := 0; i < nVars; i++ {
 		if names[i] != "" {
-			fs.locals.Add(names[i], reg, fs.pc)
+			fs.locals.Add(names[i], baseReg+i, fs.pc)
 		}
 	}
 	
