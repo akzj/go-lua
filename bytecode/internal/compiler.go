@@ -1550,12 +1550,67 @@ func (fs *FuncState) compileIndexExpr(idx indexAccess, destReg int) {
 	}
 }
 
+// compileAndOr compiles short-circuit and/or expressions.
+// "a and b": if a is falsy, result = a; else result = b
+// "a or b": if a is truthy, result = a; else result = b
+// Uses TESTSET + JMP pattern for short-circuit evaluation.
+func (fs *FuncState) compileAndOr(left, right astapi.ExpNode, op astapi.BinopKind, destReg int) {
+	// Compile left operand to destReg
+	fs.expToReg(left, destReg)
+
+	// For "and": skip right side if left is falsy (k=0)
+	// For "or": skip right side if left is truthy (k=1)
+	var k int
+	if op == astapi.BINOP_AND {
+		k = 0 // TEST R[A], 0 → skip next if R[A] is falsy
+	} else {
+		k = 1 // TEST R[A], 1 → skip next if R[A] is truthy
+	}
+
+	// Emit TEST: if (not R[destReg] == k) then pc++ (skip the JMP)
+	fs.emitABCk(int(opcodes.OP_TEST), destReg, k, 0, 0)
+
+	// Emit JMP to skip the right-side evaluation (placeholder, patched below)
+	jmpIdx := fs.emitSJ(0)
+
+	// Compile right operand to destReg (overwrites left if we reach here)
+	fs.expToReg(right, destReg)
+
+	// Patch the JMP to skip over the right-side code
+	fs.patchSJ(jmpIdx, fs.pc)
+}
+
+// compileConcat compiles string concatenation (a .. b).
+// OP_CONCAT A B: R[A] := R[A] .. ... .. R[A+B-1]
+func (fs *FuncState) compileConcat(left, right astapi.ExpNode, destReg int) {
+	// Compile left to destReg, right to destReg+1
+	fs.expToReg(left, destReg)
+	fs.expToReg(right, destReg+1)
+	if destReg+2 > int(fs.Proto.maxstacksize) {
+		fs.Proto.maxstacksize = uint8(destReg + 2)
+	}
+	// OP_CONCAT A B: R[A] := R[A] .. ... .. R[A+B-1], B=2 for binary concat
+	fs.emitABC(int(opcodes.OP_CONCAT), destReg, 2, 0)
+}
+
 // compileBinop compiles a binary expression.
 // The result is stored in destReg. Operands use registers after the result.
 func (fs *FuncState) compileBinop(binop binopAccess, destReg int) {
 	left := binop.GetLeft()
 	right := binop.GetRight()
 	op := binop.GetOp()
+
+	// Handle short-circuit operators (and/or) specially — they need TEST+JMP
+	if op == astapi.BINOP_AND || op == astapi.BINOP_OR {
+		fs.compileAndOr(left, right, op, destReg)
+		return
+	}
+
+	// Handle concat specially — OP_CONCAT has different operand layout
+	if op == astapi.BINOP_CONCAT {
+		fs.compileConcat(left, right, destReg)
+		return
+	}
 
 	// Allocate registers for operands - result at destReg, operands after
 	leftReg := destReg + 1
@@ -1650,6 +1705,15 @@ func (fs *FuncState) isComparisonOp(opcode int) bool {
 // emitABC emits an ABC format instruction (alias for emit).
 func (fs *FuncState) emitABC(opcode, a, b, c int) int {
 	return fs.emit(opcode, a, b, c)
+}
+
+// emitABCk emits an ABC instruction with explicit k-bit control.
+func (fs *FuncState) emitABCk(opcode, a, k, b, c int) int {
+	inst := uint32(opcode) | (uint32(a) << 7) | (uint32(k) << 15) | (uint32(b) << 16) | (uint32(c) << 24)
+	fs.Proto.code = append(fs.Proto.code, inst)
+	pc := fs.pc
+	fs.pc++
+	return pc
 }
 
 // =============================================================================

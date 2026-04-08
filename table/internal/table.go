@@ -444,10 +444,44 @@ func mainposition(t *Table, key typesapi.TValue) *Node {
 			return gnode(t, int(h)&(size-1))
 		}
 	}
+	// Handle integer keys
+	if key.IsInteger() {
+		h := uint64(key.GetInteger())
+		size := sizenode(t)
+		return gnode(t, int(h)&(size-1))
+	}
+	// Handle float keys
+	if key.IsFloat() {
+		h := uint64(key.GetFloat() * 1000003)
+		size := sizenode(t)
+		return gnode(t, int(h)&(size-1))
+	}
+	// Handle boolean keys (check IsBoolean first, not IsTrue which has Lua truthiness semantics)
+	if key.IsBoolean() {
+		h := 0
+		if key.GetTag() == typesapi.LUA_VTRUE {
+			h = 1
+		}
+		size := sizenode(t)
+		return gnode(t, h&(size-1))
+	}
+	// Handle nil keys
+	if key.IsNil() {
+		size := sizenode(t)
+		return gnode(t, 0&(size-1))
+	}
 	// For other types (tables, functions, userdata), use pointer hash
 	h := uintptr(0)
 	if key.GetValue() != nil {
-		h = reflect.ValueOf(key.GetValue()).Pointer()
+		rv := reflect.ValueOf(key.GetValue())
+		if rv.Kind() == reflect.Ptr || rv.Kind() == reflect.UnsafePointer ||
+			rv.Kind() == reflect.Func || rv.Kind() == reflect.Map ||
+			rv.Kind() == reflect.Slice || rv.Kind() == reflect.Chan {
+			h = rv.Pointer()
+		} else {
+			// Use type tag as hash for non-pointer types
+			h = uintptr(key.GetTag())
+		}
 	}
 	size := sizenode(t)
 	return gnode(t, int(h)&(size-1))
@@ -470,10 +504,8 @@ func equalkey(k1 typesapi.TValue, n *Node) bool {
 	switch {
 	case k1.IsNil():
 		return true
-	case k1.IsTrue():
-		return true
-	case k1.IsFalse():
-		return true
+	case k1.IsBoolean():
+		return true // Tags already match (checked above), so both are same bool value
 	case k1.IsInteger():
 		return k1.GetInteger() == keyival(n)
 	case k1.IsFloat():
