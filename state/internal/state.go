@@ -13,6 +13,9 @@ import (
 	types "github.com/akzj/go-lua/types/api"
 	"github.com/akzj/go-lua/vm"
 	"github.com/akzj/go-lua/table"
+	bcapi "github.com/akzj/go-lua/bytecode/api"
+	bc "github.com/akzj/go-lua/bytecode"
+	"github.com/akzj/go-lua/parse"
 )
 
 // =============================================================================
@@ -545,7 +548,7 @@ func (w *goFuncWrapper) IsUpval() bool            { return false }
 func (w *goFuncWrapper) IsShortString() bool      { return false }
 func (w *goFuncWrapper) IsLongString() bool       { return false }
 func (w *goFuncWrapper) IsEmpty() bool            { return false }
-func (w *goFuncWrapper) GetTag() int              { return int(types.LUA_VLCL) }
+func (w *goFuncWrapper) GetTag() int              { return types.Ctb(int(types.LUA_VLCL)) }
 func (w *goFuncWrapper) GetBaseType() int         { return int(types.LUA_TFUNCTION) }
 func (w *goFuncWrapper) GetValue() interface{}   { return w.fn }
 func (w *goFuncWrapper) GetGC() *types.GCObject  { return nil }
@@ -1454,6 +1457,138 @@ func makeRequire(registry tableapi.TableInterface) vm.GoFunc {
 	}
 }
 
+// bcollectgarbage implements Lua's collectgarbage([opt [, arg]]) function.
+// Stub implementation — Go manages its own GC, so most operations are no-ops.
+func bcollectgarbage(stack []types.TValue, base int) int {
+	opt := "collect"
+	if base+1 < len(stack) && stack[base+1].IsString() {
+		opt = stack[base+1].GetValue().(string)
+	}
+	switch opt {
+	case "collect":
+		stack[base] = types.NewTValueInteger(0)
+		return 1
+	case "count":
+		// Return approximate memory in KB
+		stack[base] = types.NewTValueFloat(100.0) // fake ~100KB
+		if base+1 < len(stack) {
+			stack[base+1] = types.NewTValueFloat(0)
+		}
+		return 2
+	case "isrunning":
+		stack[base] = types.NewTValueBoolean(true)
+		return 1
+	case "incremental":
+		stack[base] = types.NewTValueString("incremental")
+		return 1
+	case "generational":
+		stack[base] = types.NewTValueString("generational")
+		return 1
+	case "stop", "restart":
+		stack[base] = types.NewTValueBoolean(true)
+		return 1
+	case "step":
+		stack[base] = types.NewTValueBoolean(false)
+		return 1
+	case "param":
+		stack[base] = types.NewTValueInteger(0)
+		return 1
+	default:
+		stack[base] = types.NewTValueInteger(0)
+		return 1
+	}
+}
+
+// bload implements Lua's load(chunk [, chunkname [, mode [, env]]]) function.
+// Compiles a string or function into a callable Lua closure.
+func bload(stack []types.TValue, base int) int {
+	if base+1 >= len(stack) {
+		stack[base] = types.NewTValueNil()
+		if base+1 < len(stack) {
+			stack[base+1] = types.NewTValueString("bad argument #1 to 'load'")
+		}
+		return 2
+	}
+
+	chunkVal := stack[base+1]
+	if !chunkVal.IsString() {
+		// TODO: support function chunks
+		stack[base] = types.NewTValueNil()
+		if base+1 < len(stack) {
+			stack[base+1] = types.NewTValueString("attempt to load a non-string chunk")
+		}
+		return 2
+	}
+
+	chunkStr := chunkVal.GetValue().(string)
+	chunkName := "=(load)"
+	if base+2 < len(stack) && stack[base+2].IsString() {
+		chunkName = stack[base+2].GetValue().(string)
+	}
+	_ = chunkName
+
+	// Parse the chunk
+	parser := parse.NewParser()
+	chunk, err := parser.Parse(chunkStr)
+	if err != nil {
+		stack[base] = types.NewTValueNil()
+		stack[base+1] = types.NewTValueString(err.Error())
+		return 2
+	}
+
+	// Compile the chunk
+	compiler := bc.NewCompiler("load")
+	proto, err := compiler.Compile(chunk)
+	if err != nil {
+		stack[base] = types.NewTValueNil()
+		stack[base+1] = types.NewTValueString(err.Error())
+		return 2
+	}
+
+	// Create a closure wrapper that can be called
+	closure := &loadedClosure{proto: proto}
+	stack[base] = closure
+	return 1
+}
+
+// loadedClosure wraps a compiled prototype so it can be called as a Lua function.
+// Implements types.TValue.
+type loadedClosure struct {
+	proto bcapi.Prototype
+}
+
+func (c *loadedClosure) IsNil() bool             { return false }
+func (c *loadedClosure) IsBoolean() bool          { return false }
+func (c *loadedClosure) IsNumber() bool           { return false }
+func (c *loadedClosure) IsInteger() bool          { return false }
+func (c *loadedClosure) IsFloat() bool            { return false }
+func (c *loadedClosure) IsString() bool           { return false }
+func (c *loadedClosure) IsTable() bool            { return false }
+func (c *loadedClosure) IsFunction() bool         { return true }
+func (c *loadedClosure) IsThread() bool            { return false }
+func (c *loadedClosure) IsUserData() bool         { return false }
+func (c *loadedClosure) IsLightUserData() bool    { return false }
+func (c *loadedClosure) IsCollectable() bool     { return true }
+func (c *loadedClosure) IsTrue() bool             { return true }
+func (c *loadedClosure) IsFalse() bool            { return false }
+func (c *loadedClosure) IsLClosure() bool        { return true }
+func (c *loadedClosure) IsCClosure() bool         { return false }
+func (c *loadedClosure) IsLightCFunction() bool   { return false }
+func (c *loadedClosure) IsClosure() bool          { return true }
+func (c *loadedClosure) IsProto() bool            { return false }
+func (c *loadedClosure) IsUpval() bool            { return false }
+func (c *loadedClosure) IsShortString() bool      { return false }
+func (c *loadedClosure) IsLongString() bool       { return false }
+func (c *loadedClosure) IsEmpty() bool            { return false }
+func (c *loadedClosure) GetTag() int              { return types.Ctb(int(types.LUA_VLCL)) }
+func (c *loadedClosure) GetBaseType() int         { return int(types.LUA_TFUNCTION) }
+func (c *loadedClosure) GetValue() interface{}   { return c }
+func (c *loadedClosure) GetGC() *types.GCObject  { return nil }
+func (c *loadedClosure) GetInteger() types.LuaInteger { return 0 }
+func (c *loadedClosure) GetFloat() types.LuaNumber   { return 0 }
+func (c *loadedClosure) GetPointer() unsafe.Pointer { return nil }
+func (c *loadedClosure) GetProto() bcapi.Prototype { return c.proto }
+
 // openBaseLib registers base library functions in the global environment.
 func (L *LuaState) openBaseLib() {
 	// Register base functions
@@ -1479,6 +1614,11 @@ func (L *LuaState) openBaseLib() {
 	L.setGlobal("getmetatable", bgetmetatable)
 	L.setGlobal("unpack", bunpack)
 	L.setGlobal("warn", bwarn)
+	L.setGlobal("collectgarbage", bcollectgarbage)
+	L.setGlobal("load", bload)
+
+	// Register _VERSION
+	L.setGlobalValue("_VERSION", types.NewTValueString("Lua 5.4"))
 
 	// Create package table with loaded and preload sub-tables
 	// Use createModuleTable() to get fresh table instances
@@ -1541,4 +1681,7 @@ func (L *LuaState) openBaseLib() {
 
 	// Register require function (closure captures registry)
 	L.setGlobal("require", makeRequire(L.global.Registry()))
+
+	// Register _G as a reference to the global environment table
+	L.setGlobalValue("_G", &tableWrapper{tbl: L.global.Registry()})
 }
