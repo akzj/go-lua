@@ -898,6 +898,28 @@ func (ti *TableImpl) Resize(nasize int) {
 // Ensure Table implements api.Table
 var _ typesapi.Table = (*Table)(nil)
 
+// RawTable returns the underlying *Table as a typesapi.Table.
+// Used by setmetatable to pass the correct internal type.
+func (ti *TableImpl) RawTable() typesapi.Table {
+	return ti.tbl
+}
+
+// WrapRawTable wraps a typesapi.Table (which must be *Table) back into a *TableImpl.
+// Used by getmetatable to convert the raw metatable back to a usable TableInterface.
+func WrapRawTable(t typesapi.Table) *TableImpl {
+	if t == nil {
+		return nil
+	}
+	tbl, ok := t.(*Table)
+	if !ok {
+		return nil
+	}
+	return &TableImpl{
+		alloc: api.DefaultAllocator,
+		tbl:   tbl,
+	}
+}
+
 // TableImplInterface is a compile-time check that TableImpl implements TableInterface.
 // tableapi.TableInterface is the interface from table/api/api.go.
 type TableImplInterface interface {
