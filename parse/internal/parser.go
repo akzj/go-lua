@@ -3,6 +3,7 @@ package internal
 
 import (
 	"fmt"
+	"strconv"
 
 	astapi "github.com/akzj/go-lua/ast/api"
 	lexapi "github.com/akzj/go-lua/lex/api"
@@ -2368,15 +2369,25 @@ func (p *parser) parsePrimary() (astapi.ExpNode, error) {
 	case lexapi.TOKEN_INTEGER:
 		tok := p.current()
 		p.next()
-		var val int64
-		fmt.Sscanf(tok.Value, "%d", &val)
+		val, err := strconv.ParseInt(tok.Value, 0, 64)
+		if err != nil {
+			// Try parsing as unsigned (e.g., 0xFFFFFFFFFFFFFFFF)
+			uval, uerr := strconv.ParseUint(tok.Value, 0, 64)
+			if uerr != nil {
+				val = 0
+			} else {
+				val = int64(uval)
+			}
+		}
 		expr = &integerExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}
 
 	case lexapi.TOKEN_NUMBER:
 		tok := p.current()
 		p.next()
-		var val float64
-		fmt.Sscanf(tok.Value, "%f", &val)
+		val, err := strconv.ParseFloat(tok.Value, 64)
+		if err != nil {
+			val = 0
+		}
 		expr = &floatExp{baseNode: baseNode{line: tok.Line, column: tok.Column}, value: val}
 
 	case lexapi.TOKEN_STRING:
