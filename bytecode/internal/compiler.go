@@ -642,7 +642,10 @@ func (fs *FuncState) compileWhileStat(stat astapi.StatNode) error {
 }
 
 // compileRepeatStat compiles repeat...until statement: repeat block until condition
-// The body executes first, then condition is tested - loop continues while condition is FALSE
+// The body executes first, then condition is tested.
+// Loop continues while condition is FALSE, exits when TRUE.
+// Fix: negate the condition (false→true, true→false) and use TEST to check.
+// If negated is TRUE (original was FALSE), we JMP back (continue loop).
 func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 	repeatStmt, ok := stat.(interface {
 		GetCondition() astapi.ExpNode
@@ -659,7 +662,7 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 	savedPendingBreaks := fs.pendingBreaks
 	savedLoopExitIdx := fs.loopExitIdx
 	fs.pendingBreaks = make([]int, 0)
-	fs.loopExitIdx = -1 // will be set after condition
+	fs.loopExitIdx = -1
 
 	// Compile loop body first (repeat...until executes body before testing condition)
 	if block := repeatStmt.GetBlock(); block != nil {
@@ -670,33 +673,58 @@ func (fs *FuncState) compileRepeatStat(stat astapi.StatNode) error {
 		}
 	}
 
-	// Compile condition
+	// Negate the condition using conditional jumps:
+	// negReg = NOT(IsTrue(condReg))
+	// 1. LOADFALSE negReg    ; default: negReg = false
+	// 2. TEST condReg, 0     ; JMP if condReg is FALSE (to setTrue)
+	// 3. JMP skipTrue        ; skip over LOADTRUE
+	// setTrue:
+	// 4. LOADTRUE negReg     ; cond was false → set negReg = true
+	// skipTrue:
+	// (negReg now has negated boolean)
+
+	negReg := fs.allocReg()
+	// Step 1: default negReg = false
+	fs.emit(int(opcodes.OP_LOADFALSE), negReg, 0, 0)
+	// Step 2: TEST condReg, 0 — JMP if condReg is FALSE
 	condReg := fs.allocReg()
 	fs.expToReg(repeatStmt.GetCondition(), condReg)
-
-	// TEST condReg, if FALSE (c=0) JMP back to loop start
-	// In repeat...until: loop continues while condition is FALSE, exits when TRUE
 	fs.emitABC(int(opcodes.OP_TEST), condReg, 0, 0)
-	jmpBackIdx := fs.pc
-	fs.emitSJ(0) // placeholder jump (will be patched to loop start)
+	jmpToSetTrue := fs.pc
+	fs.emitSJ(0) // placeholder
+	// Step 3: JMP to skip LOADTRUE
+	jmpSkipTrue := fs.pc
+	fs.emitSJ(0) // placeholder
+	// Step 4: setTrue — LOADTRUE negReg
+	setTrueIdx := fs.pc
+	fs.emit(int(opcodes.OP_LOADTRUE), negReg, 0, 0)
+	// Patch TEST JMP to setTrue, patch skip JMP to here
+	fs.patchSJ(jmpToSetTrue, setTrueIdx)
+	fs.patchSJ(jmpSkipTrue, setTrueIdx)
 
-	// Set loop exit index for break (after condition check)
+	// Now TEST negReg, 1 — JMP if negReg is TRUE (original was FALSE → continue)
+	fs.emitABC(int(opcodes.OP_TEST), negReg, 1, 0)
+	jmpBackIdx := fs.pc
+	fs.emitSJ(0) // placeholder jump
+
+	// Set loop exit index for break
 	fs.loopExitIdx = fs.pc
 
-	// Patch jump to go back to loop start
+	// Patch jump to loop start
 	fs.patchSJ(jmpBackIdx, loopStart)
 
-	// Patch all pending break jumps to loop exit (exit from condition check)
+	// Patch pending break jumps
 	for _, breakIdx := range fs.pendingBreaks {
 		fs.patchSJ(breakIdx, fs.pc)
 	}
 
-	// Restore previous pending breaks and loop exit index
+	// Restore
 	fs.pendingBreaks = savedPendingBreaks
 	fs.loopExitIdx = savedLoopExitIdx
 
 	return nil
 }
+
 
 // patchAsBx patches the last AsBx instruction's sBx field to jump to current PC
 func (fs *FuncState) patchAsBx(instrIdx int) {
@@ -1527,6 +1555,10 @@ func (fs *FuncState) binopToOpcode(op astapi.BinopKind) int {
 		return int(opcodes.OP_LT) // For >, use LT with swapped operands
 	case astapi.BINOP_GE:
 		return int(opcodes.OP_LE) // For >=, use LE with swapped operands
+	case astapi.BINOP_EQ:
+		return int(opcodes.OP_EQ)
+	case astapi.BINOP_NE:
+		return int(opcodes.OP_EQ) // OP_NE not available; use OP_EQ with K=1 for negation
 	default:
 		return int(opcodes.OP_ADD) // default to ADD
 	}
@@ -1534,7 +1566,8 @@ func (fs *FuncState) binopToOpcode(op astapi.BinopKind) int {
 
 // isComparisonOp returns true if the opcode is a comparison operator
 func (fs *FuncState) isComparisonOp(opcode int) bool {
-	return opcode == int(opcodes.OP_LT) || opcode == int(opcodes.OP_LE)
+	return opcode == int(opcodes.OP_LT) || opcode == int(opcodes.OP_LE) ||
+		opcode == int(opcodes.OP_EQ)
 }
 
 // emitABC emits an ABC format instruction (alias for emit).
@@ -1720,6 +1753,18 @@ func (fs *FuncState) emitAsBx(opcode, a, sbx int) int {
 }
 
 // emitSJ emits a JMP instruction using sBx format (compatible with GetsBx).
+// addBoolConstant emits a LOADBOOL instruction and returns the register index.
+// This creates a dedicated register for true/false that can be reused.
+func (fs *FuncState) addBoolConstant(val bool) int {
+	reg := fs.allocReg()
+	if val {
+		fs.emit(int(opcodes.OP_LOADTRUE), reg, 0, 0)
+	} else {
+		fs.emit(int(opcodes.OP_LOADFALSE), reg, 0, 0)
+	}
+	return reg
+}
+
 func (fs *FuncState) emitSJ(sbx int) int {
 	// Use AsBx format: opcode | A | sBx
 	return fs.emitAsBx(int(opcodes.OP_JMP), 0, sbx)
