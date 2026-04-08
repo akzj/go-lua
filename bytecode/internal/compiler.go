@@ -611,9 +611,6 @@ func (fs *FuncState) compileIfStat(stat astapi.StatNode) error {
 	// Patch end jump target
 	fs.patchSJ(jmpToEndIdx, fs.pc)
 
-	// Ensure we have a return at end of block
-	fs.emit(int(opcodes.OP_RETURN0), 0, 0, 0)
-
 	return nil
 }
 
