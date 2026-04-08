@@ -1279,30 +1279,13 @@ const NO_REG = 0x1FF
 
 // compileSingleAssign compiles a single assignment: var = expr
 func (fs *FuncState) compileSingleAssign(v astapi.ExpNode, e astapi.ExpNode) error {
-	// First compile the expression to a register
+	// Compile the expression to a register
 	exprReg := fs.allocReg()
 	fs.expToReg(e, exprReg)
-	
-	// Then store to the variable
-	if idx, ok := v.(indexAccess); ok {
-		// Table assignment: t[k] = v
-		tableReg := fs.allocReg()
-		fs.expToReg(idx.GetTable(), tableReg)
-		keyReg := fs.allocReg()
-		fs.expToReg(idx.GetKey(), keyReg)
-		fs.emitABC(int(opcodes.OP_SETTABLE), exprReg, tableReg, keyReg)
-		fs.freeReg(keyReg)
-		fs.freeReg(tableReg)
-	} else if name, ok := v.(nameAccess); ok {
-		// Global assignment: name = v (use SETTABUP to set in _ENV)
-		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name.GetName()})
-		fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, exprReg)
-	} else {
-		return fs.errorf("unsupported assignment target: %T", v)
-	}
-	
+	// Delegate to assignToVar which correctly checks locals first
+	err := fs.assignToVar(v, exprReg)
 	fs.freeReg(exprReg)
-	return nil
+	return err
 }
 
 // compileFuncDef compiles a FuncDef to a Prototype
