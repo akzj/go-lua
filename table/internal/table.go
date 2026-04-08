@@ -606,7 +606,26 @@ func (ti *TableImpl) Set(key, value typesapi.TValue) {
 			return
 		}
 	}
-	// Insert into hash
+	// Check if key already exists in hash — update in place if so
+	existing := ti.Get(key)
+	if !existing.IsNil() {
+		// Key exists — find and update the node directly
+		mp := mainposition(ti.tbl, key)
+		if mp != nil {
+			for {
+				if equalkey(key, mp) {
+					mp.Val = TValue{Tt: uint8(value.GetTag()), Value: Value{Variant: getVariant(value), Data_: getData(value)}}
+					return
+				}
+				if gnext(mp) == 0 {
+					break
+				}
+				idx := nodeIndex(ti.tbl, mp) + gnext(mp)
+				mp = gnode(ti.tbl, idx)
+			}
+		}
+	}
+	// Insert new key into hash
 	ti.newkey(key, &TValue{Tt: uint8(value.GetTag()), Value: Value{Variant: getVariant(value), Data_: getData(value)}})
 }
 
@@ -730,7 +749,8 @@ func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 		}
 		// Walk from othermain's chain to find the predecessor of mp, so we can relink.
 		prev := othermain
-		for {
+		maxIter := sizenode(ti.tbl) + 1
+		for i := 0; i < maxIter; i++ {
 			nextOff := gnext(prev)
 			if nextOff == 0 {
 				break
