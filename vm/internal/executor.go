@@ -3,6 +3,8 @@ package internal
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"os"
 	"math"
 	"unsafe"
@@ -740,10 +742,18 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// The caller expects results starting at the function slot (calleeBase - 1).
 		calleeBase := e.currentFrame().base
 
+		// DEBUG: trace OP_RETURN
+		fmt.Printf("DEBUG OP_RETURN: a=%d b=%d base=%d calleeBase=%d nRet=%d\n", a, b, base, calleeBase, nRet)
+		for di := 0; di < 6; di++ {
+			r := e.reg(base + di)
+			fmt.Printf("  R[%d] (abs %d): Tt=%d Data=%v\n", di, base+di, r.Tt, r.Value.Data_)
+		}
+
 		// Copy return values to caller's expected position (function slot)
 		for i := 0; i < nRet; i++ {
 			src := e.reg(base + a + i)
 			dst := e.reg(calleeBase - 1 + i)
+			fmt.Printf("  COPY: src=R[%d](abs %d) -> dst=abs %d, srcTt=%d srcData=%v\n", a+i, base+a+i, calleeBase-1+i, src.Tt, src.Value.Data_)
 				*dst = *src
 		}
 
@@ -1581,8 +1591,11 @@ func (e *Executor) opArith(inst opcodes.Instruction, iop func(a, b types.LuaInte
 	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	rc := e.reg(frameBase(e) + c)
-	if rb.IsInteger() && rc.IsInteger() {
-		e.setInteger(ra, iop(rb.GetInteger(), rc.GetInteger()))
+	// Try integer path first (including string-to-integer coercion)
+	bi, bok := coerceToInteger(rb)
+	ci, cok := coerceToInteger(rc)
+	if bok && cok && !rb.IsFloat() && !rc.IsFloat() {
+		e.setInteger(ra, iop(bi, ci))
 	} else {
 		e.setFloat(ra, fop(getFloat(rb), getFloat(rc)))
 	}
@@ -1596,8 +1609,10 @@ func (e *Executor) opArithK(inst opcodes.Instruction, iop func(a, b types.LuaInt
 	ra := e.RA(a)
 	rb := e.reg(frameBase(e) + b)
 	kc := e.k(c)
-	if rb.IsInteger() && kc.IsInteger() {
-		e.setInteger(ra, iop(rb.GetInteger(), kc.GetInteger()))
+	bi, bok := coerceToInteger(rb)
+	ci, cok := coerceToInteger(kc)
+	if bok && cok && !rb.IsFloat() && !kc.IsFloat() {
+		e.setInteger(ra, iop(bi, ci))
 	} else {
 		e.setFloat(ra, fop(getFloat(rb), getFloat(kc)))
 	}
@@ -1697,6 +1712,13 @@ func (e *Executor) opUnary(inst opcodes.Instruction, iop func(v types.LuaInteger
 		e.setInteger(ra, iop(rb.GetInteger()))
 	} else if rb.IsFloat() {
 		e.setFloat(ra, fop(rb.GetFloat()))
+	} else if rb.IsString() {
+		// String-to-number coercion for unary operators
+		if i, ok := coerceToInteger(rb); ok {
+			e.setInteger(ra, iop(i))
+		} else if n, ok := coerceStringToNumber(rb); ok {
+			e.setFloat(ra, fop(n))
+		}
 	}
 	// Note: pc++ removed - executeNext() already increments pc
 }
@@ -1924,7 +1946,87 @@ func getFloat(tval *TValue) types.LuaNumber {
 	if tval.IsFloat() {
 		return tval.GetFloat()
 	}
+	// String-to-number coercion for arithmetic (standard Lua behavior)
+	if tval.IsString() {
+		if n, ok := coerceStringToNumber(tval); ok {
+			return n
+		}
+	}
 	return 0
+}
+
+// coerceStringToNumber attempts to convert a string TValue to a float.
+// Returns the float value and true if successful.
+func coerceStringToNumber(tval *TValue) (types.LuaNumber, bool) {
+	s, ok := tval.Value.Data_.(string)
+	if !ok {
+		return 0, false
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	// Try parsing as float (handles "3e0", "0.5", etc.)
+	f, err := strconv.ParseFloat(s, 64)
+	if err == nil {
+		return types.LuaNumber(f), true
+	}
+	// Try parsing hex: 0x or 0X prefix
+	if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		i, err := strconv.ParseInt(s[2:], 16, 64)
+		if err == nil {
+			return types.LuaNumber(i), true
+		}
+	}
+	return 0, false
+}
+
+// coerceToInteger attempts to convert a TValue to an integer.
+// Handles integers, floats (if whole), and strings.
+func coerceToInteger(tval *TValue) (types.LuaInteger, bool) {
+	if tval.IsInteger() {
+		return tval.GetInteger(), true
+	}
+	if tval.IsFloat() {
+		f := float64(tval.GetFloat())
+		i := int64(f)
+		if f == float64(i) {
+			return types.LuaInteger(i), true
+		}
+		return 0, false
+	}
+	if tval.IsString() {
+		s, ok := tval.Value.Data_.(string)
+		if !ok {
+			return 0, false
+		}
+		s = strings.TrimSpace(s)
+		// Try integer first
+		i, err := strconv.ParseInt(s, 0, 64)
+		if err == nil {
+			return types.LuaInteger(i), true
+		}
+		// Try float, convert to int if whole
+		f, err := strconv.ParseFloat(s, 64)
+		if err == nil {
+			fi := int64(f)
+			if f == float64(fi) {
+				return types.LuaInteger(fi), true
+			}
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+// isNumeric returns true if the TValue is a number or a string that can be coerced to a number.
+func isNumeric(tval *TValue) bool {
+	return tval.IsInteger() || tval.IsFloat() || (tval.IsString() && canCoerceToNumber(tval))
+}
+
+func canCoerceToNumber(tval *TValue) bool {
+	_, ok := coerceStringToNumber(tval)
+	return ok
 }
 
 func setInt(tval *TValue, i types.LuaInteger) {
