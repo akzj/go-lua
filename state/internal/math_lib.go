@@ -240,7 +240,19 @@ func bmathFmod(stack []types.TValue, base int) int {
 // =============================================================================
 func bmathModf(stack []types.TValue, base int) int {
 	x := checkNumber(stack, base, 1, "modf")
+	// Special cases: inf and NaN
+	if math.IsInf(x, 0) {
+		stack[base] = types.NewTValueFloat(types.LuaNumber(x))
+		stack[base+1] = types.NewTValueFloat(0.0)
+		return 2
+	}
+	if math.IsNaN(x) {
+		stack[base] = types.NewTValueFloat(types.LuaNumber(x))
+		stack[base+1] = types.NewTValueFloat(types.LuaNumber(x))
+		return 2
+	}
 	i, f := math.Modf(x)
+	// For whole numbers, return integer type for the integer part
 	stack[base] = types.NewTValueInteger(types.LuaInteger(i))
 	stack[base+1] = types.NewTValueFloat(types.LuaNumber(f))
 	return 2

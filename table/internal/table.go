@@ -428,6 +428,18 @@ func mainposition(t *Table, key typesapi.TValue) *Node {
 	if key.IsInteger() {
 		return hashint(t, key.GetInteger())
 	}
+	if key.IsFloat() {
+		// Normalize: float keys that are whole numbers hash like integers
+		// This ensures -0.0, 0.0, and 0 all hash to the same slot
+		f := float64(key.GetFloat())
+		if f == 0 {
+			return hashint(t, 0)
+		}
+		fi := int64(f)
+		if f == float64(fi) {
+			return hashint(t, typesapi.LuaInteger(fi))
+		}
+	}
 	// If hash table has no nodes allocated, return nil
 	if t.Node == nil || sizenode(t) == 0 {
 		return nil
@@ -590,11 +602,12 @@ func (ti *TableImpl) Get(key typesapi.TValue) typesapi.TValue {
 	if key.IsInteger() {
 		return ti.GetInt(key.GetInteger())
 	}
-	// For floats, check if it represents a valid integer key
+	// For floats, check if it represents a valid integer key (including 0.0 and -0.0)
 	if key.IsFloat() {
-		f := key.GetFloat()
-		if float64(f) == float64(int64(f)) && f >= 1 {
-			return ti.GetInt(typesapi.LuaInteger(f))
+		f := float64(key.GetFloat())
+		fi := int64(f)
+		if f == float64(fi) {
+			return ti.GetInt(typesapi.LuaInteger(fi))
 		}
 	}
 	// Generic get for other types
@@ -646,11 +659,12 @@ func (ti *TableImpl) Set(key, value typesapi.TValue) {
 		ti.SetInt(key.GetInteger(), value)
 		return
 	}
-	// For float keys that are valid integers
+	// For float keys that are valid integers (including 0.0 and -0.0)
 	if key.IsFloat() {
-		f := key.GetFloat()
-		if float64(f) == float64(int64(f)) && f >= 1 {
-			ti.SetInt(typesapi.LuaInteger(f), value)
+		f := float64(key.GetFloat())
+		fi := int64(f)
+		if f == float64(fi) {
+			ti.SetInt(typesapi.LuaInteger(fi), value)
 			return
 		}
 	}
