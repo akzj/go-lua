@@ -476,6 +476,7 @@ func (e *unopExp) IsConstant() bool {
 	return e.exp.IsConstant()
 }
 func (e *unopExp) Kind() astapi.ExpKind { return astapi.EXP_NONRELOC }
+func (e *unopExp) GetUnaryOp() (astapi.UnopKind, astapi.ExpNode) { return e.op, e.exp }
 
 // tableConstructor implements table literal.
 type tableConstructor struct {
