@@ -1551,6 +1551,11 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 		} else if uvIdx := fs.resolveUpvalue(name); uvIdx >= 0 {
 			// Upvalue from enclosing scope: emit GETUPVAL
 			fs.emitABC(int(opcodes.OP_GETUPVAL), destReg, uvIdx, 0)
+		} else if name == "_ENV" {
+			// Special case: _ENV is the environment table itself (upvalue 0)
+			// Don't look it up as a key in _ENV (that would be circular)
+			envIdx := fs.ensureEnvUpvalue()
+			fs.emitABC(int(opcodes.OP_GETUPVAL), destReg, envIdx, 0)
 		} else {
 			// Global variable: emit GETTABUP to load from _ENV upvalue
 			// _ENV is always upvalue index 0 for the main chunk
