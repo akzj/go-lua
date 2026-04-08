@@ -1698,6 +1698,14 @@ func (L *LuaState) openBaseLib() {
 	packageTbl.Set(loadedKey, &tableWrapper{tbl: loadedTbl})
 	packageTbl.Set(preloadKey, &tableWrapper{tbl: preloadTbl})
 
+	// Set package.config, package.path, package.cpath
+	configKey := types.NewTValueString("config")
+	packageTbl.Set(configKey, types.NewTValueString("/\n;\n?\n!\n-\n"))
+	pathKey := types.NewTValueString("path")
+	packageTbl.Set(pathKey, types.NewTValueString("./?.lua"))
+	cpathKey := types.NewTValueString("cpath")
+	packageTbl.Set(cpathKey, types.NewTValueString(""))
+
 	// Set package itself in package.loaded
 	selfKey := types.NewTValueString("package")
 	loadedTbl.Set(selfKey, &tableWrapper{tbl: packageTbl})

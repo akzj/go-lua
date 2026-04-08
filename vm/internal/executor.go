@@ -492,7 +492,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
 		cond := e.equalValues(e.reg(frameBase(e)+a), e.reg(frameBase(e)+b))
-		if cond == vmapi.HasKBit(inst) {
+		if cond != vmapi.HasKBit(inst) {
 			e.pc++
 		}
 		_ = c
@@ -507,7 +507,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		cond := e.equalValues(e.reg(frameBase(e)+a), e.k(b))
-		if cond == vmapi.HasKBit(inst) {
+		if cond != vmapi.HasKBit(inst) {
 			e.pc++
 		}
 
@@ -521,7 +521,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		} else if ra.IsFloat() {
 			cond = float64(ra.GetFloat()) == float64(b)
 		}
-		if cond == vmapi.HasKBit(inst) {
+		if cond != vmapi.HasKBit(inst) {
 			e.pc++
 		}
 
@@ -1478,32 +1478,27 @@ func (e *Executor) opUnary(inst opcodes.Instruction, iop func(v types.LuaInteger
 func (e *Executor) opCompare(inst opcodes.Instruction, lessThan bool) {
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
-	c := vmapi.GetArgC(inst)
 	ra := e.reg(frameBase(e) + a)
-	rc := e.reg(frameBase(e) + c)
+	rb := e.reg(frameBase(e) + b)
 	var cond bool
 	if lessThan {
-		cond = e.lessThan(ra, rc)
+		cond = e.lessThan(ra, rb)
 	} else {
-		cond = e.equalValues(ra, rc)
+		cond = e.equalValues(ra, rb)
 	}
-	if cond == vmapi.HasKBit(inst) {
+	if cond != vmapi.HasKBit(inst) {
 		e.pc++
 	}
-	_ = b
 }
 
 func (e *Executor) opCompareLE(inst opcodes.Instruction) {
 	a := vmapi.GetArgA(inst)
 	b := vmapi.GetArgB(inst)
-	c := vmapi.GetArgC(inst)
 	ra := e.reg(frameBase(e) + a)
-	rc := e.reg(frameBase(e) + c)
-	if e.lessEqual(ra, rc) != vmapi.HasKBit(inst) {
+	rb := e.reg(frameBase(e) + b)
+	if e.lessEqual(ra, rb) != vmapi.HasKBit(inst) {
 		e.pc++
 	}
-	_ = b
-	_ = a
 }
 
 func (e *Executor) compareImm(inst opcodes.Instruction, lessEqual bool) {
