@@ -73,9 +73,24 @@ func (c *Compiler) Compile(chunk astapi.Chunk) (bcapi.Prototype, error) {
 		}
 	}
 
-	// Add RETURN0 at end of function block
-	if len(proto.code) == 0 || (proto.code[len(proto.code)-1]>>6)&0x3F != uint32(opcodes.OP_RETURN0) {
-		fs.emit(int(opcodes.OP_RETURN0), 0, 0, 0)
+	// Handle block-level return expressions (e.g., "return 42" at end of chunk)
+	// In Lua, return at the end of a block is stored in Block.ReturnExp(),
+	// NOT as a STAT_RETURN statement.
+	retExps := block.ReturnExp()
+	if len(retExps) > 0 {
+		// Compile each return expression to consecutive registers
+		for _, exp := range retExps {
+			reg := fs.allocReg()
+			fs.expToReg(exp, reg)
+		}
+		// Emit RETURN with number of results
+		n := len(retExps)
+		fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
+	} else {
+		// Add RETURN0 at end of function block (no return values)
+		if len(proto.code) == 0 || (proto.code[len(proto.code)-1]>>6)&0x3F != uint32(opcodes.OP_RETURN0) {
+			fs.emit(int(opcodes.OP_RETURN0), 0, 0, 0)
+		}
 	}
 
 	return proto, nil
@@ -506,6 +521,16 @@ func (fs *FuncState) compileBlock(block astapi.Block) error {
 				return err
 			}
 		}
+	}
+	// Handle block-level return expressions
+	retExps := block.ReturnExp()
+	if len(retExps) > 0 {
+		for _, exp := range retExps {
+			reg := fs.allocReg()
+			fs.expToReg(exp, reg)
+		}
+		n := len(retExps)
+		fs.emitABC(int(opcodes.OP_RETURN), 0, n+1, 0)
 	}
 	return nil
 }
