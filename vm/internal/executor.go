@@ -929,14 +929,30 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// This uses []types.TValue, not the internal GoFunc type.
 		if apiFunc, ok := val.(vmapi.GoFunc); ok {
 			// Bridge: convert []TValue to []types.TValue for the call.
-			// Use reg() which auto-grows the stack.
 			args := make([]types.TValue, nArgs+1) // +1 for the function itself
 			for i := 0; i <= nArgs; i++ {
 				args[i] = e.reg(base + i)
 			}
 			nRet := apiFunc(args, 0)
-			// For now, assume nRet is pushed onto stack by the function itself.
-			_ = nRet
+			// Copy results back from args to VM stack.
+			// GoFuncs write results starting at args[0] (= stack[base]).
+			for i := 0; i < nRet; i++ {
+				result := args[i]
+				dst := e.reg(base + i)
+				variant, data := extractVariantAndData(result)
+				dst.Tt = uint8(result.GetTag())
+				dst.Value.Variant = variant
+				dst.Value.Data_ = data
+			}
+			// Clear remaining slots if caller expects more results
+			if nResults > nRet && nResults != -1 {
+				for i := nRet; i < nResults; i++ {
+					dst := e.reg(base + i)
+					dst.Tt = uint8(types.LUA_TNIL)
+					dst.Value.Variant = types.ValueGC
+					dst.Value.Data_ = nil
+				}
+			}
 			return true
 		}
 
@@ -1145,8 +1161,7 @@ func (e *Executor) finishGet(ra, t, key *TValue) {
 					// result is *table/internal.TValue which implements types.TValue
 					// Use extractVariantAndData to get the data
 					variant, data := extractVariantAndData(result)
-					// Apply Ctb to match IsLClosure() etc checks (expects BIT_ISCOLLECTABLE)
-					ra.Tt = uint8(types.Ctb(result.GetTag()))
+					ra.Tt = uint8(result.GetTag())
 					ra.Value.Variant = variant
 					ra.Value.Data_ = data
 					return

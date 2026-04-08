@@ -1346,21 +1346,10 @@ type nameAccess interface {
 
 // addArgLoad emits code to load an argument into a register
 func (fs *FuncState) addArgLoad(arg astapi.ExpNode, reg int) {
-	if s, ok := arg.(interface{ GetValue() string }); ok {
-		idx := fs.addConstant(&Constant{Type: ConstString, Str: s.GetValue()})
-		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
-	} else if i, ok := arg.(interface{ GetValue() int64 }); ok {
-		idx := fs.addConstant(&Constant{Type: ConstInteger, Int: i.GetValue()})
-		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
-	} else if f, ok := arg.(interface{ GetValue() float64 }); ok {
-		idx := fs.addConstant(&Constant{Type: ConstFloat, Float: f.GetValue()})
-		fs.emitABx(int(opcodes.OP_LOADK), reg, idx)
-	} else if binop, ok := arg.(binopAccess); ok {
-		// Handle binary expression: left, right, op
-		fs.compileBinop(binop, reg)
-	} else {
-		fs.emitABC(int(opcodes.OP_LOADNIL), reg, 0, 0)
-	}
+	// Delegate to expToReg which handles all expression types correctly.
+	// Previously this was a parallel incomplete dispatch that missed FuncCall,
+	// TableConstructor, Name lookups, etc. — causing them to emit LOADNIL.
+	fs.expToReg(arg, reg)
 }
 
 // expToReg compiles an expression to a register.
@@ -1395,29 +1384,14 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
 			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx+256)
 		}
-	case interface{ Kind() astapi.ExpKind }:
-		// Handle boolean and nil constants
-		switch e.Kind() {
-		case astapi.EXP_TRUE:
-			fs.emit(int(opcodes.OP_LOADTRUE), destReg, 0, 0)
-		case astapi.EXP_FALSE:
-			fs.emit(int(opcodes.OP_LOADFALSE), destReg, 0, 0)
-		case astapi.EXP_NIL:
-			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
-		default:
-			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
-		}
-	case interface{ NumFields() int; NumRecords() int }:
-		// Table constructor: emit NEWTABLE
-		fs.emitABx(int(opcodes.OP_NEWTABLE), destReg, 0)
 	case astapi.FuncCall:
-		// Function call as expression: compile function, args, then CALL
+		// Function call as expression — MUST be before Kind() since FuncCallImpl has Kind()
 		funcExp := e.Func()
 		args := e.Args()
-		
+
 		// Compile function to destReg
 		fs.expToReg(funcExp, destReg)
-		
+
 		// Compile arguments starting at destReg+1
 		for i, arg := range args {
 			argReg := destReg + 1 + i
@@ -1426,7 +1400,7 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 				fs.Proto.maxstacksize = uint8(argReg + 1)
 			}
 		}
-		
+
 		// Update maxstacksize for arguments
 		nArgs := len(args)
 		if nArgs > 0 {
@@ -1438,14 +1412,92 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 				fs.Proto.maxstacksize = uint8(destReg + 2)
 			}
 		}
-		
-		// Emit CALL R(destReg), nArgs+1, 1 (1 result)
-		fs.emitABC(int(opcodes.OP_CALL), destReg, nArgs+1, 1)
+
+		// Emit CALL R(destReg), nArgs+1, 2 (1 result into destReg)
+		// C=2 means 1 result (C-1), since expToReg is called when the value is needed
+		fs.emitABC(int(opcodes.OP_CALL), destReg, nArgs+1, 2)
+	case interface{ NumFields() int; NumRecords() int }:
+		// Table constructor — MUST be before Kind() since TableConstructorImpl has Kind()
+		fs.compileTableConstructor(e, destReg)
+	case interface{ Kind() astapi.ExpKind }:
+		// Handle boolean and nil constants — catch-all for remaining ExpKind types
+		switch e.Kind() {
+		case astapi.EXP_TRUE:
+			fs.emit(int(opcodes.OP_LOADTRUE), destReg, 0, 0)
+		case astapi.EXP_FALSE:
+			fs.emit(int(opcodes.OP_LOADFALSE), destReg, 0, 0)
+		case astapi.EXP_NIL:
+			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+		default:
+			fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
+		}
 	default:
 		fs.emitABC(int(opcodes.OP_LOADNIL), destReg, 0, 0)
 	}
 	return destReg
 }
+
+// compileTableConstructor compiles a table constructor expression {fields}.
+// Emits NEWTABLE followed by SETI/SETFIELD/SETTABLE for each field, and SETLIST for array batch.
+func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumRecords() int }, destReg int) {
+	nArray := tc.NumFields()
+	nHash := tc.NumRecords()
+
+	// Emit NEWTABLE A B C k — A=dest, B=array size hint, C=hash size hint
+	// For Lua 5.4, NEWTABLE uses log-encoded sizes. For simplicity, use 0 (VM will grow as needed).
+	fs.emitABC(int(opcodes.OP_NEWTABLE), destReg, nArray, nHash)
+	// NEWTABLE is followed by an EXTRAARG in Lua 5.4 when k=1; we skip this for now
+	// (the VM should handle NEWTABLE without EXTRAARG for small tables)
+
+	// If there are array fields, compile them with SETI
+	if nArray > 0 {
+		if iter, ok := tc.(interface {
+			GetArrayField(int) astapi.ExpNode
+		}); ok {
+			for i := 0; i < nArray; i++ {
+				field := iter.GetArrayField(i)
+				tmpReg := destReg + 1
+				fs.expToReg(field, tmpReg)
+				if tmpReg+1 > int(fs.Proto.maxstacksize) {
+					fs.Proto.maxstacksize = uint8(tmpReg + 1)
+				}
+				// SETI A B C: R[A][B] = R[C]  (B is integer key, 1-based)
+				fs.emitABC(int(opcodes.OP_SETI), destReg, i+1, tmpReg)
+			}
+		}
+	}
+
+	// If there are record fields, compile them with SETFIELD
+	if nHash > 0 {
+		if iter, ok := tc.(interface {
+			GetRecordField(int) (astapi.ExpNode, astapi.ExpNode)
+		}); ok {
+			for i := 0; i < nHash; i++ {
+				key, val := iter.GetRecordField(i)
+				// Compile value to temp register
+				valReg := destReg + 1
+				fs.expToReg(val, valReg)
+				if valReg+1 > int(fs.Proto.maxstacksize) {
+					fs.Proto.maxstacksize = uint8(valReg + 1)
+				}
+				// If key is a string constant, use SETFIELD
+				if strKey, ok := key.(interface{ GetValue() string }); ok {
+					keyIdx := fs.addConstant(&Constant{Type: ConstString, Str: strKey.GetValue()})
+					fs.emitABC(int(opcodes.OP_SETFIELD), destReg, keyIdx, valReg)
+				} else {
+					// General key: compile key, use SETTABLE
+					keyReg := destReg + 2
+					fs.expToReg(key, keyReg)
+					if keyReg+1 > int(fs.Proto.maxstacksize) {
+						fs.Proto.maxstacksize = uint8(keyReg + 1)
+					}
+					fs.emitABC(int(opcodes.OP_SETTABLE), destReg, keyReg, valReg)
+				}
+			}
+		}
+	}
+}
+
 
 // compileIndexExpr compiles an indexed expression (table.key) to a register.
 // Generates: GETTABLE R(dest), R(tableReg), K(keyIdx)

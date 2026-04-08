@@ -192,6 +192,10 @@ func (t *TableConstructorImpl) IsConstant() bool {
 	return true
 }
 func (t *TableConstructorImpl) Kind() api.ExpKind { return api.EXP_RELOC }
+func (t *TableConstructorImpl) GetArrayField(i int) api.ExpNode { return t.ArrayFields[i] }
+func (t *TableConstructorImpl) GetRecordField(i int) (api.ExpNode, api.ExpNode) {
+	return t.RecordFields[i].Key, t.RecordFields[i].Value
+}
 func (t *TableConstructorImpl) Position() (int, int) { return t.BaseNode.Line, t.BaseNode.Column }
 
 // =============================================================================
