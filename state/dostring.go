@@ -67,8 +67,10 @@ func DoStringOn(L stateapi.LuaStateInterface, code string) (retErr error) {
 					retErr = fmt.Errorf("error object is nil")
 				}
 			} else {
-				// Re-panic for Go bugs (non-LuaError panics)
-				panic(r)
+				// Convert ALL panics to errors instead of crashing.
+				// This prevents nil pointer dereferences in the VM from
+				// killing the Go process — they become Lua-level errors.
+				retErr = fmt.Errorf("internal error: %v", r)
 			}
 		}
 	}()

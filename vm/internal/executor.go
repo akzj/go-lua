@@ -2098,6 +2098,14 @@ func (e *Executor) equalValues(a, b *TValue) bool {
 		sb, _ := b.GetValue().(string)
 		return sa == sb
 	}
+	// Tables and functions compare by reference identity (pointer equality).
+	// Two table/function values are equal iff they are the SAME object.
+	if a.IsTable() && b.IsTable() {
+		return a.Value.Data_ == b.Value.Data_
+	}
+	if a.IsFunction() && b.IsFunction() {
+		return a.Value.Data_ == b.Value.Data_
+	}
 	return false
 }
 
