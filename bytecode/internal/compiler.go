@@ -248,10 +248,14 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		if localReg := fs.locals.Find(funcName); localReg >= 0 {
 			// Local variable: use MOVE to copy from local register
 			fs.emitABC(int(opcodes.OP_MOVE), funcReg, localReg, 0)
+		} else if uvIdx := fs.resolveUpvalue(funcName); uvIdx >= 0 {
+			// Upvalue from enclosing scope
+			fs.emitABC(int(opcodes.OP_GETUPVAL), funcReg, uvIdx, 0)
 		} else {
-			// Global variable: emit GETTABUP to load from upvalue[0]
+			// Global variable: emit GETTABUP to load from _ENV upvalue
+			envIdx := fs.ensureEnvUpvalue()
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
-			fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, 0, nameIdx)
+			fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, envIdx, nameIdx)
 		}
 		
 		// Now emit arguments starting at R[funcReg+1]
@@ -396,9 +400,15 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	if namer, ok := stat.(interface{ GetName() string }); ok {
 		funcName = namer.GetName()
 	}
-	
 
-	
+	// Allocate a register for the function BEFORE compiling the body.
+	// This ensures the function name is visible as a local inside its own body
+	// (enabling self-recursion via upvalue capture).
+	reg := fs.allocReg()
+	if funcName != "" {
+		fs.locals.Add(funcName, reg, 0)
+	}
+
 	// Compile the function to get its prototype
 	funcProto, err := fs.compileFuncDef(funcDef)
 	if err != nil {
@@ -407,21 +417,9 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	
 	// Add the prototype as a constant
 	funcIdx := fs.addConstant(&Constant{Type: ConstFunction, Func: funcProto})
-	
-	// Allocate a register for the function
-	reg := fs.allocReg()
 
-	
 	// Emit CLOSURE to load function into register
 	fs.emitABx(int(opcodes.OP_CLOSURE), reg, funcIdx)
-	
-	// Register the local variable
-	if funcName != "" {
-		fs.locals.Add(funcName, reg, 0)
-		// Also store in _ENV so nested functions can find it via GETTABUP
-		nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
-		fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, reg)
-	}
 	
 	return nil
 }
@@ -1270,14 +1268,19 @@ func (fs *FuncState) compileFuncCallToVars(call astapi.FuncCall, nVars int) (int
 // assignToVar assigns the value at srcReg to variable v
 func (fs *FuncState) assignToVar(v astapi.ExpNode, srcReg int) error {
 	if name, ok := v.(nameAccess); ok {
+		varName := name.GetName()
 		// Check if it's a local variable
-		if localReg := fs.locals.Find(name.GetName()); localReg >= 0 {
+		if localReg := fs.locals.Find(varName); localReg >= 0 {
 			// Local variable: use MOVE to copy
 			fs.emitABC(int(opcodes.OP_MOVE), localReg, srcReg, 0)
+		} else if uvIdx := fs.resolveUpvalue(varName); uvIdx >= 0 {
+			// Upvalue from enclosing scope: emit SETUPVAL
+			fs.emitABC(int(opcodes.OP_SETUPVAL), srcReg, uvIdx, 0)
 		} else {
 			// Global variable: use SETTABUP
-			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name.GetName()})
-			fs.emitABC(int(opcodes.OP_SETTABUP), 0, nameIdx, srcReg)
+			envIdx := fs.ensureEnvUpvalue()
+			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: varName})
+			fs.emitABC(int(opcodes.OP_SETTABUP), envIdx, nameIdx, srcReg)
 		}
 	} else if idx, ok := v.(indexAccess); ok {
 		// Table assignment: t[k] = v
@@ -1339,6 +1342,7 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 		Proto:        nestedProto,
 		pc:           0,
 		C:            fs.C,
+		Prev:         fs,
 		locals:       NewLocals(),
 		labelScopes:  []map[string]int{make(map[string]int)},
 		pendingGotos: make(map[string][]int),
@@ -1459,10 +1463,16 @@ func (fs *FuncState) expToReg(exp astapi.ExpNode, destReg int) int {
 		if reg >= 0 {
 			// Local variable: emit MOVE to copy from local register
 			fs.emitABC(int(opcodes.OP_MOVE), destReg, reg, 0)
+		} else if uvIdx := fs.resolveUpvalue(name); uvIdx >= 0 {
+			// Upvalue from enclosing scope: emit GETUPVAL
+			fs.emitABC(int(opcodes.OP_GETUPVAL), destReg, uvIdx, 0)
 		} else {
-			// Global variable: emit GETTABUP to load from upvalue[0]
+			// Global variable: emit GETTABUP to load from _ENV upvalue
+			// _ENV is always upvalue index 0 for the main chunk
+			// For nested functions, _ENV should also be captured as upvalue 0
+			envIdx := fs.ensureEnvUpvalue()
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: name})
-			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, 0, nameIdx)
+			fs.emitABC(int(opcodes.OP_GETTABUP), destReg, envIdx, nameIdx)
 		}
 	case astapi.FuncCall:
 		// Function call as expression — MUST be before Kind() since FuncCallImpl has Kind()
@@ -1967,6 +1977,79 @@ func NewFuncState(c *Compiler, proto *Prototype) *FuncState {
 // currentPC returns the current program counter.
 func (fs *FuncState) currentPC() int {
 	return fs.pc
+}
+
+// addUpvalue adds an upvalue descriptor to this function's prototype.
+// Returns the upvalue index.
+func (fs *FuncState) addUpvalue(name string, instack uint8, idx uint8) int {
+	// Check if this upvalue already exists
+	for i, uv := range fs.Proto.upvalues {
+		if uv.Name == name {
+			return i
+		}
+	}
+	// Add new upvalue descriptor
+	uvIdx := len(fs.Proto.upvalues)
+	fs.Proto.upvalues = append(fs.Proto.upvalues, &Upvaldesc{
+		Name:    name,
+		Instack: instack,
+		Idx:     idx,
+	})
+	fs.Proto.sizeupvalues = len(fs.Proto.upvalues)
+	return uvIdx
+}
+
+// resolveUpvalue resolves a variable name as an upvalue.
+// Returns the upvalue index, or -1 if not found in any enclosing scope.
+// This implements Lua's upvalue capture chain:
+// - If found in parent's locals → Instack=1, Idx=parent's register
+// - If found in parent's upvalues → Instack=0, Idx=parent's upvalue index
+// - If not found in parent, recurse to grandparent
+func (fs *FuncState) resolveUpvalue(name string) int {
+	if fs.Prev == nil {
+		return -1 // no enclosing function
+	}
+	
+	// Check parent's locals first
+	reg := fs.Prev.locals.Find(name)
+	if reg >= 0 {
+		// Found in parent's local variables — capture from stack
+		return fs.addUpvalue(name, 1, uint8(reg))
+	}
+	
+	// Check parent's upvalues (recursively resolve in parent first)
+	uvIdx := fs.Prev.resolveUpvalue(name)
+	if uvIdx >= 0 {
+		// Found in an ancestor — capture from parent's upvalue
+		return fs.addUpvalue(name, 0, uint8(uvIdx))
+	}
+	
+	return -1 // not found in any enclosing scope
+}
+
+// ensureEnvUpvalue ensures that _ENV is available as an upvalue in this function.
+// For the main chunk, _ENV is upvalue 0 by convention (set up by the VM).
+// For nested functions, _ENV must be captured from the parent.
+// Returns the upvalue index for _ENV.
+func (fs *FuncState) ensureEnvUpvalue() int {
+	// Check if _ENV already exists in upvalues
+	for i, uv := range fs.Proto.upvalues {
+		if uv.Name == "_ENV" {
+			return i
+		}
+	}
+	// If this is the main chunk (no parent), _ENV is upvalue 0
+	if fs.Prev == nil {
+		// Main chunk: _ENV should already be set up, but add it if missing
+		return fs.addUpvalue("_ENV", 1, 0)
+	}
+	// For nested functions, resolve _ENV through the upvalue chain
+	uvIdx := fs.resolveUpvalue("_ENV")
+	if uvIdx >= 0 {
+		return uvIdx
+	}
+	// Fallback: _ENV not found, add it as upvalue 0 from parent's upvalue 0
+	return fs.addUpvalue("_ENV", 0, 0)
 }
 
 // allocReg allocates a new register.

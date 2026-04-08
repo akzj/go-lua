@@ -293,7 +293,16 @@ type Frame struct {
 }
 
 type UpVal struct {
-	Value TValue
+	Value TValue    // Used when closed (variable has left scope) or for non-stack upvalues
+	open  *TValue   // When non-nil, points to the actual stack slot (open upvalue)
+}
+
+// Get returns the current value of the upvalue.
+func (uv *UpVal) Get() *TValue {
+	if uv.open != nil {
+		return uv.open
+	}
+	return &uv.Value
 }
 
 func (f *Frame) Base() int                     { return f.base }
@@ -402,7 +411,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
-			e.copyValue(e.RA(a), &frame.upvals[b].Value)
+			e.copyValue(e.RA(a), frame.upvals[b].Get())
 		} else {
 			e.setNil(e.RA(a))
 		}
@@ -411,7 +420,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
-			e.copyValue(&frame.upvals[b].Value, e.RA(vmapi.GetArgA(inst)))
+			e.copyValue(frame.upvals[b].Get(), e.RA(vmapi.GetArgA(inst)))
 		}
 
 	case opcodes.OP_GETTABUP:
@@ -426,7 +435,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if hasUpvals {
 			// Normal path: get upval from frame
 			// GETTABUP C field is always a constant index, use e.k() not e.rk()
-			e.finishGet(e.RA(a), &frame.upvals[b].Value, e.k(int(c)))
+			e.finishGet(e.RA(a), frame.upvals[b].Get(), e.k(int(c)))
 		} else if b == 0 {
 			// b==0 means upval[0]/_ENV. c is raw 0-based constant index.
 			if e.globalEnvPtr != nil {
@@ -468,7 +477,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		frame := e.currentFrame()
 		hasUpvals := frame != nil && frame.upvals != nil && a < len(frame.upvals)
 		if hasUpvals {
-			e.finishSet(&frame.upvals[a].Value, e.k(b), e.rk(c))
+			e.finishSet(frame.upvals[a].Get(), e.k(b), e.rk(c))
 		} else if e.globalEnv != nil {
 			// Store to globalEnv for global variables
 			globalTValue := &TValue{
@@ -929,21 +938,37 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// This satisfies the luaClosure duck-type interface so executeCall can use it.
 		newClosure := &luaClosureImpl{proto: subProto}
 
-		// Propagate upvalues to the new closure.
-		// The compiler treats all non-local variables as global lookups via GETTABUP(upval[0]=_ENV).
-		// We must give the new closure upval[0] = _ENV so nested functions can access globals.
-		if frame.upvals != nil && len(frame.upvals) > 0 {
-			// Parent frame has upvals — copy them (includes _ENV at index 0)
+		// Propagate upvalues to the new closure using the child prototype's upvalue descriptors.
+		// Each descriptor says: Instack=1 → capture from parent's register; Instack=0 → copy from parent's upvalue.
+		uvDescs := subProto.GetUpvalues()
+		if len(uvDescs) > 0 {
+			newClosure.upvals = make([]*UpVal, len(uvDescs))
+			for i, desc := range uvDescs {
+				if desc.Instack == 1 {
+					// Capture from parent's register — create open upvalue pointing to stack slot
+					uv := &UpVal{open: e.reg(frameBase(e) + int(desc.Idx))}
+					newClosure.upvals[i] = uv
+				} else {
+					// Copy from parent's upvalue (chained capture)
+					if frame.upvals != nil && int(desc.Idx) < len(frame.upvals) {
+						newClosure.upvals[i] = frame.upvals[desc.Idx]
+					} else {
+						// Fallback: create nil upvalue
+						newClosure.upvals[i] = &UpVal{}
+					}
+				}
+			}
+		} else if frame.upvals != nil && len(frame.upvals) > 0 {
+			// No upvalue descriptors (old-style) — copy all parent upvals for backward compat
 			newClosure.upvals = make([]*UpVal, len(frame.upvals))
 			copy(newClosure.upvals, frame.upvals)
 		} else if e.globalEnvPtr != nil {
-			// Top-level frame: create _ENV upval from globalEnvPtr
+			// Top-level frame with no upvals: create _ENV upval from globalEnvPtr
 			envUpval := &UpVal{}
 			envUpval.Value.Tt = uint8(types.LUA_VLIGHTUSERDATA)
 			envUpval.Value.Value.Variant = types.ValuePointer
 			envUpval.Value.Value.Data_ = unsafe.Pointer(e.globalEnvPtr)
 			newClosure.upvals = []*UpVal{envUpval}
-		} else {
 		}
 
 		// Set the result register to an LClosure TValue
