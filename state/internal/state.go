@@ -58,6 +58,22 @@ func luaError(msg types.TValue) {
 }
 
 // luaErrorString is a convenience helper for string error messages.
+
+// realArgCount counts the actual non-nil arguments passed to a GoFunc.
+// The GoFunc bridge may pass extra nil-padded slots (gfBase offset),
+// so len(stack)-base-1 can overcount. This returns the true arg count.
+func realArgCount(stack []types.TValue, base int) int {
+	raw := len(stack) - base - 1
+	for raw > 0 {
+		idx := base + raw
+		if idx < len(stack) && stack[idx] != nil && !stack[idx].IsNil() {
+			break
+		}
+		raw--
+	}
+	return raw
+}
+
 func luaErrorString(msg string) {
 	panic(&LuaError{Msg: types.NewTValueString(msg)})
 }
@@ -649,7 +665,8 @@ func createModuleTable() tableapi.TableInterface {
 // bprint implements Lua's print function.
 // Pushes no return values, prints arguments to stdout.
 func bprint(stack []types.TValue, base int) int {
-	for i := 1; i < len(stack)-base; i++ {
+	nArgs := realArgCount(stack, base)
+	for i := 1; i <= nArgs; i++ {
 		if i > 1 {
 			fmt.Print("\t")
 		}
@@ -722,7 +739,7 @@ func btype(stack []types.TValue, base int) int {
 // bassert implements Lua's assert function.
 // Uses LuaError so pcall can catch assertion failures.
 func bassert(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'assert' (value expected)")
 		return 0
@@ -827,7 +844,7 @@ func btonumber(stack []types.TValue, base int) int {
 // berror implements Lua's error(msg [, level]) function.
 // Raises a Lua error by panicking with LuaError.
 func berror(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaError(types.NewTValueNil())
 		return 0
@@ -841,7 +858,7 @@ func berror(stack []types.TValue, base int) int {
 // Calls f in protected mode. If f raises an error, returns false + errmsg.
 // If f succeeds, returns true + results.
 func bpcall(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		stack[base] = types.NewTValueBoolean(false)
 		stack[base+1] = types.NewTValueString("bad argument #1 to 'pcall' (value expected)")
@@ -901,7 +918,7 @@ func bpcall(stack []types.TValue, base int) int {
 // bxpcall implements Lua's xpcall(f, handler, ...) function.
 // Like pcall but with a message handler function.
 func bxpcall(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 2 {
 		stack[base] = types.NewTValueBoolean(false)
 		stack[base+1] = types.NewTValueString("bad argument #1 to 'xpcall' (value expected)")
@@ -982,7 +999,7 @@ func bxpcall(stack []types.TValue, base int) int {
 
 // bselect implements Lua's select(index, ...) function.
 func bselect(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'select' (number or string expected, got no value)")
 		return 0
@@ -1047,7 +1064,7 @@ func extractTable(v types.TValue) tableapi.TableInterface {
 
 // bnext implements Lua's next(table [, index]) function.
 func bnext(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'next' (table expected, got no value)")
 		return 0
@@ -1082,7 +1099,7 @@ func makeIpairsIter(tbl tableapi.TableInterface) vm.GoFunc {
 	return func(stack []types.TValue, base int) int {
 		// stack[base+1] = table (invariant state), stack[base+2] = control variable (index)
 		var idx types.LuaInteger
-		nArgs := len(stack) - base - 1
+		nArgs := realArgCount(stack, base)
 		if nArgs >= 2 && stack[base+2] != nil && stack[base+2].IsInteger() {
 			idx = stack[base+2].GetInteger()
 		}
@@ -1102,7 +1119,7 @@ func makeIpairsIter(tbl tableapi.TableInterface) vm.GoFunc {
 // bipairs implements Lua's ipairs(t) function.
 // Returns iterator function, table, 0
 func bipairs(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'ipairs' (table expected, got no value)")
 		return 0
@@ -1127,7 +1144,7 @@ func bipairs(stack []types.TValue, base int) int {
 // makePairsIter creates the iterator function for pairs.
 func makePairsIter(tbl tableapi.TableInterface) vm.GoFunc {
 	return func(stack []types.TValue, base int) int {
-		nArgs := len(stack) - base - 1
+		nArgs := realArgCount(stack, base)
 		var key types.TValue
 		if nArgs >= 2 && stack[base+2] != nil {
 			key = stack[base+2]
@@ -1149,7 +1166,7 @@ func makePairsIter(tbl tableapi.TableInterface) vm.GoFunc {
 // bpairs implements Lua's pairs(t) function.
 // Returns next, table, nil
 func bpairs(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'pairs' (table expected, got no value)")
 		return 0
@@ -1171,7 +1188,7 @@ func bpairs(stack []types.TValue, base int) int {
 
 // brawget implements Lua's rawget(table, index) function.
 func brawget(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 2 {
 		luaErrorString("bad argument #1 to 'rawget' (table expected)")
 		return 0
@@ -1194,7 +1211,7 @@ func brawget(stack []types.TValue, base int) int {
 
 // brawset implements Lua's rawset(table, index, value) function.
 func brawset(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 3 {
 		luaErrorString("bad argument #1 to 'rawset' (table expected)")
 		return 0
@@ -1216,7 +1233,7 @@ func brawset(stack []types.TValue, base int) int {
 
 // brawlen implements Lua's rawlen(v) function.
 func brawlen(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'rawlen' (table or string expected)")
 		return 0
@@ -1246,7 +1263,7 @@ func brawlen(stack []types.TValue, base int) int {
 
 // brawequal implements Lua's rawequal(v1, v2) function.
 func brawequal(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 2 {
 		luaErrorString("bad argument #1 to 'rawequal' (value expected)")
 		return 0
@@ -1300,7 +1317,7 @@ func rawEqual(v1, v2 types.TValue) bool {
 
 // bsetmetatable implements Lua's setmetatable(table, metatable) function.
 func bsetmetatable(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 2 {
 		luaErrorString("bad argument #1 to 'setmetatable' (table expected)")
 		return 0
@@ -1351,7 +1368,7 @@ func getInternalTable(tbl tableapi.TableInterface) types.Table {
 
 // bgetmetatable implements Lua's getmetatable(object) function.
 func bgetmetatable(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'getmetatable' (value expected)")
 		return 0
@@ -1381,7 +1398,7 @@ func bgetmetatable(stack []types.TValue, base int) int {
 
 // bunpack implements Lua's table.unpack(list [, i [, j]]) function.
 func bunpack(stack []types.TValue, base int) int {
-	nArgs := len(stack) - base - 1
+	nArgs := realArgCount(stack, base)
 	if nArgs < 1 {
 		luaErrorString("bad argument #1 to 'unpack' (table expected)")
 		return 0

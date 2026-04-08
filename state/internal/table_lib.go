@@ -40,6 +40,7 @@ func checkTable(stack []types.TValue, base int, argn int, fname string) tableapi
 	return nil
 }
 
+
 // tableSeqLen returns the length of the array part of a table.
 func tableSeqLen(tbl tableapi.TableInterface) types.LuaInteger {
 	var n types.LuaInteger = 1
@@ -57,7 +58,7 @@ func tableSeqLen(tbl tableapi.TableInterface) types.LuaInteger {
 // =============================================================================
 
 func btableInsert(stack []types.TValue, base int) int {
-	nargs := len(stack) - base - 1
+	nargs := realArgCount(stack, base)
 	if nargs < 2 {
 		luaErrorString("bad argument #1 to 'table.insert' (table expected, got no value)")
 		return 0
@@ -110,7 +111,7 @@ func btableInsert(stack []types.TValue, base int) int {
 // =============================================================================
 
 func btableRemove(stack []types.TValue, base int) int {
-	nargs := len(stack) - base - 1
+	nargs := realArgCount(stack, base)
 	if nargs < 1 {
 		luaErrorString("bad argument #1 to 'table.remove' (table expected, got no value)")
 		return 0
@@ -173,7 +174,7 @@ func btableRemove(stack []types.TValue, base int) int {
 // =============================================================================
 
 func btableConcat(stack []types.TValue, base int) int {
-	nargs := len(stack) - base - 1
+	nargs := realArgCount(stack, base)
 	if nargs < 1 {
 		luaErrorString("bad argument #1 to 'table.concat' (table expected, got no value)")
 		return 0
@@ -259,7 +260,7 @@ func btableConcat(stack []types.TValue, base int) int {
 // =============================================================================
 
 func btableSort(stack []types.TValue, base int) int {
-	nargs := len(stack) - base - 1
+	nargs := realArgCount(stack, base)
 	if nargs < 1 {
 		luaErrorString("bad argument #1 to 'table.sort' (table expected, got no value)")
 		return 0
@@ -342,7 +343,7 @@ func btableSort(stack []types.TValue, base int) int {
 // =============================================================================
 
 func btableMove(stack []types.TValue, base int) int {
-	nargs := len(stack) - base - 1
+	nargs := realArgCount(stack, base)
 	if nargs < 4 {
 		luaErrorString("not enough arguments to 'table.move'")
 		return 0
@@ -378,7 +379,7 @@ func btableMove(stack []types.TValue, base int) int {
 // =============================================================================
 
 func btablePack(stack []types.TValue, base int) int {
-	nargs := types.LuaInteger(len(stack) - base - 1)
+	nargs := types.LuaInteger(realArgCount(stack, base))
 
 	newTbl := createModuleTable()
 
@@ -414,7 +415,7 @@ func btableCreate(stack []types.TValue, base int) int {
 // =============================================================================
 
 func btableMaxn(stack []types.TValue, base int) int {
-	nargs := len(stack) - base - 1
+	nargs := realArgCount(stack, base)
 	if nargs < 1 {
 		luaErrorString("bad argument #1 to 'table.maxn' (table expected, got no value)")
 		return 0

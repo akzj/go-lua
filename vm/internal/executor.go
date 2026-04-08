@@ -1153,13 +1153,13 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		// This uses []types.TValue, not the internal GoFunc type.
 		if apiFunc, ok := val.(vmapi.GoFunc); ok {
 			// Bridge: GoFuncs count args as len(stack)-base-1.
-			// Some GoFuncs return more values than args (e.g. ipairs returns 3
-			// from 2 args). We allocate extra space and offset args so the
-			// GoFunc sees the correct arg count.
-			extra := 4 // room for extra return values beyond nArgs
-			sliceSize := nArgs + 2*extra // extra before args (gfBase) + extra after args (returns)
+			// gfBase offsets args so GoFuncs that return more values than
+			// args have room to write (e.g. ipairs returns 3 from 1 arg).
+			// GoFuncs will see inflated nArgs due to extra slots, so they
+			// must check for nil trailing args (not just count them).
+			gfBase := 4 // room for extra return values
+			sliceSize := gfBase + nArgs + 4 // extra after args too
 			args := make([]types.TValue, sliceSize)
-			gfBase := extra // args start at offset extra
 			for i := 0; i < nArgs; i++ {
 				args[gfBase+i] = e.reg(base + i)
 			}
