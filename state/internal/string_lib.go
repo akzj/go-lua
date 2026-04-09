@@ -677,7 +677,10 @@ func bstringFormat(stack []types.TValue, base int) int {
 		case 's':
 			sval := getFormatString(stack, base, argIdx, "format")
 			argIdx++
-			// Check if there's a precision that limits the string
+			// Lua 5.4+: error if %s has width/precision and string contains zeros
+			if len(fmtSpec) > 2 && strings.Contains(sval, "\x00") {
+				luaErrorString("string format: string contains zeros")
+			}
 			buf.WriteString(fmt.Sprintf(fmtSpec, sval))
 		case 'q':
 			// In Lua 5.4+, %q handles non-string types:
