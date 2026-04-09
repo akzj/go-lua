@@ -268,8 +268,9 @@ func NewTValueLightCFunction(fn unsafe.Pointer) TValue {
 }
 
 // NewTValueThread creates a thread TValue.
+// Must use Ctb() wrapper like NewTValueString/NewTValueTable for collectable types.
 func NewTValueThread(data unsafe.Pointer) TValue {
-	return &tvalueStruct{Value: &valueStruct{Variant: ValueGC, Data_: data}, Tt: uint8(LUA_VTHREAD)}
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueGC, Data_: data}, Tt: uint8(Ctb(int(LUA_VTHREAD)))}
 }
 
 // NewDoStringMarker creates a special marker for DoString closures.
