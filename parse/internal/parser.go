@@ -2875,6 +2875,10 @@ func parseFloatLiteral(s string) float64 {
 	}
 	val, err := strconv.ParseFloat(s, 64)
 	if err != nil {
+		// Allow range errors (1e9999 -> +Inf, -1e9999 -> -Inf)
+		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
+			return val // val is ±Inf for range overflow
+		}
 		return 0
 	}
 	return val

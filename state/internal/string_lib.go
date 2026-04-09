@@ -702,18 +702,27 @@ func bstringFormat(stack []types.TValue, base int) int {
 				}
 			} else if v.IsInteger() {
 				n := int64(v.GetInteger())
-				buf.WriteString(fmt.Sprintf("%d", n))
+				if n == math.MinInt64 {
+					// math.mininteger can't round-trip as decimal because
+					// -9223372036854775808 overflows when parsed as -(9223372036854775808).
+					// Lua 5.4+ emits (-1 << 63) for this case.
+					buf.WriteString("(-1 << 63)")
+				} else {
+					buf.WriteString(fmt.Sprintf("%d", n))
+				}
 			} else if v.IsFloat() {
 				fv := float64(v.GetFloat())
 				if math.IsInf(fv, 1) {
-					buf.WriteString("1/0")
+					buf.WriteString("1e9999")
 				} else if math.IsInf(fv, -1) {
-					buf.WriteString("-1/0")
+					buf.WriteString("-1e9999")
 				} else if math.IsNaN(fv) {
 					buf.WriteString("(0/0)")
 				} else {
-					// Use exact float representation
-					s := fmt.Sprintf("%.14g", fv)
+					// Use hex float format (%a) for exact precision roundtrip
+					// This matches Lua 5.4+ quotefloat behavior
+					s := fmt.Sprintf("%x", fv)
+					// Go's %a uses 'p' for exponent, Lua uses 'p' too — compatible
 					buf.WriteString(s)
 				}
 			} else if v.IsString() {

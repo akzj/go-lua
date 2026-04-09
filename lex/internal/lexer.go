@@ -493,7 +493,10 @@ func (l *lexer) readNumber() (string, api.TokenType) {
 	// Parse as float
 	_, err := strconv.ParseFloat(numStr, 64)
 	if err != nil {
-		l.Error("malformed number")
+		// Allow range errors (1e9999 -> Inf)
+		if ne, ok := err.(*strconv.NumError); !ok || ne.Err != strconv.ErrRange {
+			l.Error("malformed number")
+		}
 	}
 	return numStr, api.TOKEN_NUMBER
 }
