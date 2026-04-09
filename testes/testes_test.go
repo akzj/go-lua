@@ -38,3 +38,13 @@ func TestRunner(t *testing.T) {
 		t.Logf("SUCCESS: %d lua-master/testes files passed", passed)
 	}
 }
+
+func TestUtf8Diag(t *testing.T) {
+	runner := NewRunner("../lua-master/testes")
+	result := runner.RunFile("../lua-master/testes/utf8_diag.lua")
+	if !result.Passed {
+		t.Errorf("utf8_diag: %s", result.Error)
+	} else {
+		t.Log("utf8_diag PASSED")
+	}
+}
