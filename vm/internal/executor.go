@@ -1033,9 +1033,22 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			newClosure.upvals = make([]*UpVal, len(uvDescs))
 			for i, desc := range uvDescs {
 				if desc.Instack == 1 {
-					// Capture from parent's register — create open upvalue pointing to stack slot
-					uv := &UpVal{open: e.reg(frameBase(e) + int(desc.Idx))}
-					newClosure.upvals[i] = uv
+					// Capture from parent's register
+					parentProto := parentLC.GetProto()
+					nParams := int(parentProto.NumParams() & 0x7F) // Mask out vararg flag
+					slotIdx := frameBase(e) + int(desc.Idx)
+
+					if desc.Idx < uint8(nParams) {
+						// Parameter register: create CLOSED upvalue by copying the value
+						// This preserves the captured value even after parent function returns
+						uv := &UpVal{}
+						e.copyValue(&uv.Value, e.reg(slotIdx))
+						newClosure.upvals[i] = uv
+					} else {
+						// Local variable: create open upvalue (lives while parent frame is active)
+						uv := &UpVal{open: e.reg(slotIdx)}
+						newClosure.upvals[i] = uv
+					}
 				} else {
 					// Copy from parent's upvalue (chained capture)
 					if frame.upvals != nil && int(desc.Idx) < len(frame.upvals) {
