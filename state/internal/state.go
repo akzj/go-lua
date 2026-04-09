@@ -1619,14 +1619,16 @@ func registerIoLib(ioMod tableapi.TableInterface) {
 		return 1
 	}})
 
-	// io.output — stub: returns nil
+	// io.output — returns current output file or sets it
 	ioMod.Set(types.NewTValueString("output"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
 		nArgs := realArgCount(stack, base)
 		if nArgs == 0 {
-			stack[base] = types.NewTValueNil()
+			// Return default output file
+			stack[base] = &tableWrapper{tbl: stdoutTbl}
 			return 1
 		}
-		stack[base] = types.NewTValueNil()
+		// When given a filename, return a file table (stub)
+		stack[base] = &tableWrapper{tbl: stdoutTbl}
 		return 1
 	}})
 
@@ -1816,7 +1818,7 @@ func registerOsLib(osMod tableapi.TableInterface) {
 // Stub implementation — Go manages its own GC, so most operations are no-ops.
 func bcollectgarbage(stack []types.TValue, base int) int {
 	opt := "collect"
-	if base+1 < len(stack) && stack[base+1].IsString() {
+	if len(stack) > base+1 && stack[base+1] != nil && !stack[base+1].IsNil() && stack[base+1].IsString() {
 		opt = stack[base+1].GetValue().(string)
 	}
 	switch opt {
@@ -1996,6 +1998,7 @@ func (L *LuaState) openBaseLib() {
 	var coroutineMod tableapi.TableInterface
 	var ioMod tableapi.TableInterface
 	var osMod tableapi.TableInterface
+	var debugMod tableapi.TableInterface
 	for _, name := range moduleNames {
 		modTbl := createModuleTable()
 		key := types.NewTValueString(name)
@@ -2019,6 +2022,9 @@ func (L *LuaState) openBaseLib() {
 		}
 		if name == "math" {
 			mathMod = modTbl
+		}
+		if name == "debug" {
+			debugMod = modTbl
 		}
 	}
 
@@ -2048,12 +2054,47 @@ func (L *LuaState) openBaseLib() {
 
 	// Register coroutine library stub functions
 	if coroutineMod != nil {
+		// coroutine.running()
 		runningKey := types.NewTValueString("running")
 		coroutineMod.Set(runningKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			// coroutine.running() returns the running coroutine + true for main thread
 			stack[base] = types.NewTValueString("main")
 			stack[base+1] = types.NewTValueBoolean(true)
 			return 2
+		}})
+
+		// coroutine.create(f) — stub: returns a thread table with status
+		createKey := types.NewTValueString("create")
+		coroutineMod.Set(createKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}})
+
+		// coroutine.resume(co, ...) — stub: returns false, error
+		resumeKey := types.NewTValueString("resume")
+		coroutineMod.Set(resumeKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			stack[base] = types.NewTValueBoolean(false)
+			stack[base+1] = types.NewTValueString("stub: coroutine not implemented")
+			return 2
+		}})
+
+		// coroutine.yield(...) — stub
+		yieldKey := types.NewTValueString("yield")
+		coroutineMod.Set(yieldKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			return 0
+		}})
+
+		// coroutine.status(co) — stub: returns "suspended"
+		statusKey := types.NewTValueString("status")
+		coroutineMod.Set(statusKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			stack[base] = types.NewTValueString("suspended")
+			return 1
+		}})
+
+		// coroutine.wrap(f) — stub: returns nil
+		wrapKey := types.NewTValueString("wrap")
+		coroutineMod.Set(wrapKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			stack[base] = types.NewTValueNil()
+			return 1
 		}})
 	}
 
@@ -2065,6 +2106,11 @@ func (L *LuaState) openBaseLib() {
 	// Register os library stub functions
 	if osMod != nil {
 		registerOsLib(osMod)
+	}
+
+	// Register debug library stub functions
+	if debugMod != nil {
+		registerDebugLib(debugMod)
 	}
 
 
