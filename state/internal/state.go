@@ -1732,6 +1732,8 @@ func (L *LuaState) openBaseLib() {
 	var tableMod tableapi.TableInterface
 	var stringMod tableapi.TableInterface
 	var mathMod tableapi.TableInterface
+	var coroutineMod tableapi.TableInterface
+	var ioMod tableapi.TableInterface
 	for _, name := range moduleNames {
 		modTbl := createModuleTable()
 		key := types.NewTValueString(name)
@@ -1740,6 +1742,12 @@ func (L *LuaState) openBaseLib() {
 		L.setGlobalValue(name, &tableWrapper{tbl: modTbl})
 		if name == "table" {
 			tableMod = modTbl
+		}
+		if name == "coroutine" {
+			coroutineMod = modTbl
+		}
+		if name == "io" {
+			ioMod = modTbl
 		}
 		if name == "string" {
 			stringMod = modTbl
@@ -1771,6 +1779,45 @@ func (L *LuaState) openBaseLib() {
 		// Also register table.unpack (from Phase 2)
 		unpackKey := types.NewTValueString("unpack")
 		tableMod.Set(unpackKey, &goFuncWrapper{fn: bunpack})
+	}
+
+	// Register coroutine library stub functions
+	if coroutineMod != nil {
+		runningKey := types.NewTValueString("running")
+		coroutineMod.Set(runningKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			// coroutine.running() returns the running coroutine + true for main thread
+			stack[base] = types.NewTValueString("main")
+			stack[base+1] = types.NewTValueBoolean(true)
+			return 2
+		}})
+	}
+
+	// Register io library stub functions
+	if ioMod != nil {
+		// io.stdin — a placeholder table (acts as userdata)
+		stdinTbl := createModuleTable()
+		stdinKey := types.NewTValueString("stdin")
+		ioMod.Set(stdinKey, &tableWrapper{tbl: stdinTbl})
+		// io.write — basic stdout write
+		writeKey := types.NewTValueString("write")
+		ioMod.Set(writeKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			nArgs := realArgCount(stack, base)
+			for i := 1; i <= nArgs; i++ {
+				v := stack[base+i]
+				if v != nil && !v.IsNil() {
+					if v.IsString() {
+						if s, ok := v.GetValue().(string); ok {
+							fmt.Print(s)
+						}
+					} else if v.IsInteger() {
+						fmt.Print(v.GetInteger())
+					} else if v.IsFloat() {
+						fmt.Print(v.GetFloat())
+					}
+				}
+			}
+			return 0
+		}})
 	}
 
 	// Set package.loaded and package.preload in package table

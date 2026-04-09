@@ -2,7 +2,10 @@
 // NO dependencies - pure interface definitions.
 package api
 
-import "unsafe"
+import (
+	"sync"
+	"unsafe"
+)
 
 // =============================================================================
 // Type Tag Constants
@@ -228,9 +231,35 @@ func NewTValueLightUserData(p unsafe.Pointer) TValue {
 	return &tvalueStruct{Value: &valueStruct{Variant: ValuePointer, Data_: p}, Tt: uint8(LUA_VLIGHTUSERDATA)}
 }
 
+// internedStrings is a global intern map for short strings (≤40 bytes).
+// This ensures that identical short strings share the same Go string backing,
+// making their unsafe.Pointer addresses identical (needed for %p format).
+var internedStrings sync.Map
+
+const maxInternLen = 40
+
+// InternString returns the canonical copy of a short string.
+func InternString(s string) string {
+	if len(s) > maxInternLen {
+		return s
+	}
+	if v, ok := internedStrings.Load(s); ok {
+		return v.(string)
+	}
+	internedStrings.Store(s, s)
+	return s
+}
+
 // NewTValueString creates a string TValue.
+// Short strings (≤40 bytes) are interned so identical strings share
+// the same backing pointer (important for %p format correctness).
 func NewTValueString(s string) TValue {
-	return &tvalueStruct{Value: &valueStruct{Variant: ValueGC, Data_: s}, Tt: uint8(Ctb(int(LUA_VSHRSTR)))}
+	s = InternString(s)
+	tt := uint8(Ctb(int(LUA_VSHRSTR)))
+	if len(s) > maxInternLen {
+		tt = uint8(Ctb(int(LUA_VLNGSTR)))
+	}
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueGC, Data_: s}, Tt: tt}
 }
 
 // NewTValueLightCFunction creates a light C function TValue.
