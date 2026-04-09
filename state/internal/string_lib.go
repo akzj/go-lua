@@ -878,7 +878,7 @@ func quoteString(s string) string {
 		case '\x1a':
 			buf.WriteString("\\26")
 		default:
-			if c < 0x20 || c >= 0x7f {
+			if c < 0x20 || c == 0x7f {
 				// Escape control chars and non-ASCII bytes as \ddd
 				// If next char is a digit, always use 3-digit form
 				if i < len(s) && s[i] >= '0' && s[i] <= '9' {
