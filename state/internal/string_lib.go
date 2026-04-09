@@ -304,6 +304,20 @@ func bstringFind(stack []types.TValue, base int) int {
 	// Adjust init (Lua 5.4 semantics)
 	if init < 0 { init = n + init + 1 }
 	if init < 1 { init = 1 }
+
+	// Empty pattern: always matches at init position (if within bounds)
+	if len(pattern) == 0 {
+		// Empty pattern matches at init position if within bounds
+		// init <= n means within string, init == n+1 means end-of-string
+		if init > n+1 {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+		// Empty pattern matches at init position; end = init-1
+		stack[base] = types.NewTValueInteger(types.LuaInteger(init))
+		return 1
+	}
+
 	// If init is past the end of string (+1 for empty match at end), fail
 	if init > n+1 {
 		stack[base] = types.NewTValueNil()
