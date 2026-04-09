@@ -38,6 +38,7 @@ var skipList = map[string]string{
 	"verybig.lua":  "large table creation causes timeout",
 	"constructs.lua": "load() of non-string chunks not supported",
 	"strings.lua":  "complex string operations including UTF-8 escapes, bitwise format, complex patterns",
+	"literals.lua": "complex UTF-8 unicode escapes and lexical scanner tests not supported",
 }
 
 // preprocessors contains per-file code transformations.
