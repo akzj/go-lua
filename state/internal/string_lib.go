@@ -698,8 +698,8 @@ func bstringFormat(stack []types.TValue, base int) int {
 			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
 		}
 
-		// 8. %p: no modifiers allowed (width, precision, flags)
-		if spec == 'p' && len(fmtBody) > 0 {
+		// 8. %p: no precision allowed, but width and alignment flags are OK
+		if spec == 'p' && hasDot {
 			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
 		}
 
@@ -710,7 +710,7 @@ func bstringFormat(stack []types.TValue, base int) int {
 		}
 
 		// 10. Check argument availability (except %% which is already handled)
-		if spec != 'p' { // %p uses the arg too
+		{
 			nArgs := realArgCount(stack, base)
 			if argIdx > nArgs {
 				luaErrorString(fmt.Sprintf("bad argument #%d to 'format' (no value)", argIdx))
@@ -792,7 +792,7 @@ func bstringFormat(stack []types.TValue, base int) int {
 			val := getFormatInt(stack, base, argIdx, "format")
 			argIdx++
 			// %c converts integer to single character, but respects width/flags
-			ch := string(rune(val & 0xff))
+			ch := string([]byte{byte(val & 0xff)})
 			// Replace %...c with %...s to use Go's string formatting for width/alignment
 			sfmt := fmtSpec[:len(fmtSpec)-1] + "s"
 			buf.WriteString(fmt.Sprintf(sfmt, ch))
