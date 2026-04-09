@@ -833,7 +833,7 @@ func btonumber(stack []types.TValue, base int) int {
 				}
 				// Try integer first — must match entire string
 				// Handle hex (0x/0X) and decimal
-				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+				if (strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X")) && !strings.ContainsAny(s, ".pP") {
 					var i int64
 					if n, err := fmt.Sscanf(s, "%v", &i); err == nil && n == 1 {
 						stack[base] = types.NewTValueInteger(types.LuaInteger(i))
