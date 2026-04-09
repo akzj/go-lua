@@ -17,6 +17,8 @@ import (
 	bcapi "github.com/akzj/go-lua/bytecode/api"
 	bc "github.com/akzj/go-lua/bytecode"
 	"github.com/akzj/go-lua/parse"
+	"os"
+	"time"
 )
 
 // =============================================================================
@@ -1551,6 +1553,265 @@ func makeRequire(registry tableapi.TableInterface, globalEnv tableapi.TableInter
 // gcMode tracks the current GC mode for collectgarbage mode switching.
 var gcMode = "incremental" // Lua default
 
+
+// =============================================================================
+// io Library Functions
+// =============================================================================
+
+// registerIoLib registers io library functions in the module table.
+func registerIoLib(ioMod tableapi.TableInterface) {
+	// io.stdin
+	stdinTbl := createModuleTable()
+	ioMod.Set(types.NewTValueString("stdin"), &tableWrapper{tbl: stdinTbl})
+	// io.stdout (same as stdin for now)
+	stdoutTbl := createModuleTable()
+	ioMod.Set(types.NewTValueString("stdout"), &tableWrapper{tbl: stdoutTbl})
+	// io.stderr
+	stderrTbl := createModuleTable()
+	ioMod.Set(types.NewTValueString("stderr"), &tableWrapper{tbl: stderrTbl})
+
+	// io.write
+	ioMod.Set(types.NewTValueString("write"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		nArgs := realArgCount(stack, base)
+		for i := 1; i <= nArgs; i++ {
+			v := stack[base+i]
+			if v != nil && !v.IsNil() {
+				if v.IsString() {
+					if s, ok := v.GetValue().(string); ok {
+						fmt.Print(s)
+					}
+				} else if v.IsInteger() {
+					fmt.Print(v.GetInteger())
+				} else if v.IsFloat() {
+					fmt.Print(v.GetFloat())
+				}
+			}
+		}
+		return 0
+	}})
+
+	// io.close
+	ioMod.Set(types.NewTValueString("close"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueBoolean(true)
+		return 1
+	}})
+
+	// io.open — stub: returns nil, "stub not implemented"
+	ioMod.Set(types.NewTValueString("open"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueNil()
+		stack[base+1] = types.NewTValueString("stub: not implemented")
+		return 2
+	}})
+
+	// io.flush
+	ioMod.Set(types.NewTValueString("flush"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		return 0
+	}})
+
+	// io.input — stub: returns nil
+	ioMod.Set(types.NewTValueString("input"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		nArgs := realArgCount(stack, base)
+		if nArgs == 0 {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+		stack[base] = types.NewTValueNil()
+		return 1
+	}})
+
+	// io.output — stub: returns nil
+	ioMod.Set(types.NewTValueString("output"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		nArgs := realArgCount(stack, base)
+		if nArgs == 0 {
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+		stack[base] = types.NewTValueNil()
+		return 1
+	}})
+
+	// io.lines — stub: returns nil, "stub not implemented"
+	ioMod.Set(types.NewTValueString("lines"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		nArgs := realArgCount(stack, base)
+		if nArgs > 0 {
+			// filename provided — we can't fully implement this yet
+			stack[base] = types.NewTValueNil()
+			return 1
+		}
+		stack[base] = types.NewTValueNil()
+		return 1
+	}})
+
+	// io.read — stub: returns nil
+	ioMod.Set(types.NewTValueString("read"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}})
+
+	// io.type — returns "file", "closed file", or nil
+	ioMod.Set(types.NewTValueString("type"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		nArgs := realArgCount(stack, base)
+		if nArgs >= 1 {
+			stack[base] = types.NewTValueNil()
+		} else {
+			stack[base] = types.NewTValueNil()
+		}
+		return 1
+	}})
+
+	// io.popen — stub: returns nil
+	ioMod.Set(types.NewTValueString("popen"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueNil()
+		stack[base+1] = types.NewTValueString("stub: not implemented")
+		return 2
+	}})
+}
+
+// =============================================================================
+// os Library Functions
+// =============================================================================
+
+// registerOsLib registers os library functions in the module table.
+func registerOsLib(osMod tableapi.TableInterface) {
+	// os.getenv
+	osMod.Set(types.NewTValueString("getenv"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		if len(stack) > base+1 && !stack[base+1].IsNil() {
+			if s, ok := stack[base+1].GetValue().(string); ok {
+				val, found := os.LookupEnv(s)
+				if found {
+					stack[base] = types.NewTValueString(val)
+				} else {
+					stack[base] = types.NewTValueNil()
+				}
+				return 1
+			}
+		}
+		stack[base] = types.NewTValueNil()
+		return 1
+	}})
+
+	// os.date — basic implementation using Go time
+	osMod.Set(types.NewTValueString("date"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		format := "%Y-%m-%d %H:%M:%S"
+		nArgs := realArgCount(stack, base)
+		utc := false
+		returnTable := false
+		if nArgs >= 1 && !stack[base+1].IsNil() {
+			if f, ok := stack[base+1].GetValue().(string); ok {
+				if len(f) > 0 && f[0] == '!' {
+					utc = true
+					f = f[1:]
+				}
+				if f == "*t" {
+					returnTable = true
+				} else {
+					format = f
+				}
+			}
+		}
+		var t time.Time
+		if utc {
+			t = time.Now().UTC()
+		} else {
+			t = time.Now()
+		}
+		if returnTable {
+			year, month, day := t.Date()
+			hour, min, sec := t.Clock()
+			tbl := createModuleTable()
+			tbl.Set(types.NewTValueString("year"), types.NewTValueInteger(types.LuaInteger(year)))
+			tbl.Set(types.NewTValueString("month"), types.NewTValueInteger(types.LuaInteger(month)))
+			tbl.Set(types.NewTValueString("day"), types.NewTValueInteger(types.LuaInteger(day)))
+			tbl.Set(types.NewTValueString("hour"), types.NewTValueInteger(types.LuaInteger(hour)))
+			tbl.Set(types.NewTValueString("min"), types.NewTValueInteger(types.LuaInteger(min)))
+			tbl.Set(types.NewTValueString("sec"), types.NewTValueInteger(types.LuaInteger(sec)))
+			tbl.Set(types.NewTValueString("wday"), types.NewTValueInteger(types.LuaInteger(t.Weekday())))
+			tbl.Set(types.NewTValueString("yday"), types.NewTValueInteger(types.LuaInteger(t.YearDay())))
+			stack[base] = &tableWrapper{tbl: tbl}
+		} else {
+			// Map Lua format codes to Go format codes
+			format = strings.ReplaceAll(format, "%a", "Mon")
+			format = strings.ReplaceAll(format, "%A", "Monday")
+			format = strings.ReplaceAll(format, "%b", "Jan")
+			format = strings.ReplaceAll(format, "%B", "January")
+			format = strings.ReplaceAll(format, "%c", "Mon Jan _2 15:04:05 2006")
+			format = strings.ReplaceAll(format, "%d", "02")
+			format = strings.ReplaceAll(format, "%H", "15")
+			format = strings.ReplaceAll(format, "%I", "03")
+			format = strings.ReplaceAll(format, "%j", "002")
+			format = strings.ReplaceAll(format, "%m", "01")
+			format = strings.ReplaceAll(format, "%M", "04")
+			format = strings.ReplaceAll(format, "%p", "PM")
+			format = strings.ReplaceAll(format, "%S", "05")
+			format = strings.ReplaceAll(format, "%U", "002")
+			format = strings.ReplaceAll(format, "%w", "0")
+			format = strings.ReplaceAll(format, "%W", "002")
+			format = strings.ReplaceAll(format, "%x", "01/02/2006")
+			format = strings.ReplaceAll(format, "%X", "15:04:05")
+			format = strings.ReplaceAll(format, "%y", "06")
+			format = strings.ReplaceAll(format, "%Y", "2006")
+			format = strings.ReplaceAll(format, "%Z", "MST")
+			result := t.Format(format)
+			stack[base] = types.NewTValueString(result)
+		}
+		return 1
+	}})
+
+	// os.clock
+	osMod.Set(types.NewTValueString("clock"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueFloat(types.LuaNumber(float64(time.Now().UnixNano()) / 1e9))
+		return 1
+	}})
+
+	// os.exit — stub: return exit code
+	osMod.Set(types.NewTValueString("exit"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		return 0
+	}})
+
+	// os.execute — stub: returns nil
+	osMod.Set(types.NewTValueString("execute"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		nArgs := realArgCount(stack, base)
+		if nArgs >= 1 {
+			stack[base] = types.NewTValueNil()
+		} else {
+			stack[base] = types.NewTValueBoolean(true)
+		}
+		return 1
+	}})
+
+	// os.remove — stub: always fails (file not found)
+	osMod.Set(types.NewTValueString("remove"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueNil()
+		stack[base+1] = types.NewTValueString("stub: remove not implemented")
+		return 2
+	}})
+
+	// os.rename — stub: always fails
+	osMod.Set(types.NewTValueString("rename"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueNil()
+		stack[base+1] = types.NewTValueString("stub: rename not implemented")
+		return 2
+	}})
+
+	// os.setlocale — stub: returns nil
+	osMod.Set(types.NewTValueString("setlocale"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}})
+
+	// os.tmpname — stub: returns a fake tmp file name
+	osMod.Set(types.NewTValueString("tmpname"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+		stack[base] = types.NewTValueString("/tmp/lua_tmpfile")
+		return 1
+	}})
+
+	// os.getenv — already registered above
+	// os.diff — not standard, skip
+	// os.setlocal — handled above
+	// os.exit — handled above
+}
+
+
 // bcollectgarbage implements Lua's collectgarbage([opt [, arg]]) function.
 // Stub implementation — Go manages its own GC, so most operations are no-ops.
 func bcollectgarbage(stack []types.TValue, base int) int {
@@ -1734,6 +1995,7 @@ func (L *LuaState) openBaseLib() {
 	var mathMod tableapi.TableInterface
 	var coroutineMod tableapi.TableInterface
 	var ioMod tableapi.TableInterface
+	var osMod tableapi.TableInterface
 	for _, name := range moduleNames {
 		modTbl := createModuleTable()
 		key := types.NewTValueString(name)
@@ -1748,6 +2010,9 @@ func (L *LuaState) openBaseLib() {
 		}
 		if name == "io" {
 			ioMod = modTbl
+		}
+		if name == "os" {
+			osMod = modTbl
 		}
 		if name == "string" {
 			stringMod = modTbl
@@ -1794,31 +2059,14 @@ func (L *LuaState) openBaseLib() {
 
 	// Register io library stub functions
 	if ioMod != nil {
-		// io.stdin — a placeholder table (acts as userdata)
-		stdinTbl := createModuleTable()
-		stdinKey := types.NewTValueString("stdin")
-		ioMod.Set(stdinKey, &tableWrapper{tbl: stdinTbl})
-		// io.write — basic stdout write
-		writeKey := types.NewTValueString("write")
-		ioMod.Set(writeKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			nArgs := realArgCount(stack, base)
-			for i := 1; i <= nArgs; i++ {
-				v := stack[base+i]
-				if v != nil && !v.IsNil() {
-					if v.IsString() {
-						if s, ok := v.GetValue().(string); ok {
-							fmt.Print(s)
-						}
-					} else if v.IsInteger() {
-						fmt.Print(v.GetInteger())
-					} else if v.IsFloat() {
-						fmt.Print(v.GetFloat())
-					}
-				}
-			}
-			return 0
-		}})
+		registerIoLib(ioMod)
 	}
+
+	// Register os library stub functions
+	if osMod != nil {
+		registerOsLib(osMod)
+	}
+
 
 	// Set package.loaded and package.preload in package table
 	loadedKey := types.NewTValueString("loaded")
