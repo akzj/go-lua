@@ -2137,6 +2137,59 @@ func (L *LuaState) openBaseLib() {
 	pathKey := types.NewTValueString("path")
 	packageTbl.Set(pathKey, types.NewTValueString("./?.lua"))
 	cpathKey := types.NewTValueString("cpath")
+		// package.searchpath — stub implementation
+		searchpathFn := &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			nArgs := realArgCount(stack, base)
+			if nArgs < 2 {
+				stack[base] = types.NewTValueNil()
+				stack[base+1] = types.NewTValueString("bad argument #2 to 'searchpath' (string expected, got no value)")
+				return 2
+			}
+			nameVal := stack[base+1]
+			pathVal := stack[base+2]
+			if !nameVal.IsString() || !pathVal.IsString() {
+				stack[base] = types.NewTValueNil()
+				stack[base+1] = types.NewTValueString("bad argument to 'searchpath'")
+				return 2
+			}
+			name := nameVal.GetValue().(string)
+			path := pathVal.GetValue().(string)
+			// Split path by semicolon and check each template
+			templates := strings.Split(path, ";")
+			for _, tmpl := range templates {
+				// Replace ? with module name in template
+				candidate := strings.ReplaceAll(tmpl, "?", name)
+				candidate = strings.TrimSpace(candidate)
+				if candidate == "" {
+					continue
+				}
+				// Check if file exists
+				if _, err := os.Stat(candidate); err == nil {
+					// Found it!
+					stack[base] = types.NewTValueString(candidate)
+					stack[base+1] = types.NewTValueNil()
+					return 2
+				}
+			}
+			// Not found — return nil + error message
+			stack[base] = types.NewTValueNil()
+			stack[base+1] = types.NewTValueString(fmt.Sprintf("no file '%s' in path '%s'", name, path))
+			return 2
+		}}
+		packageTbl.Set(types.NewTValueString("searchpath"), searchpathFn)
+		// package.searchers — array with preload loader
+		searchersTbl := createModuleTable()
+		searchersTbl.Set(types.NewTValueInteger(1), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
+			nArgs := realArgCount(stack, base)
+			if nArgs < 1 || !stack[base+1].IsString() {
+				stack[base] = types.NewTValueNil()
+				return 1
+			}
+			// Return nil for now - preload check requires closure capture
+			stack[base] = types.NewTValueNil()
+			return 1
+		}})
+		packageTbl.Set(types.NewTValueString("searchers"), &tableWrapper{tbl: searchersTbl})
 	packageTbl.Set(cpathKey, types.NewTValueString(""))
 
 	// Set package itself in package.loaded
