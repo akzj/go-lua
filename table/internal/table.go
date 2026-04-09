@@ -505,6 +505,9 @@ func mainposition(t *Table, key typesapi.TValue) *Node {
 
 // equalkey compares key k1 with the key in node n.
 func equalkey(k1 typesapi.TValue, n *Node) bool {
+	if n == nil {
+		return false
+	}
 	if k1.GetTag() != int(n.KeyTt) {
 		// Handle string comparison specially
 		if keytt(n) == typesapi.LUA_VSHRSTR && int(k1.GetTag()) == typesapi.LUA_VLNGSTR {
