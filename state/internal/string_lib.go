@@ -680,9 +680,45 @@ func bstringFormat(stack []types.TValue, base int) int {
 			// Check if there's a precision that limits the string
 			buf.WriteString(fmt.Sprintf(fmtSpec, sval))
 		case 'q':
-			sval := getFormatString(stack, base, argIdx, "format")
+			// In Lua 5.4+, %q handles non-string types:
+			// strings → quoted with escapes
+			// integers → decimal representation
+			// floats → exact representation (handles inf, nan)
+			// nil → "nil"
+			// booleans → "true"/"false"
+			// anything else → error "no literal"
+			v := stack[base+argIdx]
 			argIdx++
-			buf.WriteString(quoteString(sval))
+			if v == nil || v.IsNil() {
+				buf.WriteString("nil")
+			} else if v.IsBoolean() {
+				if v.IsTrue() {
+					buf.WriteString("true")
+				} else {
+					buf.WriteString("false")
+				}
+			} else if v.IsInteger() {
+				n := int64(v.GetInteger())
+				buf.WriteString(fmt.Sprintf("%d", n))
+			} else if v.IsFloat() {
+				fv := float64(v.GetFloat())
+				if math.IsInf(fv, 1) {
+					buf.WriteString("1/0")
+				} else if math.IsInf(fv, -1) {
+					buf.WriteString("-1/0")
+				} else if math.IsNaN(fv) {
+					buf.WriteString("(0/0)")
+				} else {
+					// Use exact float representation
+					s := fmt.Sprintf("%.14g", fv)
+					buf.WriteString(s)
+				}
+			} else if v.IsString() {
+				sval := v.GetValue().(string)
+				buf.WriteString(quoteString(sval))
+			} else {
+				luaErrorString(fmt.Sprintf("no literal"))
+			}
 		case 'p':
 			// %p — format any value as a pointer (hex address)
 			// In Lua 5.4, %p only returns addresses for GC objects
