@@ -267,6 +267,11 @@ func NewTValueLightCFunction(fn unsafe.Pointer) TValue {
 	return &tvalueStruct{Value: &valueStruct{Variant: ValueCFunction, Data_: fn}, Tt: uint8(LUA_VLCF)}
 }
 
+// NewTValueThread creates a thread TValue.
+func NewTValueThread(data unsafe.Pointer) TValue {
+	return &tvalueStruct{Value: &valueStruct{Variant: ValueGC, Data_: data}, Tt: uint8(LUA_VTHREAD)}
+}
+
 // NewDoStringMarker creates a special marker for DoString closures.
 func NewDoStringMarker(id int) TValue {
 	return &tvalueStruct{Value: &valueStruct{Variant: ValuePointer, Data_: id}, Tt: uint8(LUA_VLIGHTUSERDATA)}
