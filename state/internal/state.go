@@ -1620,7 +1620,7 @@ func bload(stack []types.TValue, base int) int {
 
 	chunkStr := chunkVal.GetValue().(string)
 	chunkName := "=(load)"
-	if base+2 < len(stack) && stack[base+2].IsString() {
+	if base+2 < len(stack) && stack[base+2] != nil && stack[base+2].IsString() {
 		chunkName = stack[base+2].GetValue().(string)
 	}
 	_ = chunkName
