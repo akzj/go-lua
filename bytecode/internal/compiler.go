@@ -502,7 +502,6 @@ func (fs *FuncState) compileGlobalVarStat(stat astapi.StatNode) error {
 }
 
 // compileLocalFuncStat compiles local function declaration: local function name(args) body end
-// compileLocalFuncStat compiles local function declaration: local function name(args) body end
 func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 	lf, ok := stat.(interface{ GetFuncDef() astapi.FuncDef })
 	if !ok || lf == nil {
@@ -520,12 +519,19 @@ func (fs *FuncState) compileLocalFuncStat(stat astapi.StatNode) error {
 		funcName = namer.GetName()
 	}
 
-	// Allocate a register for the function BEFORE compiling the body.
-	// This ensures the function name is visible as a local inside its own body
-	// (enabling self-recursion via upvalue capture).
-	reg := fs.allocReg()
+	// FIX: The name is ALREADY registered by compileBlock's pre-pass.
+	// Just find the register it was assigned to.
+	var reg int
 	if funcName != "" {
-		fs.locals.Add(funcName, reg, 0)
+		reg = fs.locals.Find(funcName)
+		if reg < 0 {
+			// Fallback: shouldn't happen, but allocate if pre-pass missed it
+			reg = fs.allocReg()
+			fs.locals.Add(funcName, reg, 0)
+					} else {
+					}
+	} else {
+		reg = fs.allocReg()
 	}
 
 	// Compile the function to get its prototype
@@ -715,6 +721,28 @@ func (fs *FuncState) compileBlock(block astapi.Block) error {
 	if block == nil {
 		return nil
 	}
+
+	// FORWARD REFERENCE FIX: Pre-pass to register all local function names.
+	// This enables `local function f() return g() end; local function g() return 1 end`.
+	for _, stat := range block.Stats() {
+		if stat == nil {
+			continue
+		}
+		if lf, ok := stat.(interface{ GetFuncDef() astapi.FuncDef }); ok && lf != nil {
+			funcDef := lf.GetFuncDef()
+			if funcDef != nil {
+				var funcName string
+				if namer, ok := stat.(interface{ GetName() string }); ok {
+					funcName = namer.GetName()
+				}
+				if funcName != "" && fs.locals.Find(funcName) < 0 {
+					reg := fs.allocReg()
+					fs.locals.Add(funcName, reg, 0)
+									}
+			}
+		}
+	}
+
 	for _, stat := range block.Stats() {
 		if stat != nil {
 			// Only reset temp registers for leaf statements (no sub-blocks).
@@ -1673,6 +1701,8 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 	}
 
 	return nestedProto, nil
+
+	return nestedProto, nil
 }
 
 // addArgConstant adds an argument as a constant
@@ -2317,17 +2347,17 @@ func (fs *FuncState) resolveUpvalue(name string) int {
 	reg := fs.Prev.locals.Find(name)
 	if reg >= 0 {
 		// Found in parent's local variables — capture from stack
-		return fs.addUpvalue(name, 1, uint8(reg))
+				return fs.addUpvalue(name, 1, uint8(reg))
 	}
 	
 	// Check parent's upvalues (recursively resolve in parent first)
 	uvIdx := fs.Prev.resolveUpvalue(name)
 	if uvIdx >= 0 {
 		// Found in an ancestor — capture from parent's upvalue
-		return fs.addUpvalue(name, 0, uint8(uvIdx))
+				return fs.addUpvalue(name, 0, uint8(uvIdx))
 	}
 	
-	return -1 // not found in any enclosing scope
+		return -1 // not found in any enclosing scope
 }
 
 // ensureEnvUpvalue ensures that _ENV is available as an upvalue in this function.

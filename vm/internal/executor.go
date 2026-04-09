@@ -387,6 +387,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		dst := e.RA(a)
 		src := e.reg(frameBase(e) + b)
+		if a == 3 && src.IsFunction() {
+		}
+		if a < 5 && dst.IsFunction() && !src.IsFunction() {
+		}
 		e.copyValue(dst, src)
 
 	case opcodes.OP_LOADI:
@@ -742,6 +746,16 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
+		if a < 10 {
+			fnSlot := e.reg(frameBase(e) + a)
+			if fnSlot.Tt == 0 {
+			} else {
+				// fn.Tt is non-nil, check GetValue()
+				val := fnSlot.GetValue()
+				if val == nil {
+				}
+			}
+		}
 		// b = number of arguments: b-1 fixed args (b includes func slot)
 		// b == 0 means variable args — use lastCallNRet to determine count
 		nArgs := b
@@ -986,6 +1000,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_CLOSURE:
 		a := vmapi.GetArgA(inst)
 		bx := vmapi.GetArgBx(inst)
+		if a < 10 {
+		}
 
 		// Get current frame's closure and extract its prototype
 		frame := e.currentFrame()
@@ -1247,7 +1263,8 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	e.lastCallBase = base
 	fn := e.reg(base)
 
-		if fn.IsNil() {
+
+	if fn.IsNil() {
 		e.err = fmt.Errorf("attempt to call nil value")
 		return false
 	}
