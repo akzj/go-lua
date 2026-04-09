@@ -865,7 +865,7 @@ func quoteString(s string) string {
 		case '"':
 			buf.WriteString("\\\"")
 		case '\n':
-			buf.WriteString("\\n")
+			buf.WriteString("\\\n")
 		case '\r':
 			buf.WriteString("\\r")
 		case '\x00':
