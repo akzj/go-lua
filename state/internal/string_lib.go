@@ -685,27 +685,39 @@ func bstringFormat(stack []types.TValue, base int) int {
 			buf.WriteString(quoteString(sval))
 		case 'p':
 			// %p — format any value as a pointer (hex address)
-			// In Lua 5.5, %p returns the internal address of any GC object
+			// In Lua 5.4, %p only returns addresses for GC objects
+			// (tables, functions, coroutines, userdata, strings).
+			// For non-GC types (nil, booleans, numbers), returns "(null)".
 			v := stack[base+argIdx]
 			argIdx++
-			if v == nil || v.IsNil() {
-				buf.WriteString("(null)")
-			} else if v.IsString() {
-				// For strings: use unsafe to get the string data pointer
-				s := v.GetValue().(string)
-				sh := (*[2]uintptr)(unsafe.Pointer(&s))
-				buf.WriteString(fmt.Sprintf("0x%014x", sh[0]))
-			} else {
-				// For other GC objects: use reflect to get pointer
-				val := v.GetValue()
-				rv := reflect.ValueOf(val)
-				switch rv.Kind() {
-				case reflect.Ptr, reflect.UnsafePointer, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan:
-					buf.WriteString(fmt.Sprintf("0x%014x", rv.Pointer()))
-				default:
-					buf.WriteString(fmt.Sprintf("0x%014x", reflect.ValueOf(&val).Pointer()))
+			pResult := "(null)"
+			if v != nil && !v.IsNil() && !v.IsBoolean() && !v.IsInteger() && !v.IsFloat() {
+				if v.IsString() {
+					// For strings: use unsafe to get the string data pointer
+					s := v.GetValue().(string)
+					sh := (*[2]uintptr)(unsafe.Pointer(&s))
+					pResult = fmt.Sprintf("0x%014x", sh[0])
+				} else {
+					// For other GC objects: use reflect to get pointer
+					val := v.GetValue()
+					rv := reflect.ValueOf(val)
+					switch rv.Kind() {
+					case reflect.Ptr, reflect.UnsafePointer, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan:
+						pResult = fmt.Sprintf("0x%014x", rv.Pointer())
+					default:
+						pResult = fmt.Sprintf("0x%014x", reflect.ValueOf(&val).Pointer())
+					}
 				}
 			}
+			// Handle width/alignment for %p using the fmtSpec
+			// fmtSpec is like "%p", "%-60p", "%10p", etc.
+			// Extract flags+width from fmtSpec, apply to pResult as a string
+			if len(fmtSpec) > 2 { // more than just "%p"
+				// Replace 'p' with 's' and use Go fmt for padding
+				sFmt := fmtSpec[:len(fmtSpec)-1] + "s"
+				pResult = fmt.Sprintf(sFmt, pResult)
+			}
+			buf.WriteString(pResult)
 		default:
 			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
 		}
