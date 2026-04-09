@@ -602,7 +602,8 @@ func (l *lexer) readString() string {
 			case -1:
 				l.Error("unfinished string")
 				return ""
-			case '\n', '\r': // Line continuation (backslash at end of line)
+			case '\n', '\r': // Lua: \<newline> produces a newline in the string
+				sb.WriteByte('\n')
 				l.inclinenumber()
 				continue
 			default:
