@@ -152,3 +152,54 @@ func registerDebugLib(debugMod tableapi.TableInterface) {
 	debugMod.Set(types.NewTValueString("upvalueid"), &goFuncWrapper{fn: bdebugUpvalueid})
 	debugMod.Set(types.NewTValueString("upvaluejoin"), &goFuncWrapper{fn: bdebugUpvaluejoin})
 }
+
+// =============================================================================
+// utf8 library stubs
+// =============================================================================
+
+// butf8Len implements utf8.len(s) — returns number of UTF-8 characters
+func butf8Len(stack []types.TValue, base int) int {
+	nArgs := realArgCount(stack, base)
+	if nArgs < 1 {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+	v := stack[base+1]
+	if !v.IsString() {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+	s := v.GetValue().(string)
+	// For ASCII-only strings, len == utf8 len
+	// For strings with multi-byte UTF-8, we need to count
+	runeCount := 0
+	for _, r := range s {
+		_ = r // suppress unused warning
+		runeCount++
+	}
+	stack[base] = types.NewTValueInteger(types.LuaInteger(runeCount))
+	return 1
+}
+
+// butf8Codes implements utf8.codes(s) — returns iterator for (byte-offset, codepoint)
+func butf8Codes(stack []types.TValue, base int) int {
+	nArgs := realArgCount(stack, base)
+	if nArgs < 1 {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+	v := stack[base+1]
+	if !v.IsString() {
+		stack[base] = types.NewTValueNil()
+		return 1
+	}
+	// Return the string value — the caller handles iteration
+	stack[base] = v
+	return 1
+}
+
+// registerUtf8Lib registers utf8 library functions
+func registerUtf8Lib(utf8Mod tableapi.TableInterface) {
+	utf8Mod.Set(types.NewTValueString("len"), &goFuncWrapper{fn: butf8Len})
+	utf8Mod.Set(types.NewTValueString("codes"), &goFuncWrapper{fn: butf8Codes})
+}
