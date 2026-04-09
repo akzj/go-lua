@@ -655,6 +655,36 @@ func bstringFormat(stack []types.TValue, base int) int {
 			val := getFormatFloat(stack, base, argIdx, "format")
 			argIdx++
 			buf.WriteString(fmt.Sprintf(fmtSpec, val))
+		case 'a':
+			val := getFormatFloat(stack, base, argIdx, "format")
+			argIdx++
+			if math.IsInf(val, 1) {
+				buf.WriteString("inf")
+			} else if math.IsInf(val, -1) {
+				buf.WriteString("-inf")
+			} else if math.IsNaN(val) {
+				buf.WriteString("-nan")
+			} else {
+				goSpec := strings.Replace(fmtSpec, "a", "x", 1)
+				s := fmt.Sprintf(goSpec, val)
+				s = stripHexFloatExponentZeros(s, 'p')
+				buf.WriteString(s)
+			}
+		case 'A':
+			val := getFormatFloat(stack, base, argIdx, "format")
+			argIdx++
+			if math.IsInf(val, 1) {
+				buf.WriteString("INF")
+			} else if math.IsInf(val, -1) {
+				buf.WriteString("-INF")
+			} else if math.IsNaN(val) {
+				buf.WriteString("-NAN")
+			} else {
+				goSpec := strings.Replace(fmtSpec, "A", "X", 1)
+				s := fmt.Sprintf(goSpec, val)
+				s = stripHexFloatExponentZeros(s, 'P')
+				buf.WriteString(s)
+			}
 		case 'o':
 			val := getFormatInt(stack, base, argIdx, "format")
 			argIdx++
@@ -860,6 +890,29 @@ func getFormatString(stack []types.TValue, base, argIdx int, fname string) strin
 		return "false"
 	}
 	return fmt.Sprintf("%s: %p", luaTypeName(v), v)
+}
+
+// stripHexFloatExponentZeros removes leading zeros from the exponent part
+// of a hex float string. Go produces "0x1.8p+03" but Lua expects "0x1.8p+3".
+func stripHexFloatExponentZeros(s string, pChar byte) string {
+	idx := strings.IndexByte(s, pChar)
+	if idx < 0 {
+		return s
+	}
+	// Find the start of digits after p/P and optional +/-
+	expStart := idx + 1
+	if expStart < len(s) && (s[expStart] == '+' || s[expStart] == '-') {
+		expStart++
+	}
+	// Find first non-zero digit
+	digitStart := expStart
+	for digitStart < len(s)-1 && s[digitStart] == '0' {
+		digitStart++
+	}
+	if digitStart > expStart {
+		s = s[:expStart] + s[digitStart:]
+	}
+	return s
 }
 
 // quoteString produces a Lua %q quoted string
