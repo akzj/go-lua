@@ -2036,6 +2036,7 @@ func (L *LuaState) openBaseLib() {
 	var ioMod tableapi.TableInterface
 	var osMod tableapi.TableInterface
 	var debugMod tableapi.TableInterface
+	var utf8Mod tableapi.TableInterface
 	for _, name := range moduleNames {
 		modTbl := createModuleTable()
 		key := types.NewTValueString(name)
@@ -2062,6 +2063,9 @@ func (L *LuaState) openBaseLib() {
 		}
 		if name == "debug" {
 			debugMod = modTbl
+		}
+		if name == "utf8" {
+			utf8Mod = modTbl
 		}
 	}
 
@@ -2113,6 +2117,11 @@ func (L *LuaState) openBaseLib() {
 	// Register debug library stub functions
 	if debugMod != nil {
 		registerDebugLib(debugMod)
+	}
+
+	// Register utf8 library
+	if utf8Mod != nil {
+		registerUtf8Lib(utf8Mod)
 	}
 
 
