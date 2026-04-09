@@ -1173,6 +1173,8 @@ func bstringPack(stack []types.TValue, base int) int {
 			buf.WriteByte(0)
 		case 'x': // padding byte
 			buf.WriteByte(0)
+		case 'X': // endianness marker — writes 0x01 (native endian)
+			buf.WriteByte(0x01)
 		case ' ':
 			continue
 		default:
@@ -1315,6 +1317,14 @@ func bstringUnpack(stack []types.TValue, base int) int {
 			resultIdx++
 		case 'x': // padding byte
 			pos++
+		case 'X': // endianness marker — reads and validates 0x01 byte
+			if pos >= len(s) {
+				luaErrorString("data string too short")
+			}
+			if s[pos] != 0x01 {
+				luaErrorString("invalid endianness marker")
+			}
+			pos++
 		case ' ':
 			continue
 		default:
@@ -1377,6 +1387,8 @@ func bstringPacksize(stack []types.TValue, base int) int {
 		case 'd', 'n':
 			size += 8
 		case 'x':
+			size++
+		case 'X':
 			size++
 		case 's', 'z':
 			luaErrorString("variable-size format in packsize")
