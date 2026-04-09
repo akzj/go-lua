@@ -629,6 +629,94 @@ func bstringFormat(stack []types.TValue, base int) int {
 		i++
 		fmtSpec := fmtStr[specStart:i]
 
+		// Lua format validation
+		// 1. Total format spec length check (Lua limits to ~50 chars)
+		if len(fmtSpec) > 50 {
+			luaErrorString("invalid format (too long)")
+		}
+
+		// 2. Parse flags, width, precision from fmtSpec for validation
+		fmtBody := fmtSpec[1 : len(fmtSpec)-1] // strip % and specifier
+		hasFlags := ""
+		fb := fmtBody
+		for len(fb) > 0 && (fb[0] == '-' || fb[0] == '+' || fb[0] == ' ' || fb[0] == '0' || fb[0] == '#') {
+			hasFlags += string(fb[0])
+			fb = fb[1:]
+		}
+		widthStr := ""
+		for len(fb) > 0 && fb[0] >= '0' && fb[0] <= '9' {
+			widthStr += string(fb[0])
+			fb = fb[1:]
+		}
+		precStr := ""
+		hasDot := false
+		if len(fb) > 0 && fb[0] == '.' {
+			hasDot = true
+			fb = fb[1:]
+			for len(fb) > 0 && fb[0] >= '0' && fb[0] <= '9' {
+				precStr += string(fb[0])
+				fb = fb[1:]
+			}
+		}
+
+		// Parse numeric values
+		widthVal := 0
+		if widthStr != "" {
+			for _, c := range widthStr {
+				widthVal = widthVal*10 + int(c-'0')
+			}
+		}
+		precVal := 0
+		if precStr != "" {
+			for _, c := range precStr {
+				precVal = precVal*10 + int(c-'0')
+			}
+		}
+
+		// 3. Width or precision > 99 → "invalid conversion"
+		if widthVal > 99 || precVal > 99 {
+			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
+		}
+
+		// 4. %q cannot have any modifiers
+		if spec == 'q' && len(fmtBody) > 0 {
+			luaErrorString("cannot have modifiers with '%q'")
+		}
+
+		// 5. %c: no '0' flag, no '#' flag, no precision
+		if spec == 'c' && (strings.ContainsAny(hasFlags, "0#") || hasDot) {
+			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
+		}
+
+		// 6. %s: no '0' flag; precision with '0' flag invalid
+		if spec == 's' && strings.Contains(hasFlags, "0") {
+			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
+		}
+
+		// 7. Integer types: no '#' flag
+		if (spec == 'd' || spec == 'i' || spec == 'u') && strings.Contains(hasFlags, "#") {
+			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
+		}
+
+		// 8. %p: no modifiers allowed (width, precision, flags)
+		if spec == 'p' && len(fmtBody) > 0 {
+			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
+		}
+
+		// 9. Unknown specifier
+		validSpecs := "diouxXeEfgGaAcspq"
+		if !strings.ContainsRune(validSpecs, rune(spec)) {
+			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
+		}
+
+		// 10. Check argument availability (except %% which is already handled)
+		if spec != 'p' { // %p uses the arg too
+			nArgs := realArgCount(stack, base)
+			if argIdx > nArgs {
+				luaErrorString(fmt.Sprintf("bad argument #%d to 'format' (no value)", argIdx))
+			}
+		}
+
 		switch spec {
 		case 'd', 'i':
 			val := getFormatInt(stack, base, argIdx, "format")
@@ -703,7 +791,11 @@ func bstringFormat(stack []types.TValue, base int) int {
 		case 'c':
 			val := getFormatInt(stack, base, argIdx, "format")
 			argIdx++
-			buf.WriteByte(byte(val & 0xff))
+			// %c converts integer to single character, but respects width/flags
+			ch := string(rune(val & 0xff))
+			// Replace %...c with %...s to use Go's string formatting for width/alignment
+			sfmt := fmtSpec[:len(fmtSpec)-1] + "s"
+			buf.WriteString(fmt.Sprintf(sfmt, ch))
 		case 's':
 			sval := getFormatString(stack, base, argIdx, "format")
 			argIdx++
