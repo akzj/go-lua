@@ -830,12 +830,23 @@ func quoteString(s string) string {
 		case '\r':
 			buf.WriteString("\\r")
 		case '\x00':
-			buf.WriteString("\\0")
+			// If next char is a digit, use 3-digit form to avoid ambiguity
+			if i < len(s) && s[i] >= '0' && s[i] <= '9' {
+				buf.WriteString("\\000")
+			} else {
+				buf.WriteString("\\0")
+			}
 		case '\x1a':
 			buf.WriteString("\\26")
 		default:
-			if c < 0x20 {
-				buf.WriteString(fmt.Sprintf("\\%d", c))
+			if c < 0x20 || c >= 0x7f {
+				// Escape control chars and non-ASCII bytes as \ddd
+				// If next char is a digit, always use 3-digit form
+				if i < len(s) && s[i] >= '0' && s[i] <= '9' {
+					buf.WriteString(fmt.Sprintf("\\%03d", c))
+				} else {
+					buf.WriteString(fmt.Sprintf("\\%d", c))
+				}
 			} else {
 				buf.WriteByte(c)
 			}
