@@ -2089,50 +2089,15 @@ func (L *LuaState) openBaseLib() {
 		tableMod.Set(unpackKey, &goFuncWrapper{fn: bunpack})
 	}
 
-	// Register coroutine library stub functions
+	// Register coroutine library functions
 	if coroutineMod != nil {
-		// coroutine.running()
-		runningKey := types.NewTValueString("running")
-		coroutineMod.Set(runningKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			stack[base] = types.NewTValueString("main")
-			stack[base+1] = types.NewTValueBoolean(true)
-			return 2
-		}})
-
-		// coroutine.create(f) — stub: returns a thread table with status
-		createKey := types.NewTValueString("create")
-		coroutineMod.Set(createKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			stack[base] = types.NewTValueNil()
-			return 1
-		}})
-
-		// coroutine.resume(co, ...) — stub: returns false, error
-		resumeKey := types.NewTValueString("resume")
-		coroutineMod.Set(resumeKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			stack[base] = types.NewTValueBoolean(false)
-			stack[base+1] = types.NewTValueString("stub: coroutine not implemented")
-			return 2
-		}})
-
-		// coroutine.yield(...) — stub
-		yieldKey := types.NewTValueString("yield")
-		coroutineMod.Set(yieldKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			return 0
-		}})
-
-		// coroutine.status(co) — stub: returns "suspended"
-		statusKey := types.NewTValueString("status")
-		coroutineMod.Set(statusKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			stack[base] = types.NewTValueString("suspended")
-			return 1
-		}})
-
-		// coroutine.wrap(f) — stub: returns nil
-		wrapKey := types.NewTValueString("wrap")
-		coroutineMod.Set(wrapKey, &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-			stack[base] = types.NewTValueNil()
-			return 1
-		}})
+		coroutineMod.Set(types.NewTValueString("running"), &goFuncWrapper{fn: bcoroutineRunning})
+		coroutineMod.Set(types.NewTValueString("create"), &goFuncWrapper{fn: bcoroutineCreate})
+		coroutineMod.Set(types.NewTValueString("resume"), &goFuncWrapper{fn: bcoroutineResume})
+		coroutineMod.Set(types.NewTValueString("yield"), &goFuncWrapper{fn: bcoroutineYield})
+		coroutineMod.Set(types.NewTValueString("status"), &goFuncWrapper{fn: bcoroutineStatus})
+		coroutineMod.Set(types.NewTValueString("isyieldable"), &goFuncWrapper{fn: bcoroutineIsyieldable})
+		coroutineMod.Set(types.NewTValueString("wrap"), &goFuncWrapper{fn: bcoroutineWrap})
 	}
 
 	// Register io library stub functions
