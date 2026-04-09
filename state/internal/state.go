@@ -931,7 +931,7 @@ func bpcall(stack []types.TValue, base int) int {
 	}
 
 	// Success: return true + results
-	stack[base] = types.NewTValueBoolean(true)
+	stack[base] = types.NewTValueBoolean(false)
 	for i := 0; i < nRet; i++ {
 		stack[base+1+i] = callStack[i]
 	}
@@ -1013,7 +1013,7 @@ func bxpcall(stack []types.TValue, base int) int {
 	}
 
 	// Success
-	stack[base] = types.NewTValueBoolean(true)
+	stack[base] = types.NewTValueBoolean(false)
 	for i := 0; i < nRet; i++ {
 		stack[base+1+i] = callStack[i]
 	}
@@ -1552,6 +1552,8 @@ func makeRequire(registry tableapi.TableInterface, globalEnv tableapi.TableInter
 
 // gcMode tracks the current GC mode for collectgarbage mode switching.
 var gcMode = "incremental" // Lua default
+var gcPause = 200   // GC pause percentage (Lua default: 200 = 200%)
+var gcStepMul = 200  // GC step multiplier (Lua default: 200 = 200%)
 
 
 // =============================================================================
@@ -1592,7 +1594,7 @@ func registerIoLib(ioMod tableapi.TableInterface) {
 
 	// io.close
 	ioMod.Set(types.NewTValueString("close"), &goFuncWrapper{fn: func(stack []types.TValue, base int) int {
-		stack[base] = types.NewTValueBoolean(true)
+		stack[base] = types.NewTValueBoolean(false)
 		return 1
 	}})
 
@@ -1776,7 +1778,7 @@ func registerOsLib(osMod tableapi.TableInterface) {
 		if nArgs >= 1 {
 			stack[base] = types.NewTValueNil()
 		} else {
-			stack[base] = types.NewTValueBoolean(true)
+			stack[base] = types.NewTValueBoolean(false)
 		}
 		return 1
 	}})
@@ -1833,7 +1835,7 @@ func bcollectgarbage(stack []types.TValue, base int) int {
 		}
 		return 2
 	case "isrunning":
-		stack[base] = types.NewTValueBoolean(true)
+		stack[base] = types.NewTValueBoolean(false)
 		return 1
 	case "incremental":
 		prev := gcMode
@@ -1846,13 +1848,48 @@ func bcollectgarbage(stack []types.TValue, base int) int {
 		stack[base] = types.NewTValueString(prev)
 		return 1
 	case "stop", "restart":
-		stack[base] = types.NewTValueBoolean(true)
+		stack[base] = types.NewTValueBoolean(false)
 		return 1
 	case "step":
 		stack[base] = types.NewTValueBoolean(false)
 		return 1
 	case "param":
-		stack[base] = types.NewTValueInteger(0)
+		// collectgarbage("param", name) → get parameter value
+		// collectgarbage("param", name, value) → set parameter, return old value
+		nArgs := realArgCount(stack, base)
+		if nArgs >= 2 && stack[base+2] != nil && !stack[base+2].IsNil() && stack[base+2].IsString() {
+			name, _ := stack[base+2].GetValue().(string)
+			if nArgs >= 3 && stack[base+3] != nil && !stack[base+3].IsNil() {
+				// set parameter and return old
+				if stack[base+3].IsInteger() {
+					val := int(stack[base+3].GetInteger())
+					if name == "pause" {
+						old := gcPause
+						gcPause = val
+						stack[base] = types.NewTValueInteger(types.LuaInteger(old))
+					} else if name == "stepmul" {
+						old := gcStepMul
+						gcStepMul = val
+						stack[base] = types.NewTValueInteger(types.LuaInteger(old))
+					} else {
+						stack[base] = types.NewTValueInteger(0)
+					}
+				} else {
+					stack[base] = types.NewTValueInteger(0)
+				}
+			} else {
+				// get parameter value
+				if name == "pause" {
+					stack[base] = types.NewTValueInteger(types.LuaInteger(gcPause))
+				} else if name == "stepmul" {
+					stack[base] = types.NewTValueInteger(types.LuaInteger(gcStepMul))
+				} else {
+					stack[base] = types.NewTValueInteger(0)
+				}
+			}
+		} else {
+			stack[base] = types.NewTValueInteger(0)
+		}
 		return 1
 	default:
 		stack[base] = types.NewTValueInteger(0)
