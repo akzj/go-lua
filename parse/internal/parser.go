@@ -1066,10 +1066,14 @@ func (p *parser) parseParamList() ([]string, bool) {
 		return params, isVarArg
 	}
 
-	// Check for lone '...'
+	// Check for lone '...' or '...name' (Lua 5.5 named vararg)
 	if p.peek(lexapi.TOKEN_DOTS) {
 		isVarArg = true
 		p.next() // consume '...'
+		// Lua 5.5: optional name after '...' (e.g., '...t')
+		if p.current().Type == lexapi.TOKEN_NAME {
+			p.next() // consume the vararg name (ignored for now)
+		}
 		if p.peek(lexapi.TOKEN_RPAREN) {
 			p.next() // consume ')'
 		}
@@ -1088,6 +1092,10 @@ func (p *parser) parseParamList() ([]string, bool) {
 		if p.peek(lexapi.TOKEN_DOTS) {
 			isVarArg = true
 			p.next() // consume '...'
+			// Lua 5.5: optional name after '...' (e.g., '...t')
+			if p.current().Type == lexapi.TOKEN_NAME {
+				p.next() // consume the vararg name (ignored for now)
+			}
 			break
 		}
 		if p.current().Type == lexapi.TOKEN_NAME {
