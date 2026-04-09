@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"encoding/binary"
 	"bytes"
+	"reflect"
+	"unsafe"
 
 	types "github.com/akzj/go-lua/types/api"
 	tableapi "github.com/akzj/go-lua/table/api"
@@ -681,6 +683,29 @@ func bstringFormat(stack []types.TValue, base int) int {
 			sval := getFormatString(stack, base, argIdx, "format")
 			argIdx++
 			buf.WriteString(quoteString(sval))
+		case 'p':
+			// %p — format any value as a pointer (hex address)
+			// In Lua 5.5, %p returns the internal address of any GC object
+			v := stack[base+argIdx]
+			argIdx++
+			if v == nil || v.IsNil() {
+				buf.WriteString("(null)")
+			} else if v.IsString() {
+				// For strings: use unsafe to get the string data pointer
+				s := v.GetValue().(string)
+				sh := (*[2]uintptr)(unsafe.Pointer(&s))
+				buf.WriteString(fmt.Sprintf("0x%014x", sh[0]))
+			} else {
+				// For other GC objects: use reflect to get pointer
+				val := v.GetValue()
+				rv := reflect.ValueOf(val)
+				switch rv.Kind() {
+				case reflect.Ptr, reflect.UnsafePointer, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan:
+					buf.WriteString(fmt.Sprintf("0x%014x", rv.Pointer()))
+				default:
+					buf.WriteString(fmt.Sprintf("0x%014x", reflect.ValueOf(&val).Pointer()))
+				}
+			}
 		default:
 			luaErrorString(fmt.Sprintf("invalid conversion '%%%c'", spec))
 		}
