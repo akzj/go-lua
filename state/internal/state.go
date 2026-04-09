@@ -5,6 +5,7 @@ import (
 	"unsafe"
 	"fmt"
 	"strconv"
+	"strings"
 
 	gc "github.com/akzj/go-lua/gc"
 	memapi "github.com/akzj/go-lua/mem/api"
@@ -825,15 +826,28 @@ func btonumber(stack []types.TValue, base int) int {
 		}
 		if v.IsString() {
 			if s, ok := v.GetValue().(string); ok {
-				// Try integer first
-				var i int64
-				if n, err := fmt.Sscanf(s, "%d", &i); err == nil && n == 1 {
-					stack[base] = types.NewTValueInteger(types.LuaInteger(i))
+				s = strings.TrimSpace(s)
+				if s == "" {
+					stack[base] = types.NewTValueNil()
 					return 1
 				}
-				// Try float
-				var f float64
-				if n, err := fmt.Sscanf(s, "%g", &f); err == nil && n == 1 {
+				// Try integer first — must match entire string
+				// Handle hex (0x/0X) and decimal
+				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+					var i int64
+					if n, err := fmt.Sscanf(s, "%v", &i); err == nil && n == 1 {
+						stack[base] = types.NewTValueInteger(types.LuaInteger(i))
+						return 1
+					}
+				} else {
+					// Try integer parse with strconv (exact match)
+					if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+						stack[base] = types.NewTValueInteger(types.LuaInteger(i))
+						return 1
+					}
+				}
+				// Try float (handles decimal, scientific notation, hex float)
+				if f, err := strconv.ParseFloat(s, 64); err == nil {
 					stack[base] = types.NewTValueFloat(types.LuaNumber(f))
 					return 1
 				}
