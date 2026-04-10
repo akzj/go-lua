@@ -178,7 +178,58 @@ type Node interface {
 	KeyIsCollectable() bool
 }
 
-type UpVal interface{}
+// UpVal represents a Lua upvalue — a local variable from an outer scope
+// that has been captured by a closure. Upvalues can be in one of two states:
+//
+//   - Open: the upvalue points to a slot on the Lua stack (the variable is
+//     still in scope). The V.P field holds a pointer to that stack slot.
+//     The U.Open fields form a doubly-linked list of all open upvalues.
+//
+//   - Closed: the variable has gone out of scope. The upvalue holds an
+//     independent copy of the value in U.Value.
+//
+// An upvalue transitions from open to closed via luaF_close(), which copies
+// the value out of the stack slot into U.Value and unlinks it from the list.
+//
+// The UpVal interface is implemented by *internal.UpVal (types/internal/closure.go).
+// Use NewOpenUpval() and NewClosedUpval() factory functions to create instances.
+type UpVal interface {
+	// IsOpen returns true if this upvalue is currently open (pointing to a
+	// stack slot). Returns false if closed.
+	IsOpen() bool
+
+	// GetStackPtr returns the pointer to the stack slot this upvalue refers to.
+	// Only valid when IsOpen() is true. Returns nil for closed upvalues.
+	GetStackPtr() unsafe.Pointer
+
+	// GetValue returns the captured value. For open upvalues, this reads
+	// through to the stack slot. For closed upvalues, this returns U.Value.
+	GetValue() TValue
+
+	// SetValue sets the captured value. For open upvalues, this writes through
+	// to the stack slot. For closed upvalues, this stores the value in U.Value.
+	SetValue(v TValue)
+
+	// Open returns the doubly-linked list entry for open upvalues.
+	// Only valid when IsOpen() is true.
+	Open() UpValOpen
+}
+
+// UpValOpen represents the open-state fields of an upvalue.
+// This is embedded in the internal UpVal struct; the interface allows
+// state/internal to access it without importing types/internal.
+type UpValOpen interface {
+	Next() UpVal
+	// Previous returns a pointer to the head-pointer for this upvalue's position
+	// in the list. This enables O(1) unlinking without traversing from head.
+	// - For the head upvalue: Previous() == &headPointer
+	// - For other upvalues: Previous() == &prev.Open()
+	Previous() *UpVal
+	// SetNextPtr updates the Next field. Used for unlinking from the open list.
+	SetNextPtr(next UpVal)
+	// SetPreviousPtr updates the Previous pointer. Used for linking/unlinking.
+	SetPreviousPtr(prev *UpVal)
+}
 
 type Closure interface {
 	IsC() bool
@@ -330,3 +381,72 @@ func (t *tvalueStruct) IsUpval() bool             { return int(t.Tt) == Ctb(int(
 func (t *tvalueStruct) IsShortString() bool       { return int(t.Tt) == Ctb(int(LUA_VSHRSTR)) }
 func (t *tvalueStruct) IsLongString() bool        { return int(t.Tt) == Ctb(int(LUA_VLNGSTR)) }
 func (t *tvalueStruct) IsEmpty() bool             { return t.GetBaseType() == LUA_TNIL && t.Value == nil }
+
+
+// =============================================================================
+// UpVal Factory Functions (implemented in types/internal/closure.go)
+// =============================================================================
+
+// upvalOpenEntry is the concrete open-list entry embedded in internal.UpVal.
+type upvalOpenEntry struct {
+	Fwd  UpVal
+	Prev *UpVal
+}
+
+// NewOpenUpval creates a new open upvalue pointing to the given stack slot.
+// The upvalue is inserted at the head of the global open-upvalue list via
+// the prev pointer. After calling NewOpenUpval, the caller must link the
+// upvalue into the list by setting uv.U.Open.Previous = &openUpval (the
+// state's head pointer) and updating openUpval.U.Open.Previous.
+//
+// This function is exported so state/internal can create upvalues without
+// importing types/internal (which would violate Go's internal package rule).
+func NewOpenUpval(stackPtr unsafe.Pointer) UpVal {
+	return &openUpvalImpl{stackPtr: stackPtr}
+}
+
+// NewClosedUpval creates a new closed upvalue holding the given value.
+// The upvalue is NOT linked into any list (closed upvalues are GC-tracked).
+func NewClosedUpval(v TValue) UpVal {
+	return &closedUpvalImpl{value: v}
+}
+
+// openUpvalImpl is the concrete UpVal implementation for open upvalues.
+// Defined here so state/internal can construct it without importing types/internal.
+type openUpvalImpl struct {
+	stackPtr unsafe.Pointer
+	list     upvalOpenEntry
+}
+
+func (u *openUpvalImpl) IsOpen() bool   { return true }
+func (u *openUpvalImpl) GetStackPtr() unsafe.Pointer { return u.stackPtr }
+func (u *openUpvalImpl) GetValue() TValue {
+	// Read through to the stack slot — caller must handle out-of-bounds.
+	return *(*TValue)(u.stackPtr)
+}
+func (u *openUpvalImpl) SetValue(v TValue) {
+	*(*TValue)(u.stackPtr) = v
+}
+func (u *openUpvalImpl) Open() UpValOpen { return &u.list }
+
+// closedUpvalImpl is the concrete UpVal implementation for closed upvalues.
+type closedUpvalImpl struct {
+	value TValue
+}
+
+func (u *closedUpvalImpl) IsOpen() bool                  { return false }
+func (u *closedUpvalImpl) GetStackPtr() unsafe.Pointer   { return nil }
+func (u *closedUpvalImpl) GetValue() TValue              { return u.value }
+func (u *closedUpvalImpl) SetValue(v TValue)              { u.value = v }
+func (u *closedUpvalImpl) Open() UpValOpen               { return nil }
+
+// Ensure both implementations satisfy UpVal and UpValOpen.
+var _ UpVal = (*openUpvalImpl)(nil)
+var _ UpVal = (*closedUpvalImpl)(nil)
+var _ UpValOpen = (*upvalOpenEntry)(nil)
+
+// upvalOpenEntry methods for the linked list.
+func (e *upvalOpenEntry) Next() UpVal       { return e.Fwd }
+func (e *upvalOpenEntry) Previous() *UpVal   { return e.Prev }
+func (e *upvalOpenEntry) SetNextPtr(next UpVal)    { e.Fwd = next }
+func (e *upvalOpenEntry) SetPreviousPtr(prev *UpVal){ e.Prev = prev }

@@ -108,7 +108,7 @@ type LuaState struct {
 	stringMetatable tableapi.TableInterface
 
 	// Upvalue management — linked list of open upvalues pointing into this stack
-	openUpval *types.UpVal
+	openUpval types.UpVal
 }
 
 // NewLuaState creates a new Lua state.
@@ -2208,3 +2208,117 @@ func (L *LuaState) openBaseLib() {
 	// Register _G as a reference to the global environment table
 	L.setGlobalValue("_G", &tableWrapper{tbl: L.global.Registry()})
 }
+
+// =============================================================================
+// Upvalue Management (luaF_* functions)
+// =============================================================================
+
+// luaF_findupval finds or creates an upvalue that points to the stack slot at stackIdx.
+// Lua stack indices are 1-based; the Go slice is 0-based.
+// If an open upvalue already exists for this stack slot, returns it.
+// Otherwise creates a new open upvalue and links it into the openupval list.
+func (L *LuaState) luaF_findupval(stackIdx int) types.UpVal {
+	// Convert Lua 1-based index to Go 0-based slice index
+	absIdx := L.idx2stack(stackIdx)
+	if absIdx <= 0 {
+		return nil
+	}
+	// Go slice index: Lua 1-based → Go 0-based
+	goIdx := absIdx - 1
+	if goIdx < 0 || goIdx >= len(L.stack) {
+		return nil
+	}
+
+	// Pointer to the stack slot
+	targetSlot := unsafe.Pointer(&L.stack[goIdx])
+
+	// Search open upvalue list for existing upvalue pointing to this slot
+	for uv := L.openUpval; uv != nil; {
+		if uv.GetStackPtr() == targetSlot {
+			return uv // found existing open upvalue
+		}
+		// Advance via Open().Next()
+		next := uv.Open().Next()
+		uv = next
+	}
+
+	// Not found: create new open upvalue pointing to the stack slot.
+	// Use types.NewOpenUpval factory — avoids importing types/internal.
+	newUv := types.NewOpenUpval(targetSlot)
+
+	// Link into open upvalue list: insert at head.
+	// The new upvalue's Previous() points to the head pointer.
+	openEntry := newUv.Open()
+	// Set Previous to point to L.openUpval location
+	openEntry.SetPreviousPtr(&L.openUpval)
+
+	if L.openUpval != nil {
+		// Update old head's Previous to point to new head's Previous location
+		L.openUpval.Open().SetPreviousPtr(openEntry.Previous())
+	}
+	L.openUpval = newUv
+
+	return newUv
+}
+
+// luaF_close closes all open upvalues at or above the given stack level.
+// This is called when a stack frame is popped, to ensure upvalues
+// capture the final value of variables before they go out of scope.
+// Lua stack indices are 1-based.
+func (L *LuaState) luaF_close(stackIdx int) {
+	absIdx := L.idx2stack(stackIdx)
+	if absIdx <= 0 {
+		return
+	}
+	// Go 0-based: close all slots from (absIdx-1) onwards
+	closeFrom := absIdx - 1
+
+	for L.openUpval != nil {
+		slotPtr := L.openUpval.GetStackPtr()
+		if slotPtr == nil {
+			// Already closed — shouldn't be in open list; remove it
+			next := L.openUpval.Open().Next()
+			L.openUpval = next
+			continue
+		}
+
+		// Check if this upvalue's stack slot is >= closeFrom
+		found := false
+		var closedIdx int
+		for i := closeFrom; i < len(L.stack); i++ {
+			if unsafe.Pointer(&L.stack[i]) == slotPtr {
+				closedIdx = i
+				found = true
+				break
+			}
+		}
+
+		if !found || closedIdx < closeFrom {
+			// This upvalue is below the close level — we're done
+			break
+		}
+
+		// Close this upvalue: copy value from stack to upvalue storage
+		uv := L.openUpval
+		next := uv.Open().Next()
+
+		// Copy the value (SetValue writes through to the stack slot)
+		uv.SetValue(L.stack[closedIdx])
+
+		// Unlink from list
+		prevPtr := uv.Open().Previous()
+		if prevPtr != nil {
+			// Update the previous node's Next pointer to skip over uv
+			(*prevPtr).Open().SetNextPtr(next)
+		} else {
+			// uv was the head; update L.openUpval
+			L.openUpval = next
+		}
+
+		// Update next node's Previous to point past uv
+		if next != nil {
+			next.Open().SetPreviousPtr(prevPtr)
+		}
+	}
+}
+

@@ -880,6 +880,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// Set lastCallBase so the caller's B=0 CALL can compute correct nArgs
 		e.lastCallBase = calleeBase - 1
 
+		// Close all open upvalues pointing to this frame's stack slots
+		e.closeOpenUpvalues(frameBase(e))
+
 		// Pop current frame and restore caller state
 		e.frames = e.frames[:len(e.frames)-1]
 		e.kvalues = e.currentFrame().kvalues
@@ -905,6 +908,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// Clear the function slot (caller expects nil for 0-return functions)
 		calleeBase := e.currentFrame().base
 		e.setNil(e.reg(calleeBase - 1))
+
+		// Close all open upvalues pointing to this frame's stack slots
+		e.closeOpenUpvalues(frameBase(e))
 
 		// Pop current frame and restore caller state
 		e.frames = e.frames[:len(e.frames)-1]
