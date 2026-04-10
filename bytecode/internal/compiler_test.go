@@ -25,11 +25,11 @@ func TestCompilerCompileNil(t *testing.T) {
 func TestPrototypeInterface(t *testing.T) {
 	proto := &Prototype{
 		sourceName:      "test",
-		lineDefined:    1,
+		lineDefined:     1,
 		lastLineDefined: 10,
-		numparams:      2,
+		numparams:       2,
 		flag:            0,
-		maxstacksize:   16,
+		maxstacksize:    16,
 	}
 
 	// Test interface methods
@@ -178,10 +178,10 @@ func TestCompileError(t *testing.T) {
 
 func TestTableConstruction(t *testing.T) {
 	proto := &Prototype{
-		sourceName:      "test",
-		maxstacksize:    3,
-		k:               make([]*api.Constant, 0),
-		code:            make([]uint32, 0),
+		sourceName:   "test",
+		maxstacksize: 3,
+		k:            make([]*api.Constant, 0),
+		code:         make([]uint32, 0),
 	}
 	fs := &FuncState{Proto: proto}
 
@@ -252,11 +252,11 @@ func TestSetListInstruction(t *testing.T) {
 
 func TestSubPrototypeCreation(t *testing.T) {
 	parentProto := &Prototype{
-		sourceName:      "parent",
-		maxstacksize:    8,
-		k:               make([]*api.Constant, 0),
-		code:            make([]uint32, 0),
-		p:               make([]*Prototype, 0),
+		sourceName:   "parent",
+		maxstacksize: 8,
+		k:            make([]*api.Constant, 0),
+		code:         make([]uint32, 0),
+		p:            make([]*Prototype, 0),
 	}
 
 	// Create a sub-prototype (nested function)
@@ -286,10 +286,10 @@ func TestSubPrototypeCreation(t *testing.T) {
 
 func TestFunctionWithMultipleConstants(t *testing.T) {
 	proto := &Prototype{
-		sourceName:      "multiconst",
-		maxstacksize:    5,
-		k:               make([]*api.Constant, 0),
-		code:            make([]uint32, 0),
+		sourceName:   "multiconst",
+		maxstacksize: 5,
+		k:            make([]*api.Constant, 0),
+		code:         make([]uint32, 0),
 	}
 	fs := &FuncState{Proto: proto}
 
@@ -309,9 +309,9 @@ func TestFunctionWithMultipleConstants(t *testing.T) {
 	}
 
 	// Emit LOADK instructions to load constants
-	fs.emitABx(1, 0, intIdx)     // LOADK R(0), K(intIdx)
-	fs.emitABx(1, 1, floatIdx)   // LOADK R(1), K(floatIdx)
-	fs.emitABx(1, 2, strIdx)     // LOADK R(2), K(strIdx)
+	fs.emitABx(1, 0, intIdx)   // LOADK R(0), K(intIdx)
+	fs.emitABx(1, 1, floatIdx) // LOADK R(1), K(floatIdx)
+	fs.emitABx(1, 2, strIdx)   // LOADK R(2), K(strIdx)
 
 	if len(proto.code) != 3 {
 		t.Errorf("expected 3 LOADK instructions, got %d", len(proto.code))

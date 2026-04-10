@@ -1452,12 +1452,20 @@ func bunpack(stack []types.TValue, base int) int {
 			i = types.LuaInteger(stack[base+2].GetFloat())
 		}
 	}
-	if nArgs >= 3 && stack[base+3] != nil && !stack[base+3].IsNil() {
-		if stack[base+3].IsInteger() {
+	// Check if j was explicitly provided as a number.
+	// The GoFunc bridge may pass Go-nil interfaces for Lua nil arguments.
+	// We detect Go-nil by checking both:
+	// 1. GetValue() returns nil (the actual pointer is nil)
+	// 2. IsInteger/IsFloat return false (not a valid number type)
+	if nArgs >= 3 && stack[base+3] != nil {
+		// If GetValue() is nil AND the type is not integer/float,
+		// it's either Lua nil or a Go-nil interface — skip it
+		if stack[base+3].GetValue() != nil && stack[base+3].IsInteger() {
 			j = stack[base+3].GetInteger()
-		} else if stack[base+3].IsFloat() {
+		} else if stack[base+3].GetValue() != nil && stack[base+3].IsFloat() {
 			j = types.LuaInteger(stack[base+3].GetFloat())
 		}
+		// If GetValue() is nil or type is not number, j stays at default (table length)
 	}
 
 	if j < i {

@@ -303,6 +303,15 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 	} else if name, ok := funcExp.(nameAccess); ok {
 		funcName := name.GetName()
 		
+		// ALWAYS save the function to a high register first if there are args.
+		// This prevents inner FuncCall results from overwriting the function.
+		// Inner FuncCalls compile args starting at funcReg+1, which can overwrite
+		// the function if it's stored in a low register.
+		saveReg := -1
+		if len(args) > 0 {
+			saveReg = fs.allocReg() // Allocate high register first
+		}
+		
 		// Allocate a fresh register for the function
 		funcReg = fs.allocReg()
 		
@@ -318,6 +327,11 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 			envIdx := fs.ensureEnvUpvalue()
 			nameIdx := fs.addConstant(&Constant{Type: ConstString, Str: funcName})
 			fs.emitABC(int(opcodes.OP_GETTABUP), funcReg, envIdx, nameIdx)
+		}
+		
+		// Save function to high register (will be used for CALL)
+		if saveReg >= 0 {
+			fs.emitABC(int(opcodes.OP_MOVE), saveReg, funcReg, 0)
 		}
 		
 		// Now emit arguments starting at R[funcReg+1]
@@ -347,7 +361,12 @@ func (fs *FuncState) compileCallStat(stat astapi.StatNode) error {
 		if fs.patchLastCallForMultiReturn(args) {
 			bArg = 0
 		}
-		fs.emitABC(int(opcodes.OP_CALL), funcReg, bArg, 1)
+		// Use saveReg for the CALL (function is saved there)
+		callReg := funcReg
+		if saveReg >= 0 {
+			callReg = saveReg
+		}
+		fs.emitABC(int(opcodes.OP_CALL), callReg, bArg, 1)
 		
 	} else {
 		// Fallback: treat as any expression (handles binopExp, etc.)
@@ -1963,6 +1982,39 @@ func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumR
 				// A = table register, B = 0 (use actual count), C = base index
 				// For B=0, the VM uses the count of values actually placed by VARARG
 				fs.emitABC(int(opcodes.OP_SETLIST), destReg, 0, 1) // B=0 means use actual count
+			} else if nArray == 1 {
+				// Special case: {FuncCall} — single FuncCall as only field
+				// Need to compile FuncCall at destReg+1 and use SETLIST with B=0
+				lastField := iter.GetArrayField(0)
+				if _, isFuncCall := lastField.(astapi.FuncCall); isFuncCall {
+					// Allocate registers after table for FuncCall results
+					firstValReg := destReg + 1
+					if int(fs.Proto.maxstacksize) <= firstValReg {
+						fs.Proto.maxstacksize = uint8(firstValReg + 1)
+					}
+					// Emit the FuncCall — expToReg will emit CALL
+					// We need to patch it to return all values (C=0)
+					fs.expToReg(lastField, firstValReg)
+					// Patch the CALL to return all values
+					for i := len(fs.Proto.code) - 1; i >= 0; i-- {
+						op := opcodes.OpCode(fs.Proto.code[i] & 0x7F)
+						if op == opcodes.OP_CALL || op == opcodes.OP_TAILCALL {
+							currentC := (fs.Proto.code[i] >> opcodes.POS_C) & opcodes.MAXARG_C
+							if currentC != 0 {
+								fs.Proto.code[i] &= 0x00FFFFFF // clear C to 0
+								break
+							}
+						}
+					}
+					// Use SETLIST to store all values
+					fs.emitABC(int(opcodes.OP_SETLIST), destReg, 0, 1) // B=0 means use actual count
+				} else {
+					// Single non-FuncCall field
+					tmpReg := fs.allocReg()
+					fs.expToReg(lastField, tmpReg)
+					fs.emitABC(int(opcodes.OP_SETI), destReg, 1, tmpReg)
+					fs.freeReg(tmpReg)
+				}
 			} else {
 				// Normal case: compile each field with SETI
 				tmpReg := fs.allocReg()
