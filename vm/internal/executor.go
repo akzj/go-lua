@@ -511,6 +511,12 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
+			uv := frame.upvals[b]
+			protoLine := -1
+			if lc, ok := frame.Closure.GetValue().(luaClosure); ok {
+				protoLine = lc.GetProto().LineDefined()
+			}
+			fmt.Printf("VM_SETUPVAL: proto_line=%d upval[%d] open=%p *open=%+v\n", protoLine, b, unsafe.Pointer(uv.open), *uv.open)
 			e.copyValue(frame.upvals[b].Get(), e.RA(vmapi.GetArgA(inst)))
 		} else if b == 0 {
 			// SETUPVAL on _ENV (upval 0) — update the global environment reference
