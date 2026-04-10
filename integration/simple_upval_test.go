@@ -19,3 +19,19 @@ assert(f() == 10, "should capture x=10")
 		t.Errorf("Error: %v", err)
 	}
 }
+
+// TestSimpleUpval2 测试 SETUPVAL - 修改 upvalue
+func TestSimpleUpval2(t *testing.T) {
+	code := `
+local x = 10
+local function f()
+    x = 20
+end
+f()
+assert(x == 20, "should modify x to 20")
+`
+	err := state.DoString(code)
+	if err != nil {
+		t.Errorf("Error: %v", err)
+	}
+}
