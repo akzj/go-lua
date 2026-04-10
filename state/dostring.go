@@ -98,10 +98,8 @@ func DoBuffer(buff []byte) error {
 // Require loads and executes a Lua module.
 // Returns error if module cannot be loaded or executed.
 func Require(name string) error {
-	// CONTRACT: Load module by name
-	// 1. Check package.loaded[name]
-	// 2. If not loaded, try package.path patterns
-	// 3. Execute module, store in package.loaded[name]
-	// 4. Return module's return value or true
-	panic("TODO: implement Require")
+	// Use DoStringOn to call the internal require function.
+	// This leverages the existing require implementation that checks
+	// package.loaded and package.searchers.
+	return DoStringOn(New(), fmt.Sprintf("return require('%s')", name))
 }
