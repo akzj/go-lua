@@ -106,6 +106,9 @@ type LuaState struct {
 
 	// String metatable: {__index = string_lib_table}
 	stringMetatable tableapi.TableInterface
+
+	// Upvalue management — linked list of open upvalues pointing into this stack
+	openUpval *types.UpVal
 }
 
 // NewLuaState creates a new Lua state.
