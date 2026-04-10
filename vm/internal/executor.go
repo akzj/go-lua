@@ -496,12 +496,6 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
-			uv := frame.upvals[b]
-			protoLine := -1
-			if lc, ok := frame.Closure.GetValue().(luaClosure); ok {
-				protoLine = lc.GetProto().LineDefined()
-			}
-			fmt.Printf("GETUPVAL: proto_line=%d upval[%d] open=%p value=%+v\n", protoLine, b, unsafe.Pointer(uv.open), uv.Value)
 			e.copyValue(e.RA(a), frame.upvals[b].Get())
 		} else if b == 0 && e.globalEnv != nil {
 			// Upval 0 is _ENV — fall back to globalEnv when frame has no upvals
@@ -1073,8 +1067,6 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 	case opcodes.OP_CLOSURE:
 		a := vmapi.GetArgA(inst)
 		bx := vmapi.GetArgBx(inst)
-		if a < 10 {
-		}
 
 		// Get current frame's closure and extract its prototype
 		frame := e.currentFrame()
@@ -1106,13 +1098,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			newClosure.upvals = make([]*UpVal, len(uvDescs))
 			for i, desc := range uvDescs {
 				if desc.Instack == 1 {
-					slot := frameBase(e) + int(desc.Idx)
 					// Capture from parent's register — create open upvalue pointing to stack slot
 					uv := &UpVal{open: e.reg(frameBase(e) + int(desc.Idx))}
 					e.pushOpenUpval(uv) // link into open upvalue chain for proper close
 					newClosure.upvals[i] = uv
-					fmt.Printf("  upval[%d] instack=%d idx=%d slot=%d value=%+v\n",
-						i, desc.Instack, desc.Idx, slot, *uv.open)
 				} else {
 					// Copy from parent's upvalue (chained capture)
 					if frame.upvals != nil && int(desc.Idx) < len(frame.upvals) {

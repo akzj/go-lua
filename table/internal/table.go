@@ -860,13 +860,8 @@ func (ti *TableImpl) newkey(key typesapi.TValue, value *TValue) {
 		// Insert f into the chain: f.next = mp.next, mp.next -> f
 		fIdx := nodeIndex(ti.tbl, f)
 		mpIdx := nodeIndex(ti.tbl, mp)
-		if gnext(mp) != 0 {
-			// f inherits mp's old next link
-			oldNextIdx := mpIdx + gnext(mp)
-			f.KeyNext = int32(oldNextIdx - fIdx)
-		} else {
-			f.KeyNext = 0
-		}
+		// New node starts with no chain link; mp will point to f below
+		f.KeyNext = 0
 		// mp now points to f
 		mp.KeyNext = int32(fIdx - mpIdx)
 		setnodekey(f, key)
