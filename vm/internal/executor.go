@@ -943,6 +943,9 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		dst := e.reg(calleeBase - 1)
 		*dst = *src
 
+		// Close all open upvalues pointing to this frame's stack slots
+		e.closeOpenUpvalues(frameBase(e))
+
 		// Pop current frame and restore caller state
 		e.frames = e.frames[:len(e.frames)-1]
 		e.kvalues = e.currentFrame().kvalues
