@@ -606,9 +606,7 @@ var DefaultLuaLib LuaLib
 
 // New creates a new Lua state with default allocator.
 func New() LuaAPI {
-	// Returns nil - users should use api/internal.NewLuaState(nil) directly
-	// The DefaultLuaAPI initialization has an import cycle issue
-	return nil
+	return DefaultLuaLib.NewState()
 }
 
 // NewWithAllocator creates a new Lua state with custom allocator.
