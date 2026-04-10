@@ -281,6 +281,7 @@ type Executor struct {
 	pc        int
 	err       error
 	frames    []*Frame
+	openUpvals *UpVal               // Head of open upvalue linked list (Lua's G->openupval)
 	globalEnv tableapi.TableInterface // Global environment table for variable lookups
 	globalEnvPtr *globalEnvWrapper    // Pointer wrapper for lightuserdata extraction
 	stringMetatable tableapi.TableInterface // Shared metatable for all strings (__index = string lib)
@@ -302,6 +303,8 @@ type Frame struct {
 type UpVal struct {
 	Value TValue    // Used when closed (variable has left scope) or for non-stack upvalues
 	open  *TValue   // When non-nil, points to the actual stack slot (open upvalue)
+	Next     *UpVal  // Linked list of open upvalues (Lua's openupval list)
+	Previous **UpVal // Pointer to the Previous field of the next UpVal in the chain
 }
 
 // Get returns the current value of the upvalue.
@@ -310,6 +313,23 @@ func (uv *UpVal) Get() *TValue {
 		return uv.open
 	}
 	return &uv.Value
+}
+
+// Close closes the upvalue: copies the current stack value into Value and clears the open pointer.
+func (uv *UpVal) Close() {
+	if uv.open != nil {
+		uv.Value = *uv.open
+		uv.open = nil
+	}
+	// Remove from open chain
+	if uv.Previous != nil {
+		*uv.Previous = uv.Next
+	}
+	if uv.Next != nil {
+		uv.Next.Previous = uv.Previous
+	}
+	uv.Next = nil
+	uv.Previous = nil
 }
 
 func (f *Frame) Base() int                     { return f.base }
@@ -346,6 +366,44 @@ func (e *Executor) SetGlobalEnvUpval(uv *UpVal) {
 			Tt:    uint8(types.Ctb(int(types.LUA_VTABLE))),
 		}
 	}
+}
+
+// closeOpenUpvalues closes all open upvalues whose stack slot index >= base.
+// When a frame returns, any open upvalues that reference its stack slots
+// must snapshot their final value. Walks the chain and closes matching upvalues.
+func (e *Executor) closeOpenUpvalues(base int) {
+	for e.openUpvals != nil {
+		uv := e.openUpvals
+		if uv.open != nil {
+			// Compute slot index from pointer: (slot - &stack[0]) / sizeof(TValue)
+			slotPtr := uintptr(unsafe.Pointer(uv.open))
+			stackStart := uintptr(unsafe.Pointer(&e.stack[0]))
+			slotIdx := int((slotPtr - stackStart) / unsafe.Sizeof(TValue{}))
+			if slotIdx >= base {
+				uv.Close() // removes from chain, updates e.openUpvals
+			} else {
+				// This upvalue points to an outer frame's stack — keep it open,
+				// stop walking (open upvalues are LIFO: outer frames' slots come before inner)
+				break
+			}
+		} else {
+			break
+		}
+	}
+}
+
+// pushOpenUpval adds an open upvalue to the global open upvalue chain.
+// The UpVal.open must already be set to point to the stack slot.
+func (e *Executor) pushOpenUpval(uv *UpVal) {
+	if uv == nil || uv.open == nil {
+		return
+	}
+	uv.Next = e.openUpvals
+	uv.Previous = &e.openUpvals
+	if e.openUpvals != nil {
+		e.openUpvals.Previous = &uv.Next
+	}
+	e.openUpvals = uv
 }
 
 func (e *Executor) Execute(inst opcodes.Instruction) bool {
