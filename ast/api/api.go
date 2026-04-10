@@ -191,6 +191,8 @@ type FuncDef interface {
 	GetParams() []string
 	// IsVarArg returns true if the function uses varargs.
 	IsVarArg() bool
+	// GetVarArgName returns the name of the vararg parameter (e.g., '...t' -> "t")
+	GetVarArgName() string
 	// GetBlock returns the function body block.
 	GetBlock() Block
 	// Proto returns the function prototype.

@@ -1054,16 +1054,17 @@ func (p *parser) parseRepeat() {
 // =============================================================================
 
 // parseParamList parses a parameter list: '(' [name {',' name} [',' '...']] | '...' ')'
-// Returns parameter names and whether function is vararg.
+// Returns parameter names, whether function is vararg, and the vararg name (if present).
 // Assumes '(' has already been consumed.
-func (p *parser) parseParamList() ([]string, bool) {
+func (p *parser) parseParamList() ([]string, bool, string) {
 	var params []string
 	isVarArg := false
+	varArgName := ""
 
 	// Empty param list
 	if p.peek(lexapi.TOKEN_RPAREN) {
 		p.next() // consume ')'
-		return params, isVarArg
+		return params, isVarArg, varArgName
 	}
 
 	// Check for lone '...' or '...name' (Lua 5.5 named vararg)
@@ -1072,12 +1073,13 @@ func (p *parser) parseParamList() ([]string, bool) {
 		p.next() // consume '...'
 		// Lua 5.5: optional name after '...' (e.g., '...t')
 		if p.current().Type == lexapi.TOKEN_NAME {
-			p.next() // consume the vararg name (ignored for now)
+			varArgName = p.current().Value
+			p.next() // consume the vararg name
 		}
 		if p.peek(lexapi.TOKEN_RPAREN) {
 			p.next() // consume ')'
 		}
-		return params, isVarArg
+		return params, isVarArg, varArgName
 	}
 
 	// Parse first param name
@@ -1094,7 +1096,8 @@ func (p *parser) parseParamList() ([]string, bool) {
 			p.next() // consume '...'
 			// Lua 5.5: optional name after '...' (e.g., '...t')
 			if p.current().Type == lexapi.TOKEN_NAME {
-				p.next() // consume the vararg name (ignored for now)
+				varArgName = p.current().Value
+				p.next() // consume the vararg name
 			}
 			break
 		}
@@ -1109,7 +1112,7 @@ func (p *parser) parseParamList() ([]string, bool) {
 		p.next()
 	}
 
-	return params, isVarArg
+	return params, isVarArg, varArgName
 }
 
 // Function Definition: function <name> ['.' <name>]* [':' <name>] '(' [params] ')' <block> end
@@ -1169,7 +1172,7 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 		return
 	}
 	p.next() // consume '('
-	params, isVarArg := p.parseParamList()
+	params, isVarArg, varArgName := p.parseParamList()
 	
 	// Parse function body block
 	// Save outer block reference since parseBlock will set p.block = nil
@@ -1196,12 +1199,13 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 		name:     name,
 		isMethod: isMethod,
 		func_: &funcDefImpl{
-			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
-			isLocal:   false,
-			params:    params,
-			varArg:    isVarArg,
-			block:     body,
-			lastLine:  nameTok.Line,
+			baseNode:    baseNode{line: nameTok.Line, column: nameTok.Column},
+			isLocal:     false,
+			params:      params,
+			varArg:      isVarArg,
+			varArgName:  varArgName,
+			block:       body,
+			lastLine:    nameTok.Line,
 		},
 	}
 	parentBlock.stats = append(parentBlock.stats, stat)
@@ -1210,11 +1214,12 @@ func (p *parser) parseFunctionDef(isLocal bool) {
 // funcDefImpl is a FuncDef implementation
 type funcDefImpl struct {
 	baseNode
-	isLocal  bool
-	params   []string
-	varArg   bool
-	block    astapi.Block
-	lastLine int
+	isLocal     bool
+	params      []string
+	varArg      bool
+	varArgName  string // Name for named vararg (e.g., '...t' -> varArgName = "t")
+	block       astapi.Block
+	lastLine    int
 }
 
 // ExpNode implementation for anonymous functions
@@ -1226,6 +1231,7 @@ func (f *funcDefImpl) Line() int                 { return f.line }
 func (f *funcDefImpl) LastLine() int             { return f.lastLine }
 func (f *funcDefImpl) GetParams() []string       { return f.params }
 func (f *funcDefImpl) IsVarArg() bool            { return f.varArg }
+func (f *funcDefImpl) GetVarArgName() string     { return f.varArgName }
 func (f *funcDefImpl) GetBlock() astapi.Block    { return f.block }
 func (f *funcDefImpl) Proto() *typesapi.Proto    { return nil }
 
@@ -1251,7 +1257,7 @@ func (p *parser) parseLocalFunction() {
 		return
 	}
 	p.next() // consume '('
-	params, isVarArg := p.parseParamList()
+	params, isVarArg, varArgName := p.parseParamList()
 	
 	// Parse function body block
 	// Save outer block reference since parseBlock will set p.block = nil
@@ -1273,12 +1279,13 @@ func (p *parser) parseLocalFunction() {
 		baseNode: baseNode{line: nameTok.Line, column: nameTok.Column},
 		name:     name,
 		func_: &funcDefImpl{
-			baseNode:  baseNode{line: nameTok.Line, column: nameTok.Column},
-			isLocal:   false,
-			params:    params,
-			varArg:    isVarArg,
-			block:     body,
-			lastLine:  nameTok.Line,
+			baseNode:    baseNode{line: nameTok.Line, column: nameTok.Column},
+			isLocal:     false,
+			params:      params,
+			varArg:      isVarArg,
+			varArgName:  varArgName,
+			block:       body,
+			lastLine:    nameTok.Line,
 		},
 	}
 		parentBlock.stats = append(parentBlock.stats, stat)
@@ -2690,9 +2697,10 @@ func (p *parser) parseAnonFunction() astapi.ExpNode {
 	// Parse parameters
 	var params []string
 	isVarArg := false
+	var varArgName string
 	if p.peek(lexapi.TOKEN_LPAREN) {
 		p.next() // consume '('
-		params, isVarArg = p.parseParamList()
+		params, isVarArg, varArgName = p.parseParamList()
 	}
 	
 	// Parse function body
@@ -2705,12 +2713,13 @@ func (p *parser) parseAnonFunction() astapi.ExpNode {
 	
 	// Return a funcDefImpl as expression
 	return &funcDefImpl{
-		baseNode:  baseNode{line: tok.Line, column: tok.Column},
-		isLocal:   true, // anonymous functions are local
-		params:    params,
-		varArg:    isVarArg,
-		block:     body,
-		lastLine:  tok.Line,
+		baseNode:    baseNode{line: tok.Line, column: tok.Column},
+		isLocal:     true, // anonymous functions are local
+		params:      params,
+		varArg:      isVarArg,
+		varArgName:  varArgName,
+		block:       body,
+		lastLine:    tok.Line,
 	}
 }
 

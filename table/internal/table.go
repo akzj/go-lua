@@ -503,19 +503,25 @@ func mainposition(t *Table, key typesapi.TValue) *Node {
 // Key Comparison
 // =============================================================================
 
-// equalkey compares key k1 with the key in node n.
+// equalkey compares key k1 with the key in the node n.
 func equalkey(k1 typesapi.TValue, n *Node) bool {
 	if n == nil {
 		return false
 	}
+
+	// For string keys, compare content regardless of Tt encoding.
+	// The node key Tt and lookup key Tt may differ (e.g., VSHRSTR vs VLNGSTR)
+	// but the string content should still match.
+	s1, sok1 := k1.GetValue().(string)
+	s2, sok2 := n.KeyValue.Data_.(string)
+	if sok1 && sok2 && s1 == s2 {
+		return true
+	}
+
 	if k1.GetTag() != int(n.KeyTt) {
-		// Handle string comparison specially
-		if keytt(n) == typesapi.LUA_VSHRSTR && int(k1.GetTag()) == typesapi.LUA_VLNGSTR {
-			// Long string can equal short string key
-			return false // Simplified - full impl would compare string content
-		}
 		return false
 	}
+
 	switch {
 	case k1.IsNil():
 		return true
@@ -530,11 +536,6 @@ func equalkey(k1 typesapi.TValue, n *Node) bool {
 	}
 }
 
-// =============================================================================
-// Internal Helpers
-// =============================================================================
-
-// ikeyinarray returns array index if k is in array part.
 func ikeyinarray(t *Table, k typesapi.LuaInteger) uint32 {
 	if k >= 1 && uint64(k) <= uint64(t.Asize) {
 		return uint32(k)

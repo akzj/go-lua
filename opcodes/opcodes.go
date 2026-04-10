@@ -135,6 +135,7 @@ const (
 	OP_ERRNNIL    = api.OP_ERRNNIL
 	OP_VARARGPREP = api.OP_VARARGPREP
 	OP_EXTRAARG   = api.OP_EXTRAARG
+	OP_SETTABLEN  = api.OP_SETTABLEN
 )
 
 // Name returns the string name of an opcode.

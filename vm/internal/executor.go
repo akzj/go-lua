@@ -1058,9 +1058,23 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		vb := int(inst>>opcodes.POS_vB) & ((1 << opcodes.SIZE_vB) - 1)
 		vc := int(inst>>opcodes.POS_vC) & ((1 << opcodes.SIZE_vC) - 1)
 		tbl := e.getTable(e.RA(a))
-		if tbl != nil && vb > 0 {
-			for i := 1; i <= vb; i++ {
-				tbl.SetInt(types.LuaInteger(int(vc)+i), e.reg(frameBase(e) + a+i))
+		// B=0 means use the count from the previous operation (e.g., VARARG)
+		// In Lua 5.4, when B=0, the VM uses the count of values placed
+		// by the previous instruction (like VARARG with C=0)
+		n := vb
+		if n == 0 {
+			n = e.lastCallNRet
+		}
+		if tbl != nil && n > 0 {
+			// When B=0 (from VARARG), store starting at index 1
+			// When B>0, store starting at index vc (as per Lua spec)
+			startIdx := 1
+			if vb > 0 {
+				startIdx = vc
+			}
+			for i := 1; i <= n; i++ {
+				val := e.reg(frameBase(e) + a+i)
+				tbl.SetInt(types.LuaInteger(startIdx+i-1), val)
 			}
 		}
 
@@ -1222,6 +1236,21 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			for i := nFixed; i < nActual; i++ {
 				e.setNil(e.reg(base + i))
 			}
+		}
+
+	case opcodes.OP_SETTABLEN:
+		// R[A].n = lastCallNRet (for named vararg)
+		// This opcode sets the .n field on a table at register R[A]
+		// The count comes from lastCallNRet which is set by previous VARARG
+		a := vmapi.GetArgA(inst)
+		tbl := e.getTable(e.RA(a))
+		if tbl != nil {
+			n := e.lastCallNRet
+			if n < 0 {
+				n = 0
+			}
+			nKey := types.NewTValueString("n")
+			tbl.Set(nKey, types.NewTValueInteger(types.LuaInteger(n)))
 		}
 
 	case opcodes.OP_EXTRAARG:
