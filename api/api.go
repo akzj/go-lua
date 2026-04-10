@@ -4,6 +4,8 @@ package api
 
 import (
 	luaapi "github.com/akzj/go-lua/api/api"
+	"github.com/akzj/go-lua/api/internal"
+	memapi "github.com/akzj/go-lua/mem/api"
 )
 
 type LuaAPI = luaapi.LuaAPI
@@ -81,8 +83,16 @@ const (
 // Re-export helper functions
 var Typename = luaapi.Typename
 var StatusString = luaapi.StatusString
-var New = luaapi.New
-var NewWithAllocator = luaapi.NewWithAllocator
+
+// New creates a new Lua state with default allocator.
+func New() LuaAPI {
+	return internal.NewLuaState(nil)
+}
+
+// NewWithAllocator creates a new Lua state with custom allocator.
+func NewWithAllocator(alloc memapi.Allocator) LuaAPI {
+	return internal.NewLuaState(alloc)
+}
 
 // Re-export LuaL_Reg
 type LuaL_Reg = luaapi.LuaL_Reg

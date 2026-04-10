@@ -8,6 +8,11 @@ import (
 	types "github.com/akzj/go-lua/types/api"
 )
 
+// NewLuaLib creates a new LuaLib implementation.
+func NewLuaLib() luaapi.LuaLib {
+	return &LuaLibImpl{}
+}
+
 func init() {
 	// Initialize the default LuaAPI and LuaLib
 	luaapi.DefaultLuaAPI = NewLuaState(nil)
