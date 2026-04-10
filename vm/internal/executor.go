@@ -372,7 +372,6 @@ func (e *Executor) SetGlobalEnvUpval(uv *UpVal) {
 // When a frame returns, any open upvalues that reference its stack slots
 // must snapshot their final value. Walks the chain and closes matching upvalues.
 func (e *Executor) closeOpenUpvalues(base int) {
-	fmt.Printf("closeOpenUpvalues: base=%d stack_len=%d\n", base, len(e.stack))
 	for e.openUpvals != nil {
 		uv := e.openUpvals
 		if uv.open != nil {
@@ -380,9 +379,7 @@ func (e *Executor) closeOpenUpvalues(base int) {
 			slotPtr := uintptr(unsafe.Pointer(uv.open))
 			stackStart := uintptr(unsafe.Pointer(&e.stack[0]))
 			slotIdx := int((slotPtr - stackStart) / unsafe.Sizeof(TValue{}))
-			fmt.Printf("  checking upval slot=%d >= base=%d?\n", slotIdx, base)
 			if slotIdx >= base {
-				fmt.Printf("  CLOSING upval slot=%d value=%+v\n", slotIdx, *uv.open)
 				uv.Close() // removes from chain, updates e.openUpvals
 			} else {
 				// This upvalue points to an outer frame's stack — keep it open,
@@ -504,11 +501,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			if lc, ok := frame.Closure.GetValue().(luaClosure); ok {
 				protoLine = lc.GetProto().LineDefined()
 			}
-			if uv.open != nil {
-				fmt.Printf("VM_GETUPVAL: proto_line=%d upval[%d] open=%p value=%+v\n", protoLine, b, unsafe.Pointer(uv.open), *uv.open)
-			} else {
-				fmt.Printf("VM_GETUPVAL: proto_line=%d upval[%d] CLOSED value=%+v\n", protoLine, b, uv.Value)
-			}
+			fmt.Printf("GETUPVAL: proto_line=%d upval[%d] open=%p value=%+v\n", protoLine, b, unsafe.Pointer(uv.open), uv.Value)
 			e.copyValue(e.RA(a), frame.upvals[b].Get())
 		} else if b == 0 && e.globalEnv != nil {
 			// Upval 0 is _ENV — fall back to globalEnv when frame has no upvals
@@ -524,12 +517,6 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		frame := e.currentFrame()
 		if frame != nil && b < len(frame.upvals) {
-			uv := frame.upvals[b]
-			protoLine := -1
-			if lc, ok := frame.Closure.GetValue().(luaClosure); ok {
-				protoLine = lc.GetProto().LineDefined()
-			}
-			fmt.Printf("VM_SETUPVAL: proto_line=%d upval[%d] open=%p *open=%+v\n", protoLine, b, unsafe.Pointer(uv.open), *uv.open)
 			e.copyValue(frame.upvals[b].Get(), e.RA(vmapi.GetArgA(inst)))
 		} else if b == 0 {
 			// SETUPVAL on _ENV (upval 0) — update the global environment reference
@@ -1115,7 +1102,6 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// Propagate upvalues to the new closure using the child prototype's upvalue descriptors.
 		// Each descriptor says: Instack=1 → capture from parent's register; Instack=0 → copy from parent's upvalue.
 		uvDescs := subProto.GetUpvalues()
-		fmt.Printf("OP_CLOSURE: bx=%d nProtos=%d nUpvals=%d\n", bx, len(subProtos), len(uvDescs))
 		if len(uvDescs) > 0 {
 			newClosure.upvals = make([]*UpVal, len(uvDescs))
 			for i, desc := range uvDescs {
