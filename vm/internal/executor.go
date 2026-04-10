@@ -3,10 +3,10 @@ package internal
 
 import (
 	"fmt"
+	"math"
+	"os"
 	"strconv"
 	"strings"
-	"os"
-	"math"
 	"unsafe"
 
 	bcapi "github.com/akzj/go-lua/bytecode/api"
@@ -68,7 +68,7 @@ func (e *Executor) protectedCall(base, nArgs, nResults int) (retN int, retErr in
 	savedKvalues := e.kvalues
 	savedFrameCount := len(e.frames)
 	savedErr := e.err
-	
+
 	defer func() {
 		if r := recover(); r != nil {
 			// Restore executor state on panic
@@ -83,7 +83,7 @@ func (e *Executor) protectedCall(base, nArgs, nResults int) (retN int, retErr in
 			if savedFrameCount > 0 {
 				e.kvalues = e.frames[savedFrameCount-1].kvalues
 			}
-			
+
 			// Try to extract the error message from the panic value.
 			// LuaError has Msg field of type types.TValue.
 			// We use struct field extraction via interface.
@@ -91,7 +91,7 @@ func (e *Executor) protectedCall(base, nArgs, nResults int) (retN int, retErr in
 			retErr = extractPanicError(r)
 		}
 	}()
-	
+
 	ok := e.executeCall(base, nArgs, nResults)
 	if !ok {
 		if e.err != nil {
@@ -101,7 +101,7 @@ func (e *Executor) protectedCall(base, nArgs, nResults int) (retN int, retErr in
 		}
 		return 0, "call failed"
 	}
-	
+
 	// For Lua closures, executeCall pushes a frame and returns true.
 	// We need to run the VM loop until that frame completes.
 	// The frame was pushed, so run until frame count returns to savedFrameCount.
@@ -110,14 +110,14 @@ func (e *Executor) protectedCall(base, nArgs, nResults int) (retN int, retErr in
 			break
 		}
 	}
-	
+
 	// Check if the VM loop ended with an error
 	if e.err != nil && e.err != savedErr {
 		errMsg := e.err.Error()
 		e.err = savedErr
 		return 0, errMsg
 	}
-	
+
 	return nResults, nil
 }
 
@@ -128,7 +128,7 @@ func extractPanicError(r interface{}) interface{} {
 	// LuaError struct: { Msg types.TValue }
 	// We can't import LuaError, but we can use reflect or duck-type.
 	// Duck-type approach: check for Error() string method first.
-	
+
 	// Try to extract Msg via a known interface
 	type msgProvider interface {
 		GetMsg() types.TValue
@@ -136,13 +136,13 @@ func extractPanicError(r interface{}) interface{} {
 	if mp, ok := r.(msgProvider); ok {
 		return &luaErrorValue{msg: mp.GetMsg()}
 	}
-	
+
 	// Try reflection to get .Msg field (LuaError has public Msg field)
 	// Use fmt to get the string representation
 	if err, ok := r.(error); ok {
 		return err.Error()
 	}
-	
+
 	return fmt.Sprintf("%v", r)
 }
 
@@ -194,33 +194,33 @@ type TValue struct {
 	Tt    uint8
 }
 
-func (t *TValue) IsNil() bool              { return types.Novariant(int(t.Tt)) == types.LUA_TNIL }
-func (t *TValue) IsBoolean() bool           { return types.Novariant(int(t.Tt)) == types.LUA_TBOOLEAN }
-func (t *TValue) IsNumber() bool            { return types.Novariant(int(t.Tt)) == types.LUA_TNUMBER }
-func (t *TValue) IsInteger() bool           { return int(t.Tt) == types.LUA_VNUMINT }
-func (t *TValue) IsFloat() bool             { return int(t.Tt) == types.LUA_VNUMFLT }
-func (t *TValue) IsString() bool            { return types.Novariant(int(t.Tt)) == types.LUA_TSTRING }
-func (t *TValue) IsTable() bool             { return int(t.Tt) == types.Ctb(int(types.LUA_VTABLE)) }
-func (t *TValue) IsFunction() bool          { return types.Novariant(int(t.Tt)) == types.LUA_TFUNCTION }
-func (t *TValue) IsThread() bool            { return int(t.Tt) == types.Ctb(int(types.LUA_VTHREAD)) }
-func (t *TValue) IsLightUserData() bool      { return int(t.Tt) == types.LUA_VLIGHTUSERDATA }
-func (t *TValue) IsUserData() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VUSERDATA)) }
-func (t *TValue) IsCollectable() bool       { return int(t.Tt)&types.BIT_ISCOLLECTABLE != 0 }
-func (t *TValue) IsTrue() bool              { return !t.IsNil() && !t.IsFalse() }
-func (t *TValue) IsFalse() bool             { return int(t.Tt) == types.LUA_VFALSE }
-func (t *TValue) IsLClosure() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VLCL)) }
-func (t *TValue) IsCClosure() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VCCL)) }
-func (t *TValue) IsLightCFunction() bool    { return int(t.Tt) == types.LUA_VLCF }
-func (t *TValue) IsClosure() bool           { return t.IsLClosure() || t.IsCClosure() }
-func (t *TValue) IsProto() bool             { return int(t.Tt) == types.Ctb(int(types.LUA_VPROTO)) }
-func (t *TValue) IsUpval() bool             { return int(t.Tt) == types.Ctb(int(types.LUA_VUPVAL)) }
-func (t *TValue) IsShortString() bool       { return int(t.Tt) == types.Ctb(int(types.LUA_VSHRSTR)) }
-func (t *TValue) IsLongString() bool        { return int(t.Tt) == types.Ctb(int(types.LUA_VLNGSTR)) }
-func (t *TValue) IsEmpty() bool             { return types.Novariant(int(t.Tt)) == types.LUA_TNIL }
-func (t *TValue) GetTag() int               { return int(t.Tt) }
-func (t *TValue) GetBaseType() int          { return types.Novariant(int(t.Tt)) }
-func (t *TValue) GetValue() interface{}     { return t.Value.Data_ }
-func (t *TValue) GetGC() *types.GCObject   { return t.Value.GetGC() }
+func (t *TValue) IsNil() bool                  { return types.Novariant(int(t.Tt)) == types.LUA_TNIL }
+func (t *TValue) IsBoolean() bool              { return types.Novariant(int(t.Tt)) == types.LUA_TBOOLEAN }
+func (t *TValue) IsNumber() bool               { return types.Novariant(int(t.Tt)) == types.LUA_TNUMBER }
+func (t *TValue) IsInteger() bool              { return int(t.Tt) == types.LUA_VNUMINT }
+func (t *TValue) IsFloat() bool                { return int(t.Tt) == types.LUA_VNUMFLT }
+func (t *TValue) IsString() bool               { return types.Novariant(int(t.Tt)) == types.LUA_TSTRING }
+func (t *TValue) IsTable() bool                { return int(t.Tt) == types.Ctb(int(types.LUA_VTABLE)) }
+func (t *TValue) IsFunction() bool             { return types.Novariant(int(t.Tt)) == types.LUA_TFUNCTION }
+func (t *TValue) IsThread() bool               { return int(t.Tt) == types.Ctb(int(types.LUA_VTHREAD)) }
+func (t *TValue) IsLightUserData() bool        { return int(t.Tt) == types.LUA_VLIGHTUSERDATA }
+func (t *TValue) IsUserData() bool             { return int(t.Tt) == types.Ctb(int(types.LUA_VUSERDATA)) }
+func (t *TValue) IsCollectable() bool          { return int(t.Tt)&types.BIT_ISCOLLECTABLE != 0 }
+func (t *TValue) IsTrue() bool                 { return !t.IsNil() && !t.IsFalse() }
+func (t *TValue) IsFalse() bool                { return int(t.Tt) == types.LUA_VFALSE }
+func (t *TValue) IsLClosure() bool             { return int(t.Tt) == types.Ctb(int(types.LUA_VLCL)) }
+func (t *TValue) IsCClosure() bool             { return int(t.Tt) == types.Ctb(int(types.LUA_VCCL)) }
+func (t *TValue) IsLightCFunction() bool       { return int(t.Tt) == types.LUA_VLCF }
+func (t *TValue) IsClosure() bool              { return t.IsLClosure() || t.IsCClosure() }
+func (t *TValue) IsProto() bool                { return int(t.Tt) == types.Ctb(int(types.LUA_VPROTO)) }
+func (t *TValue) IsUpval() bool                { return int(t.Tt) == types.Ctb(int(types.LUA_VUPVAL)) }
+func (t *TValue) IsShortString() bool          { return int(t.Tt) == types.Ctb(int(types.LUA_VSHRSTR)) }
+func (t *TValue) IsLongString() bool           { return int(t.Tt) == types.Ctb(int(types.LUA_VLNGSTR)) }
+func (t *TValue) IsEmpty() bool                { return types.Novariant(int(t.Tt)) == types.LUA_TNIL }
+func (t *TValue) GetTag() int                  { return int(t.Tt) }
+func (t *TValue) GetBaseType() int             { return types.Novariant(int(t.Tt)) }
+func (t *TValue) GetValue() interface{}        { return t.Value.Data_ }
+func (t *TValue) GetGC() *types.GCObject       { return t.Value.GetGC() }
 func (t *TValue) GetInteger() types.LuaInteger { return t.Value.GetInteger() }
 func (t *TValue) GetFloat() types.LuaNumber    { return t.Value.GetFloat() }
 func (t *TValue) GetPointer() unsafe.Pointer   { return t.Value.GetPointer() }
@@ -268,41 +268,41 @@ func extractVariantAndData(v types.TValue) (types.ValueVariant, interface{}) {
 
 // goFuncUnwrapper allows VM to call GoFuncs stored in tables via goFuncWrapper.
 type goFuncUnwrapper interface {
-    unwrapGoFunc() vmapi.GoFunc
+	unwrapGoFunc() vmapi.GoFunc
 }
 type globalEnvWrapper struct {
 	env tableapi.TableInterface
 }
 
 type Executor struct {
-	stack     []TValue              // Value stack (concrete internal type)
-	code      []opcodes.Instruction // Bytecode instructions
-	kvalues   []TValue              // Constants (K values)
-	pc        int
-	err       error
-	frames    []*Frame
-	openUpvals *UpVal               // Head of open upvalue linked list (Lua's G->openupval)
-	globalEnv tableapi.TableInterface // Global environment table for variable lookups
-	globalEnvPtr *globalEnvWrapper    // Pointer wrapper for lightuserdata extraction
+	stack           []TValue              // Value stack (concrete internal type)
+	code            []opcodes.Instruction // Bytecode instructions
+	kvalues         []TValue              // Constants (K values)
+	pc              int
+	err             error
+	frames          []*Frame
+	openUpvals      *UpVal                  // Head of open upvalue linked list (Lua's G->openupval)
+	globalEnv       tableapi.TableInterface // Global environment table for variable lookups
+	globalEnvPtr    *globalEnvWrapper       // Pointer wrapper for lightuserdata extraction
 	stringMetatable tableapi.TableInterface // Shared metatable for all strings (__index = string lib)
-	lastCallNRet int                  // Number of results from last GoFunc call (for multi-return propagation)
-	lastCallBase int                  // Base register of last call (for B=0 arg count computation)
+	lastCallNRet    int                     // Number of results from last GoFunc call (for multi-return propagation)
+	lastCallBase    int                     // Base register of last call (for B=0 arg count computation)
 }
 
 type Frame struct {
-	Closure  *TValue
-	base     int
-	prev     *Frame
-	savedPC  int
-	kvalues  []TValue
-	upvals   []*UpVal
-	varargs  []TValue  // Vararg values (extra args beyond fixed params)
-	nArgs    int        // Number of actual arguments passed to this call
+	Closure *TValue
+	base    int
+	prev    *Frame
+	savedPC int
+	kvalues []TValue
+	upvals  []*UpVal
+	varargs []TValue // Vararg values (extra args beyond fixed params)
+	nArgs   int      // Number of actual arguments passed to this call
 }
 
 type UpVal struct {
-	Value TValue    // Used when closed (variable has left scope) or for non-stack upvalues
-	open  *TValue   // When non-nil, points to the actual stack slot (open upvalue)
+	Value    TValue  // Used when closed (variable has left scope) or for non-stack upvalues
+	open     *TValue // When non-nil, points to the actual stack slot (open upvalue)
 	Next     *UpVal  // Linked list of open upvalues (Lua's openupval list)
 	Previous **UpVal // Pointer to the Previous field of the next UpVal in the chain
 }
@@ -332,12 +332,12 @@ func (uv *UpVal) Close() {
 	uv.Previous = nil
 }
 
-func (f *Frame) Base() int                     { return f.base }
-func (f *Frame) Func() types.TValue           { return f.Closure }
-func (f *Frame) Prev() vmapi.StackFrame       { return f.prev }
-func (f *Frame) PC() int                      { return f.savedPC }
-func (f *Frame) SetPC(pc int)                 { f.savedPC = pc }
-func (f *Frame) Top() int                     { return f.base }
+func (f *Frame) Base() int              { return f.base }
+func (f *Frame) Func() types.TValue     { return f.Closure }
+func (f *Frame) Prev() vmapi.StackFrame { return f.prev }
+func (f *Frame) PC() int                { return f.savedPC }
+func (f *Frame) SetPC(pc int)           { f.savedPC = pc }
+func (f *Frame) Top() int               { return f.base }
 
 func NewExecutor() vmapi.VMExecutor {
 	return &Executor{
@@ -527,10 +527,10 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
 		frame := e.currentFrame()
-		
+
 		// Check if we have upvals
 		hasUpvals := frame != nil && frame.upvals != nil && b < len(frame.upvals)
-		
+
 		if hasUpvals {
 			// Normal path: get upval from frame
 			// GETTABUP C field is always a constant index, use e.k() not e.rk()
@@ -612,7 +612,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		a := vmapi.GetArgA(inst)
 		b := vmapi.GetArgB(inst)
 		c := vmapi.GetArgC(inst)
-		e.copyValue(e.reg(frameBase(e) + a+1), e.reg(frameBase(e)+b))
+		e.copyValue(e.reg(frameBase(e)+a+1), e.reg(frameBase(e)+b))
 		e.finishGet(e.RA(a), e.reg(frameBase(e)+b), e.k(c))
 
 	// Arithmetic opcodes
@@ -710,7 +710,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if rb.IsString() {
 			if s, ok := rb.GetValue().(string); ok {
 				str := s
-			e.setInteger(e.RA(a), types.LuaInteger(len(str)))
+				e.setInteger(e.RA(a), types.LuaInteger(len(str)))
 			}
 		} else if rb.IsTable() {
 			if tbl := e.getTable(rb); tbl != nil {
@@ -819,16 +819,27 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		nArgs := b
 		if b == 0 && e.lastCallBase > 0 {
 			// Variable args: B=0 means "use top".
-			// The previous operation (CALL or VARARG) placed lastCallNRet results
-			// starting at lastCallBase. This call's function is at frameBase+a.
-			// nArgs = (lastCallBase - (frameBase+a)) + lastCallNRet
-			// This accounts for any fixed args between the function and the multi-return.
-			// When lastCallNRet==0 (e.g., empty varargs), this correctly counts
-			// only the fixed args.
 			outerBase := frameBase(e) + a
 			nArgs = (e.lastCallBase - outerBase) + e.lastCallNRet
 			if nArgs < 1 {
-				nArgs = 1 // at minimum, the function slot itself
+				// The function slot contains a value that was just returned from
+				// a function call. If that call returned 0 values, this slot
+				// contains the function itself (stale from before the call).
+				// We should NOT call it again — clear it and return 0 values.
+				if e.lastCallBase == outerBase && e.lastCallNRet == 0 {
+					// This was a 0-return function call, clear the stale function
+					fnReg := e.reg(outerBase)
+					// Check if this is actually a function (stale) vs nil (already cleaned)
+					if !fnReg.IsNil() && (fnReg.IsFunction() || fnReg.IsCClosure() || fnReg.IsLClosure() || fnReg.IsLightCFunction()) {
+						fnReg.Tt = uint8(types.LUA_TNIL)
+						fnReg.Value.Variant = types.ValueGC
+						fnReg.Value.Data_ = nil
+					}
+					e.lastCallNRet = 0
+					e.lastCallBase = 0
+					return true // skip executeCall, continue VM loop
+				}
+				nArgs = 1
 			}
 		}
 		return e.executeCall(frameBase(e)+a, nArgs, c)
@@ -850,19 +861,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		if b >= 2 {
 			nRet = b - 1
 		} else if b == 0 {
-			// Multi-return: return all values from R[A] to top
-			// Use lastCallNRet as a hint, or count non-nil values
+			// Multi-return: use lastCallNRet from the function call
 			nRet = e.lastCallNRet
-			if nRet == 0 {
-				// Fallback: count non-nil values from R[A]
-				for i := 0; i < 256; i++ {
-					r := e.reg(base + a + i)
-					if r.Tt == uint8(types.LUA_TNIL) || r.Tt == 0 {
-						break
-					}
-					nRet++
-				}
-			}
 		}
 		// b==1 means no return values: nRet=0
 		e.lastCallNRet = nRet
@@ -875,7 +875,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		for i := 0; i < nRet; i++ {
 			src := e.reg(base + a + i)
 			dst := e.reg(calleeBase - 1 + i)
-				*dst = *src
+			*dst = *src
 		}
 		// Set lastCallBase so the caller's B=0 CALL can compute correct nArgs
 		e.lastCallBase = calleeBase - 1
@@ -1073,7 +1073,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 				startIdx = vc
 			}
 			for i := 1; i <= n; i++ {
-				val := e.reg(frameBase(e) + a+i)
+				val := e.reg(frameBase(e) + a + i)
 				tbl.SetInt(types.LuaInteger(startIdx+i-1), val)
 			}
 		}
@@ -1358,7 +1358,6 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 	e.lastCallBase = base
 	fn := e.reg(base)
 
-
 	if fn.IsNil() {
 		e.err = fmt.Errorf("attempt to call nil value")
 		return false
@@ -1380,6 +1379,15 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		}
 		if rawPtr == unsafe.Pointer(printBuiltin) {
 			e.builtinPrint(base, nArgs)
+			// builtinPrint returns nothing - clear return slots to nil
+			// so the function slot doesn't contain stale values
+			for i := 0; i < 8; i++ {
+				dst := e.reg(base + i)
+				dst.Tt = uint8(types.LUA_TNIL)
+				dst.Value.Variant = types.ValueGC
+				dst.Value.Data_ = nil
+			}
+			e.lastCallNRet = 0
 			return true
 		}
 		// Dereference the pointer to get the GoFunc interface{}.
@@ -1429,7 +1437,7 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 			// args have room to write (e.g. ipairs returns 3 from 1 arg).
 			// GoFuncs will see inflated nArgs due to extra slots, so they
 			// must check for nil trailing args (not just count them).
-			gfBase := 4 // room for extra return values
+			gfBase := 4                     // room for extra return values
 			sliceSize := gfBase + nArgs + 4 // extra after args too
 			args := make([]types.TValue, sliceSize)
 			for i := 0; i < nArgs; i++ {
@@ -1517,6 +1525,10 @@ func (e *Executor) executeCall(base, nArgs, nResults int) bool {
 		}
 		proto := lc.GetProto()
 
+		// Initialize lastCallNRet to 0 - Lua functions default to returning 0 values
+		// This value may be updated by OP_RETURN when the Lua function executes
+		e.lastCallNRet = 0
+
 		// Save current PC so we can resume here after return
 		e.currentFrame().savedPC = e.pc
 
@@ -1595,9 +1607,10 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 	numArgs := nArgs - 1 // nArgs includes the function itself
 	if numArgs < 1 {
 		os.Stdout.Sync()
+		e.lastCallNRet = 0 // print returns 0 values
 		return
 	}
-	
+
 	// Print arguments separated by tabs
 	for i := 0; i < numArgs; i++ {
 		pos := base + 1 + i
@@ -1632,7 +1645,8 @@ func (e *Executor) builtinPrint(base, nArgs int) {
 			fmt.Print("\t")
 		}
 	}
-		os.Stdout.Sync()
+	os.Stdout.Sync()
+	e.lastCallNRet = 0 // print returns 0 values
 }
 
 // printBuiltin is the actual print function implementation
@@ -1832,7 +1846,7 @@ func (e *Executor) finishGetWithMetatable(ra *TValue, mtTbl tableapi.TableInterf
 		// __index is a function: call it with (origObj, key)
 		if indexVal.IsFunction() || indexVal.IsLClosure() || indexVal.IsCClosure() || indexVal.IsLightCFunction() {
 			// Save ra's offset so we can recompute it after stack reallocation
-			raOffset := int(uintptr(unsafe.Pointer(ra)) - uintptr(unsafe.Pointer(&e.stack[0]))) / int(unsafe.Sizeof(TValue{}))
+			raOffset := int(uintptr(unsafe.Pointer(ra))-uintptr(unsafe.Pointer(&e.stack[0]))) / int(unsafe.Sizeof(TValue{}))
 
 			// Copy origObj and key BEFORE append — append may reallocate the stack,
 			// invalidating any pointers into it
@@ -1849,8 +1863,8 @@ func (e *Executor) finishGetWithMetatable(ra *TValue, mtTbl tableapi.TableInterf
 			fnSlot.Value.Variant = variant
 			fnSlot.Value.Data_ = data
 
-			e.stack[callBase + 1] = origObjCopy
-			e.stack[callBase + 2] = keyCopy
+			e.stack[callBase+1] = origObjCopy
+			e.stack[callBase+2] = keyCopy
 
 			// Save caller state
 			savedPC := e.pc
@@ -2195,7 +2209,6 @@ func (e *Executor) lessEqual(a, b types.TValue) bool {
 	return false
 }
 
-
 // Lua 5.4 mixed int/float comparison helpers.
 // These avoid precision loss by not converting large ints to float.
 
@@ -2296,13 +2309,21 @@ func (e *Executor) equalValues(a, b *TValue) bool {
 	}
 	// Tables and functions compare by reference identity (pointer equality).
 	// Two table/function values are equal iff they are the SAME object.
-	if a.IsTable() && b.IsTable() {
-		return a.Value.Data_ == b.Value.Data_
-	}
-	if a.IsFunction() && b.IsFunction() {
-		return a.Value.Data_ == b.Value.Data_
-	}
-	return false
+	// Use recover to safely compare - prevents panics from uncomparable types.
+	result := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Uncomparable - result stays false
+			}
+		}()
+		if a.IsTable() && b.IsTable() {
+			result = a.Value.Data_ == b.Value.Data_
+		} else if a.IsFunction() && b.IsFunction() {
+			result = a.Value.Data_ == b.Value.Data_
+		}
+	}()
+	return result
 }
 
 func (e *Executor) lessThanInt(a *TValue, b int) bool {
@@ -2592,14 +2613,14 @@ func setFloat(tval *TValue, n types.LuaNumber) {
 
 func newIntValue(i types.LuaInteger) *TValue {
 	return &TValue{
-		Tt:   uint8(types.LUA_VNUMINT),
+		Tt:    uint8(types.LUA_VNUMINT),
 		Value: Value{Variant: types.ValueInteger, Data_: i},
 	}
 }
 
 func newLightCFunctionValue(fn uintptr) *TValue {
 	return &TValue{
-		Tt:   uint8(types.LUA_VLCF),
+		Tt:    uint8(types.LUA_VLCF),
 		Value: Value{Variant: types.ValueCFunction, Data_: unsafe.Pointer(fn)},
 	}
 }
@@ -2608,14 +2629,14 @@ func newLightCFunctionValue(fn uintptr) *TValue {
 // Stack layout: stack[base]=pcall, stack[base+1]=f, stack[base+2..]=args
 // After: stack[base]=true/false, stack[base+1..]=results/errmsg
 func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
-// nArgs includes pcall itself in the count from OP_CALL's B field
+	// nArgs includes pcall itself in the count from OP_CALL's B field
 	// stack[base] = pcall, stack[base+1] = f, stack[base+2..] = extra args
 	// The function to call is at base+1, with (nArgs-2) extra args
 	// (nArgs counts: pcall + f + extra_args, but B field is nArgs+1 for CALL)
 	// Actually: from OP_CALL, B = nArgs which is total args INCLUDING function slot
 	// So nArgs = B = total slots. pcall is at base, f is at base+1.
 	// The inner call has (nArgs - 2) extra args: stack[base+2..base+nArgs-1]
-	
+
 	fnBase := base + 1
 	innerNArgs := nArgs - 1 // f + its args (subtract pcall slot)
 	if innerNArgs < 1 {
@@ -2630,13 +2651,13 @@ func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
 
 	// Use protectedCall which wraps executeCall + VM loop in recover
 	_, errVal := e.protectedCall(fnBase, innerNArgs, nResults)
-	
+
 	if errVal != nil {
 		// Error occurred — write false + error message at base
 		dst := e.reg(base)
 		dst.Tt = uint8(types.LUA_VFALSE)
 		dst.Value.Data_ = nil
-		
+
 		// Extract error message
 		dst2 := e.reg(base + 1)
 		switch ev := errVal.(type) {
@@ -2656,7 +2677,7 @@ func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
 		e.lastCallBase = base
 		return true
 	}
-	
+
 	// Success — results are already at fnBase (the function slot was overwritten by return values)
 	// We need to shift: stack[base] = true, stack[base+1..] = results from fnBase
 	// But results from the inner call are at fnBase-1 = base (the pcall slot) per OP_RETURN logic
@@ -2664,12 +2685,12 @@ func (e *Executor) handlePcall(base, nArgs, nResults int) bool {
 	// So results go to base+1. We need base=true, base+1..=results.
 	// The results are already at base (the pcall slot) from OP_RETURN.
 	// We need to shift everything right by 1 and put true at base.
-	
+
 	// Actually: protectedCall runs executeCall which for Lua closures pushes a frame
 	// with base=fnBase+1, then runs VM loop. OP_RETURN copies results to calleeBase-1=fnBase.
 	// So after protectedCall, results are at fnBase = base+1. Perfect!
 	// We just need to set base = true.
-	
+
 	dst := e.reg(base)
 	dst.Tt = uint8(types.LUA_VTRUE)
 	dst.Value.Data_ = nil
@@ -2703,7 +2724,7 @@ func (e *Executor) handleXpcall(base, nArgs, nResults int) bool {
 	// Currently: [xpcall, f, handler, arg1, arg2, ...]
 	// Need:      [xpcall, f, arg1, arg2, ...]
 	// Shift args left over handler slot
-	for i := base + 2; i < base + nArgs - 1; i++ {
+	for i := base + 2; i < base+nArgs-1; i++ {
 		src := e.reg(i + 1)
 		dst := e.reg(i)
 		*dst = *src
@@ -2737,11 +2758,11 @@ func (e *Executor) handleXpcall(base, nArgs, nResults int) bool {
 		*eDst = errTValue
 
 		_, handlerErr := e.protectedCall(base+1, 2, 1)
-		
+
 		dst := e.reg(base)
 		dst.Tt = uint8(types.LUA_VFALSE)
 		dst.Value.Data_ = nil
-		
+
 		if handlerErr != nil {
 			// Handler also failed — use original error
 			dst2 := e.reg(base + 1)
