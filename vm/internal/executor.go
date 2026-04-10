@@ -1102,6 +1102,7 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 				if desc.Instack == 1 {
 					// Capture from parent's register — create open upvalue pointing to stack slot
 					uv := &UpVal{open: e.reg(frameBase(e) + int(desc.Idx))}
+					e.pushOpenUpval(uv) // link into open upvalue chain for proper close
 					newClosure.upvals[i] = uv
 				} else {
 					// Copy from parent's upvalue (chained capture)
