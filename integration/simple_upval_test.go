@@ -89,3 +89,51 @@ assert(result == 20, "should see modified x=20, got " .. tostring(result))
 		t.Errorf("Error: %v", err)
 	}
 }
+
+// TestSimpleUpval6 测试循环中创建的闭包 — 之前失败的关键情况
+func TestSimpleUpval6(t *testing.T) {
+	code := `
+local function outer()
+    local a = {}
+    for i = 1, 2 do
+        local x = 100
+        a[i] = function()
+            return x
+        end
+    end
+    return a
+end
+local result = outer()
+print("result[1]() =", result[1]())
+print("result[2]() =", result[2]())
+-- Each closure should capture its own x
+-- But currently they may share the same slot
+`
+	err := state.DoString(code)
+	if err != nil {
+		t.Errorf("Error: %v", err)
+	}
+}
+
+// TestSimpleUpval7 测试循环中创建的闭包，调用后返回值
+func TestSimpleUpval7(t *testing.T) {
+	code := `
+local function outer()
+    local a = {}
+    for i = 1, 2 do
+        local x = 100
+        a[i] = function()
+            return x
+        end
+    end
+    return a
+end
+local result = outer()
+print("result[1]()() =", result[1]())  -- 注意：两次()
+print("result[2]()() =", result[2]())  -- 第一次调用返回函数，第二次调用才执行
+`
+	err := state.DoString(code)
+	if err != nil {
+		t.Errorf("Error: %v", err)
+	}
+}
