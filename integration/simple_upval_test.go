@@ -68,3 +68,24 @@ assert(f() == 20, "second call should return 20")
 		t.Errorf("Error: %v", err)
 	}
 }
+
+// TestSimpleUpval5 测试闭包作为返回值 — 之前失败的关键情况
+func TestSimpleUpval5(t *testing.T) {
+	code := `
+local function outer()
+    local x = 10
+    local function inner()
+        return x
+    end
+    x = 20  -- 修改 x
+    return inner
+end
+local f = outer()
+local result = f()
+assert(result == 20, "should see modified x=20, got " .. tostring(result))
+`
+	err := state.DoString(code)
+	if err != nil {
+		t.Errorf("Error: %v", err)
+	}
+}

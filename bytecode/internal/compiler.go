@@ -1553,6 +1553,9 @@ func (fs *FuncState) assignToVar(v astapi.ExpNode, srcReg int) error {
 			fs.emitABC(int(opcodes.OP_MOVE), localReg, srcReg, 0)
 		} else if uvIdx := fs.resolveUpvalue(varName); uvIdx >= 0 {
 			// Upvalue from enclosing scope: emit SETUPVAL
+			if fs.Proto.LineDefined() >= 20 && fs.Proto.LineDefined() <= 65 {
+				fmt.Printf("UPVAL_WRITE: funcLine=%d var=%q uvIdx=%d\n", fs.Proto.LineDefined(), varName, uvIdx)
+			}
 			fs.emitABC(int(opcodes.OP_SETUPVAL), srcReg, uvIdx, 0)
 		} else {
 			// Global variable: use SETTABUP
@@ -1585,6 +1588,13 @@ const NO_REG = 0x1FF
 
 // compileSingleAssign compiles a single assignment: var = expr
 func (fs *FuncState) compileSingleAssign(v astapi.ExpNode, e astapi.ExpNode) error {
+	// DEBUG: trace inner function assignments
+	if fs.Proto.LineDefined() >= 20 && fs.Proto.LineDefined() <= 65 {
+		fmt.Printf("CSA: funcLine=%d v=%T e=%T\n", fs.Proto.LineDefined(), v, e)
+		if n, ok := v.(interface{ Name() string }); ok {
+			fmt.Printf("CSA:   LHS varName=%q\n", n.Name())
+		}
+	}
 	// Compile the expression to a register
 	exprReg := fs.allocReg()
 	fs.expToReg(e, exprReg)
