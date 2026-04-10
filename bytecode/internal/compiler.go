@@ -1649,6 +1649,33 @@ func (fs *FuncState) compileFuncDef(funcDef astapi.FuncDef) (*Prototype, error) 
 		nFixed := len(funcDef.GetParams())
 		nestedFs.emitABC(int(opcodes.OP_VARARGPREP), 0, 0, nFixed)
 		nestedProto.flag |= 1 // Mark as vararg
+
+		// Handle named vararg: if `...name` syntax, create a table containing varargs
+		if varArgName := funcDef.GetVarArgName(); varArgName != "" {
+			// Named vararg is at register nFixed (after fixed params)
+			varArgReg := nFixed
+			// Register the named vararg as a local variable
+			nestedFs.locals.Add(varArgName, varArgReg, nestedFs.pc)
+			// Ensure maxstacksize accounts for the named vararg table
+			if int(nestedProto.maxstacksize) <= varArgReg {
+				nestedProto.maxstacksize = uint8(varArgReg + 1)
+			}
+			// Emit NEWTABLE to create the table (stored at varArgReg)
+			nestedFs.emitABC(int(opcodes.OP_NEWTABLE), varArgReg, 0, 0)
+			// Emit VARARG to copy all varargs to registers starting at varArgReg+1
+			// C=0 means all varargs
+			nestedFs.emitABC(int(opcodes.OP_VARARG), varArgReg+1, 0, 0)
+			// Ensure maxstacksize accounts for vararg values
+			if int(nestedProto.maxstacksize) <= varArgReg+1 {
+				nestedProto.maxstacksize = uint8(varArgReg + 2)
+			}
+			// Emit SETLIST to store all varargs in the table
+			// B=0 means use lastCallNRet count (set by VARARG C=0)
+			nestedFs.emitABC(int(opcodes.OP_SETLIST), varArgReg, 0, 1)
+			// Emit SETTABLEN to set the .n field on the table
+			// This uses lastCallNRet (set by previous VARARG) to set tbl.n = count
+			nestedFs.emitABC(int(opcodes.OP_SETTABLEN), varArgReg, 0, 0)
+		}
 	}
 
 	// Compile the function body
@@ -1904,20 +1931,49 @@ func (fs *FuncState) compileTableConstructor(tc interface{ NumFields() int; NumR
 	// NEWTABLE is followed by an EXTRAARG in Lua 5.4 when k=1; we skip this for now
 	// (the VM should handle NEWTABLE without EXTRAARG for small tables)
 
-	// If there are array fields, compile them with SETI
+	// If there are array fields, compile them with SETI or SETLIST
 	if nArray > 0 {
 		if iter, ok := tc.(interface {
 			GetArrayField(int) astapi.ExpNode
 		}); ok {
-			// Allocate ONE temp register and reuse for each field
-			tmpReg := fs.allocReg()
-			for i := 0; i < nArray; i++ {
-				field := iter.GetArrayField(i)
-				fs.expToReg(field, tmpReg)
-				// SETI A B C: R[A][B] = R[C]  (B is integer key, 1-based)
-				fs.emitABC(int(opcodes.OP_SETI), destReg, i+1, tmpReg)
+			// Check if the LAST field is a vararg expression
+			isLastFieldVararg := false
+			if nArray > 0 {
+				lastField := iter.GetArrayField(nArray - 1)
+				if kinded, ok := lastField.(interface{ Kind() astapi.ExpKind }); ok && kinded.Kind() == astapi.EXP_VARARG {
+					isLastFieldVararg = true
+				}
 			}
-			fs.freeReg(tmpReg)
+
+			if isLastFieldVararg {
+				// For vararg at end: emit all values to registers after table, then SETLIST
+				// The vararg is the last element, so we need all values, not just one
+				// SETLIST looks for values at tableReg+1, tableReg+2, ...
+				// So we need VARARG to fill starting at destReg+1
+				firstValReg := destReg + 1
+				// Emit VARARG to firstValReg - C=0 means ALL varargs
+				fs.emitABC(int(opcodes.OP_VARARG), firstValReg, 0, 0) // A=firstValReg, B=0, C=0 (all)
+				// Update maxstacksize to account for all varargs
+				// VARARG with C=0 will fill registers starting at firstValReg
+				// The exact count is determined at runtime from frame.varargs
+				if int(fs.Proto.maxstacksize) <= firstValReg {
+					fs.Proto.maxstacksize = uint8(firstValReg + 1)
+				}
+				// Use SETLIST to store all values: SETLIST A B C
+				// A = table register, B = 0 (use actual count), C = base index
+				// For B=0, the VM uses the count of values actually placed by VARARG
+				fs.emitABC(int(opcodes.OP_SETLIST), destReg, 0, 1) // B=0 means use actual count
+			} else {
+				// Normal case: compile each field with SETI
+				tmpReg := fs.allocReg()
+				for i := 0; i < nArray; i++ {
+					field := iter.GetArrayField(i)
+					fs.expToReg(field, tmpReg)
+					// SETI A B C: R[A][B] = R[C]  (B is integer key, 1-based)
+					fs.emitABC(int(opcodes.OP_SETI), destReg, i+1, tmpReg)
+				}
+				fs.freeReg(tmpReg)
+			}
 		}
 	}
 

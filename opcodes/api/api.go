@@ -173,6 +173,7 @@ const (
 	OP_ERRNNIL    OpCode = 82 // raise error if R[A] ~= nil
 	OP_VARARGPREP OpCode = 83 // adjust varargs
 	OP_EXTRAARG   OpCode = 84 // extra (larger) argument for previous opcode
+	OP_SETTABLEN  OpCode = 85 // R[A].n = lastCallNRet (for named vararg)
 
 	// NUM_OPCODES must match lua-master: #define NUM_OPCODES ((int)(OP_EXTRAARG) + 1)
 	// But here OP_EXTRAARG = 84, so we define it explicitly
