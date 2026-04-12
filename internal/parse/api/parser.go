@@ -157,8 +157,10 @@ func varglobal(vd *VarDesc) bool {
 }
 
 // varinreg checks if a VarDesc occupies a register.
+// Matches C: varinreg(v) = (v->vd.kind <= RDKTOCLOSE)
+// Kinds 0-3 are in registers; 4+ (RDKCTC, GDKREG, GDKCONST) are not.
 func varinreg(vd *VarDesc) bool {
-	return vd.Kind != RDKCTC
+	return vd.Kind <= RDKTOCLOSE
 }
 
 // ---------------------------------------------------------------------------
