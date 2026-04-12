@@ -63,6 +63,17 @@ func FloatToInteger(f float64) (int64, bool) {
 	return 0, false
 }
 
+// toFloat extracts a float64 from a TValue that may hold int64 or float64.
+func toFloat(v objectapi.TValue) float64 {
+	switch val := v.Val.(type) {
+	case float64:
+		return val
+	case int64:
+		return float64(val)
+	}
+	return 0
+}
+
 // floatToIntegerFloor converts float to integer rounding toward negative infinity.
 func floatToIntegerFloor(f float64) (int64, bool) {
 	fl := math.Floor(f)
@@ -405,9 +416,24 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 	case objectapi.TagFalse, objectapi.TagTrue:
 		return t1.Tt == t2.Tt
 	case objectapi.TagInteger:
-		return t1.Val.(int64) == t2.Val.(int64)
+		i1, ok1 := t1.Val.(int64)
+		i2, ok2 := t2.Val.(int64)
+		if ok1 && ok2 {
+			return i1 == i2
+		}
+		// Defensive: tag says integer but value may be float
+		f1 := toFloat(t1)
+		f2 := toFloat(t2)
+		return f1 == f2
 	case objectapi.TagFloat:
-		return t1.Val.(float64) == t2.Val.(float64)
+		f1, ok1 := t1.Val.(float64)
+		f2, ok2 := t2.Val.(float64)
+		if ok1 && ok2 {
+			return f1 == f2
+		}
+		ff1 := toFloat(t1)
+		ff2 := toFloat(t2)
+		return ff1 == ff2
 	case objectapi.TagShortStr:
 		return t1.Val.(*objectapi.LuaString).Data == t2.Val.(*objectapi.LuaString).Data
 	case objectapi.TagLongStr:
@@ -459,9 +485,24 @@ func RawEqualObj(t1, t2 objectapi.TValue) bool {
 	case objectapi.TagFalse, objectapi.TagTrue:
 		return t1.Tt == t2.Tt
 	case objectapi.TagInteger:
-		return t1.Val.(int64) == t2.Val.(int64)
+		i1, ok1 := t1.Val.(int64)
+		i2, ok2 := t2.Val.(int64)
+		if ok1 && ok2 {
+			return i1 == i2
+		}
+		// Defensive: tag says integer but value may be float
+		f1 := toFloat(t1)
+		f2 := toFloat(t2)
+		return f1 == f2
 	case objectapi.TagFloat:
-		return t1.Val.(float64) == t2.Val.(float64)
+		f1, ok1 := t1.Val.(float64)
+		f2, ok2 := t2.Val.(float64)
+		if ok1 && ok2 {
+			return f1 == f2
+		}
+		ff1 := toFloat(t1)
+		ff2 := toFloat(t2)
+		return ff1 == ff2
 	case objectapi.TagShortStr, objectapi.TagLongStr:
 		return t1.Val.(*objectapi.LuaString).Data == t2.Val.(*objectapi.LuaString).Data
 	default:
