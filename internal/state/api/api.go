@@ -229,6 +229,7 @@ const (
 // Registry indices (matches C LUA_RIDX_*)
 // ---------------------------------------------------------------------------
 const (
-	RegistryIndexMainThread = 1 // LUA_RIDX_MAINTHREAD
 	RegistryIndexGlobals    = 2 // LUA_RIDX_GLOBALS
+	RegistryIndexMainThread = 3 // LUA_RIDX_MAINTHREAD
+	RegistryIndexLast       = 3 // LUA_RIDX_LAST
 )
