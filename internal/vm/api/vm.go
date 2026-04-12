@@ -992,49 +992,46 @@ func PushClosure(L *stateapi.LuaState, p *objectapi.Proto, encup []*closureapi.U
 // ---------------------------------------------------------------------------
 
 // AdjustVarargs adjusts the stack for a vararg function call.
+// Mirrors C Lua's luaT_adjustvarargs / buildhiddenargs.
+// Layout after adjustment:
+//   [old ci.Func] ... [extra args] [func copy] [fixed params] ...
+//   ci.Func now points to the func copy (after the extra args).
 func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Proto) {
 	nfixparams := int(p.NumParams)
-	nactual := L.Top - ci.Func - 1
-	if nactual < nfixparams {
+	totalargs := L.Top - ci.Func - 1
+	nextra := totalargs - nfixparams
+	if nextra < 0 {
 		// Fill missing fixed params with nil
-		for i := nactual; i < nfixparams; i++ {
+		for i := totalargs; i < nfixparams; i++ {
 			L.Stack[L.Top].Val = objectapi.Nil
 			L.Top++
 		}
-		nactual = nfixparams
+		nextra = 0
+		totalargs = nfixparams
 	}
-	// Move fixed parameters up, leaving varargs below
-	newBase := L.Top
-	for i := 0; i < nfixparams; i++ {
-		L.Stack[L.Top].Val = L.Stack[ci.Func+1+i].Val
-		L.Stack[ci.Func+1+i].Val = objectapi.Nil
+	ci.NExtraArgs = nextra
+	// Ensure enough stack space before copying
+	CheckStack(L, int(p.MaxStackSize)+1)
+	// Copy function to top of stack (matches C buildhiddenargs)
+	L.Stack[L.Top].Val = L.Stack[ci.Func].Val
+	L.Top++
+	// Copy fixed parameters above extra args
+	for i := 1; i <= nfixparams; i++ {
+		L.Stack[L.Top].Val = L.Stack[ci.Func+i].Val
+		L.Stack[ci.Func+i].Val = objectapi.Nil // erase original (for GC)
 		L.Top++
 	}
-	ci.NExtraArgs = nactual - nfixparams
-	ci.Func = newBase - 1 // adjust func position
-	ci.Top = L.Top + int(p.MaxStackSize)
-	// Ensure stack
-	CheckStack(L, int(p.MaxStackSize))
+	// ci.Func now lives after the hidden (extra) arguments
+	ci.Func += totalargs + 1
+	ci.Top = ci.Func + 1 + int(p.MaxStackSize)
 }
 
 // GetVarargs copies vararg values to the stack starting at ra.
+// After AdjustVarargs, the extra (vararg) arguments are stored just below
+// ci.Func: positions ci.Func-NExtraArgs .. ci.Func-1
 func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int) {
 	nExtra := ci.NExtraArgs
-	base := ci.Func + 1
-	// The varargs are stored below the fixed params
-	// In our layout: varargs are at (base - nExtra - nfixparams) to (base - nfixparams - 1)
-	// Actually: after AdjustVarargs, the original args are at the old positions
-	// The varargs are at positions: ci.Func - nExtra ... ci.Func - 1
-	// Wait — let me reconsider. After AdjustVarargs:
-	//   ci.Func was moved to newBase-1
-	//   The extra args are at the original positions: oldFunc+1+nfixparams ... oldFunc+nactual
-	// Since ci.Func = newBase-1, and newBase = oldTop, the extra args are
-	// nfixparams slots before newBase: at (newBase - nExtra) to (newBase - 1)
-	// Which is (ci.Func + 1 - nExtra) to ci.Func
-	// Actually the varargs are at: base - nExtra to base - 1
-	// where base = ci.Func + 1
-
-	varBase := base - nExtra
+	varBase := ci.Func - nExtra
 	if n < 0 {
 		n = nExtra
 		CheckStack(L, n)

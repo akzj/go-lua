@@ -37,58 +37,22 @@ func StandardLibraries() []Library {
 	}
 }
 
-// --- Individual Library Openers ---
-// Each function creates a library table, registers functions, and returns 1.
-
-// OpenBase opens the base library (_G): print, type, pairs, ipairs,
-// pcall, xpcall, error, assert, tostring, tonumber, rawget, rawset,
-// rawequal, rawlen, select, next, setmetatable, getmetatable, load,
-// dofile, loadfile, collectgarbage, warn.
-func OpenBase(L *luaapi.State) int { return 0 }
-
-// OpenString opens the string library: string.byte, char, find, format,
-// gmatch, gsub, len, lower, upper, match, rep, reverse, sub, pack,
-// unpack, packsize, dump.
-func OpenString(L *luaapi.State) int { return 0 }
-
-// OpenTable opens the table library: table.insert, remove, sort, concat,
-// move, pack, unpack.
-func OpenTable(L *luaapi.State) int { return 0 }
-
-// OpenMath opens the math library: math.abs, ceil, floor, sqrt, sin, cos,
-// tan, asin, acos, atan, exp, log, max, min, fmod, random, randomseed,
-// tointeger, type, huge, maxinteger, mininteger, pi.
-func OpenMath(L *luaapi.State) int { return 0 }
-
-// OpenIO opens the io library: io.open, close, read, write, lines,
-// input, output, tmpfile, type, flush, popen.
-func OpenIO(L *luaapi.State) int { return 0 }
-
-// OpenOS opens the os library: os.clock, date, difftime, execute, exit,
-// getenv, remove, rename, time, tmpname.
-func OpenOS(L *luaapi.State) int { return 0 }
-
-// OpenDebug opens the debug library: debug.getinfo, getlocal, setlocal,
-// getmetatable, setmetatable, getupvalue, setupvalue, getuservalue,
-// setuservalue, sethook, gethook, traceback, upvalueid, upvaluejoin.
-func OpenDebug(L *luaapi.State) int { return 0 }
-
-// OpenUTF8 opens the utf8 library: utf8.char, codepoint, codes, len,
-// offset, charpattern.
-func OpenUTF8(L *luaapi.State) int { return 0 }
-
-// OpenCoroutine opens the coroutine library: coroutine.create, resume,
-// yield, status, wrap, isyieldable, close, running.
-func OpenCoroutine(L *luaapi.State) int { return 0 }
-
-// OpenPackage opens the package library: require, package.path,
-// package.cpath, package.loaded, package.preload, package.searchers,
-// package.searchpath, package.config.
-func OpenPackage(L *luaapi.State) int { return 0 }
+// Individual Library Openers are defined in their respective files:
+// - OpenBase:      baselib.go
+// - OpenTable:     tablelib.go
+// - OpenMath:      mathlib.go
+// - OpenString:    stringlib.go
+// - OpenIO:        iolib.go (stub)
+// - OpenOS:        oslib.go (stub)
+// - OpenDebug:     debuglib.go (stub)
+// - OpenUTF8:      utf8lib.go (stub)
+// - OpenCoroutine: corolib.go (stub)
+// - OpenPackage:   packagelib.go (stub)
 
 // OpenAll opens all standard libraries. Convenience function.
 func OpenAll(L *luaapi.State) {
 	for _, lib := range StandardLibraries() {
 		L.Require(lib.Name, luaapi.CFunction(lib.Open), true)
+		L.Pop(1) // pop the library table left by Require
 	}
 }
