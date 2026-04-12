@@ -13,6 +13,7 @@ package api
 import (
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
+	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
 	mmapi "github.com/akzj/go-lua/internal/metamethod/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 	parseapi "github.com/akzj/go-lua/internal/parse/api"
@@ -425,6 +426,14 @@ func RunProtected(L *stateapi.LuaState, f func()) (status int) {
 			case stateapi.LuaYield:
 				status = stateapi.StatusYield
 				L.NCCalls = oldNCCalls
+			case *lexapi.SyntaxError:
+				// Convert syntax error to LUA_ERRSYNTAX
+				// Push error message string on stack
+				errStr := e.Error()
+				ls := &objectapi.LuaString{Data: errStr, IsShort: len(errStr) <= 40}
+				stateapi.PushValue(L, objectapi.MakeString(ls))
+				status = stateapi.StatusErrSyntax
+				L.NCCalls = oldNCCalls
 			default:
 				panic(r) // re-panic non-Lua errors
 			}
@@ -491,6 +500,11 @@ func FParser(L *stateapi.LuaState, reader lexapi.LexReader, source string) {
 	// Parse source into a Proto
 	proto := parseapi.Parse(source, reader)
 
+	// Intern all strings in the proto tree so they have proper hashes.
+	// The parser creates LuaString with Hash_=0 (state-independent parsing).
+	// Table lookups require proper hashes for correct bucket placement.
+	internProtoStrings(L, proto)
+
 	// Create an LClosure wrapping the proto
 	cl := closureapi.NewLClosure(proto, len(proto.Upvalues))
 
@@ -502,6 +516,19 @@ func FParser(L *stateapi.LuaState, reader lexapi.LexReader, source string) {
 
 	// Initialize upvalues
 	closureapi.InitUpvals(cl)
+
+	// Wire _ENV (upvalue[0]) to the global table.
+	// In C Lua, f_parser does:
+	//   if (cl->nupvalues >= 1) {
+	//     Table *reg = hvalue(&G(L)->l_registry);
+	//     const TValue *gt = luaH_getint(reg, LUA_RIDX_GLOBALS);
+	//     setobj(L, cl->upvals[0]->v.p, gt);
+	//   }
+	if len(cl.UpVals) > 0 {
+		gt := GetGlobalTable(L)
+		uv := cl.UpVals[0]
+		uv.Close(objectapi.TValue{Tt: objectapi.TagTable, Val: gt})
+	}
 }
 
 // Load compiles Lua source and pushes the resulting closure.
@@ -603,4 +630,48 @@ func GetGlobalTable(L *stateapi.LuaState) *tableapi.Table {
 	return gval.Val.(*tableapi.Table)
 }
 
+// ---------------------------------------------------------------------------
+// internProtoStrings walks a Proto tree and interns all LuaString values
+// through the state's StringTable so they have proper hash values.
+// The parser creates LuaString with Hash_=0 (state-independent parsing).
+// Table hash lookups require matching hashes for correct bucket placement.
+// ---------------------------------------------------------------------------
 
+func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
+	st := L.Global.StringTable.(*luastringapi.StringTable)
+
+	// Intern source name
+	if p.Source != nil {
+		p.Source = st.Intern(p.Source.Data)
+	}
+
+	// Intern constants
+	for i := range p.Constants {
+		k := &p.Constants[i]
+		switch k.Tt {
+		case objectapi.TagShortStr, objectapi.TagLongStr:
+			old := k.Val.(*objectapi.LuaString)
+			interned := st.Intern(old.Data)
+			*k = objectapi.MakeString(interned)
+		}
+	}
+
+	// Intern upvalue names
+	for i := range p.Upvalues {
+		if p.Upvalues[i].Name != nil {
+			p.Upvalues[i].Name = st.Intern(p.Upvalues[i].Name.Data)
+		}
+	}
+
+	// Intern local variable names
+	for i := range p.LocVars {
+		if p.LocVars[i].Name != nil {
+			p.LocVars[i].Name = st.Intern(p.LocVars[i].Name.Data)
+		}
+	}
+
+	// Recurse into nested protos
+	for _, child := range p.Protos {
+		internProtoStrings(L, child)
+	}
+}
