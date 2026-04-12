@@ -54,9 +54,10 @@ func getDyndata(fs *FuncState) *Dyndata {
 // Mirrors: luaY_nvarstack in lparser.c
 // ---------------------------------------------------------------------------
 
-// NVarStack returns the number of active local variables occupying the stack.
+// NVarStack returns the number of stack slots used by active local variables.
+// Mirrors: luaY_nvarstack in lparser.c — calls reglevel to skip globals/constants.
 func NVarStack(fs *FuncState) int {
-	return int(fs.NumActVar)
+	return int(regLevel(fs, fs.NumActVar))
 }
 
 // ---------------------------------------------------------------------------
