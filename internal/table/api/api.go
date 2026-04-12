@@ -30,7 +30,7 @@ type Table struct {
 // Node is a hash table entry (key + value + chain offset).
 type Node struct {
 	Val    objectapi.TValue // value
-	KeyTT  objectapi.Tag   // key type tag
+	KeyTT  objectapi.Tag    // key type tag
 	KeyVal any              // key value (int64, float64, *objectapi.LuaString, etc.)
 	Next   int32            // offset to next node in chain (0 = end)
 }
@@ -43,8 +43,7 @@ type Node struct {
 // arraySize and hashSize are hints for pre-allocation.
 // hashSize will be rounded up to the next power of 2.
 func New(arraySize, hashSize int) *Table {
-	// Implementation in table.go
-	return nil
+	return newTable(arraySize, hashSize)
 }
 
 // ---------------------------------------------------------------------------
@@ -55,25 +54,25 @@ func New(arraySize, hashSize int) *Table {
 // If the key is not present, returns (object.Nil, false).
 // For integer keys in the array range, accesses the array part directly.
 func (t *Table) Get(key objectapi.TValue) (objectapi.TValue, bool) {
-	return objectapi.Nil, false
+	return t.get(key)
 }
 
 // GetInt retrieves the value for an integer key.
 // Checks the array part first, then the hash part.
 func (t *Table) GetInt(key int64) (objectapi.TValue, bool) {
-	return objectapi.Nil, false
+	return t.getInt(key)
 }
 
 // GetStr retrieves the value for a short string key.
 // Uses pointer equality for interned short strings (O(1) amortized).
 func (t *Table) GetStr(key *objectapi.LuaString) (objectapi.TValue, bool) {
-	return objectapi.Nil, false
+	return t.getStr(key)
 }
 
 // RawLen returns the "raw" length of the table (the # operator result).
 // This finds a boundary: an index i where t[i] ~= nil and t[i+1] == nil.
 func (t *Table) RawLen() int64 {
-	return 0
+	return t.rawLen()
 }
 
 // ---------------------------------------------------------------------------
@@ -82,13 +81,19 @@ func (t *Table) RawLen() int64 {
 
 // Set sets the value for the given key. Panics if key is nil or NaN.
 // If the key is new and the hash part is full, triggers a rehash.
-func (t *Table) Set(key, value objectapi.TValue) {}
+func (t *Table) Set(key, value objectapi.TValue) {
+	t.set(key, value)
+}
 
 // SetInt sets the value for an integer key.
-func (t *Table) SetInt(key int64, value objectapi.TValue) {}
+func (t *Table) SetInt(key int64, value objectapi.TValue) {
+	t.setInt(key, value)
+}
 
 // SetStr sets the value for a short string key.
-func (t *Table) SetStr(key *objectapi.LuaString, value objectapi.TValue) {}
+func (t *Table) SetStr(key *objectapi.LuaString, value objectapi.TValue) {
+	t.setStr(key, value)
+}
 
 // ---------------------------------------------------------------------------
 // Iteration
@@ -99,7 +104,7 @@ func (t *Table) SetStr(key *objectapi.LuaString, value objectapi.TValue) {}
 // Returns (key, value, true) for the next entry, or (Nil, Nil, false) when done.
 // Iteration order: array part first (keys 1..N), then hash part.
 func (t *Table) Next(key objectapi.TValue) (nextKey, nextVal objectapi.TValue, ok bool) {
-	return objectapi.Nil, objectapi.Nil, false
+	return t.next(key)
 }
 
 // ---------------------------------------------------------------------------
