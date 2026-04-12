@@ -85,12 +85,24 @@ func str_rep(L *luaapi.State) int {
 		L.PushString("")
 		return 1
 	}
+	ls := int64(len(s))
+	lsep := int64(len(sep))
+	// Check for overflow: total = n*ls + (n-1)*lsep
+	const maxSize = 1 << 30 // 1GB limit
+	if ls+lsep > 0 && n > maxSize/(ls+lsep) {
+		L.Errorf("resulting string too large")
+	}
 	if n == 1 {
 		L.PushString(s)
 		return 1
 	}
 	// Build with separator
 	var sb strings.Builder
+	total := n*ls + (n-1)*lsep
+	if total > maxSize {
+		L.Errorf("resulting string too large")
+	}
+	sb.Grow(int(total))
 	for i := int64(0); i < n; i++ {
 		if i > 0 && sep != "" {
 			sb.WriteString(sep)
@@ -218,10 +230,18 @@ func str_format(L *luaapi.State) int {
 			s := L.CheckString(arg)
 			sb.WriteString(quoteString(s))
 		case 'p':
-			// pointer representation — just use tostring
-			s := L.TolString(arg)
-			L.Pop(1)
-			sb.WriteString(s)
+			// pointer representation
+			// nil, boolean, number → "(null)"
+			// string, table, function, userdata → pointer-like string
+			v := L.Type(arg)
+			switch v {
+			case objectapi.TypeNil, objectapi.TypeBoolean, objectapi.TypeNumber:
+				sb.WriteString("(null)")
+			default:
+				s := L.TolString(arg)
+				L.Pop(1)
+				sb.WriteString(s)
+			}
 		default:
 			sb.WriteString(spec) // unknown, pass through
 		}
@@ -653,7 +673,9 @@ func str_find_aux(L *luaapi.State, find bool) int {
 	if init < 1 {
 		init = 1
 	} else if init > len(s)+1 {
-		init = len(s) + 1
+		// init past end of string — no match possible
+		L.PushNil()
+		return 1
 	}
 
 	// Plain find?

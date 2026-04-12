@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 
@@ -847,7 +848,31 @@ func (L *State) DoString(code string) error {
 
 // DoFile loads and executes a file.
 func (L *State) DoFile(filename string) error {
-	return fmt.Errorf("DoFile not implemented")
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("cannot open %s: %v", filename, err)
+	}
+	// Strip shebang line if present
+	code := string(data)
+	if len(code) > 1 && code[0] == '#' {
+		if idx := strings.Index(code, "\n"); idx >= 0 {
+			code = code[idx+1:]
+		}
+	}
+	source := "@" + filename
+	status := L.Load(code, source, "t")
+	if status != StatusOK {
+		msg, _ := L.ToString(-1)
+		L.Pop(1)
+		return fmt.Errorf("load error: %s", msg)
+	}
+	status = L.PCall(0, MultiRet, 0)
+	if status != StatusOK {
+		msg, _ := L.ToString(-1)
+		L.Pop(1)
+		return fmt.Errorf("runtime error: %s", msg)
+	}
+	return nil
 }
 
 // Error raises a Lua error with the value at the top of the stack.
@@ -1050,14 +1075,33 @@ func (L *State) NewLib(funcs map[string]CFunction) {
 }
 
 // Require calls openf to load a module, stores in package.loaded.
+// If the module is already in package.loaded, pushes the cached value.
+// Mirrors luaL_requiref in lauxlib.c.
 func (L *State) Require(modname string, openf CFunction, global bool) {
-	// Push the module loader
+	// Get package.loaded table (or create it)
+	L.GetSubTable(RegistryIndex, "_LOADED")
+	tp := L.GetField(-1, modname)
+	if tp != objectapi.TypeNil {
+		// Already loaded — remove _LOADED table, keep the module
+		L.Remove(-2)
+		return
+	}
+	L.Pop(1) // pop nil
+
+	// Call the opener
 	L.PushCFunction(openf)
 	L.PushString(modname)
-	L.Call(1, 1) // call openf(modname)
+	L.Call(1, 1) // call openf(modname) -> module table on top
+
+	// Store in package.loaded
+	L.PushValue(-1)          // copy module
+	L.SetField(-3, modname)  // _LOADED[modname] = module
+
+	L.Remove(-2) // remove _LOADED table, keep module on top
+
 	if global {
-		L.PushValue(-1)       // copy result
-		L.SetGlobal(modname)  // _G[modname] = result
+		L.PushValue(-1)       // copy module
+		L.SetGlobal(modname)  // _G[modname] = module
 	}
 }
 

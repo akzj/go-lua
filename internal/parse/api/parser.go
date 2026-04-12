@@ -220,6 +220,9 @@ func localDebugInfo(fs *FuncState, vidx int) *objectapi.LocVar {
 		return nil
 	}
 	idx := vd.PIdx
+	if idx >= len(fs.Proto.LocVars) {
+		return nil // global declaration — no LocVar entry
+	}
 	return &fs.Proto.LocVars[idx]
 }
 

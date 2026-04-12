@@ -29,6 +29,22 @@ func luaB_print(L *luaapi.State) int {
 	return 0
 }
 
+// luaB_require — minimal require: looks up module in package.loaded (registry "_LOADED").
+// Does NOT support searchers/loaders — only pre-loaded modules work.
+func luaB_require(L *luaapi.State) int {
+	name := L.CheckString(1)
+	// Get _LOADED table from registry
+	L.GetField(luaapi.RegistryIndex, "_LOADED")
+	tp := L.GetField(-1, name) // _LOADED[name]
+	if tp != objectapi.TypeNil {
+		L.Remove(-2) // remove _LOADED, keep module
+		return 1
+	}
+	L.Pop(2) // pop nil and _LOADED
+	L.Errorf("module '%s' not found", name)
+	return 0 // unreachable
+}
+
 func luaB_warn(L *luaapi.State) int {
 	n := L.GetTop()
 	L.CheckString(1)
@@ -369,6 +385,7 @@ func OpenBase(L *luaapi.State) int {
 		"rawget":         luaB_rawget,
 		"rawlen":         luaB_rawlen,
 		"rawset":         luaB_rawset,
+		"require":        luaB_require,
 		"select":         luaB_select,
 		"setmetatable":   luaB_setmetatable,
 		"tonumber":       luaB_tonumber,
