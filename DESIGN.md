@@ -342,90 +342,66 @@ Strict bottom-up, each phase = one fork, each fork tests independently.
 
 ## §5 Module Specifications
 
-_Each module specification below will be expanded with full interface definitions,
-data structures, algorithm pseudocode, and test cases._
+Each module's complete interface is defined in its `api/api.go` file.
+These files are the **source of truth** — implementation forks read them directly.
+All 12 api packages compile cleanly: `go build ./internal/...` ✓
 
-### §5.1 object — TValue & Type System
-- **Responsibility**: Define all Lua value types and the universal TValue container
-- **Key types**: TValue, Tag, Type, LuaString (interface), Table (interface), Closure (interface), Proto, UpVal
-- **Key operations**: type checking, type coercion (toNumber, toInteger), equality comparison
-- **Reference**: .analysis/03-object-type-system.md
+### Layer 0 — Foundation
 
-### §5.2 opcode — Instructions & Opcodes
-- **Responsibility**: Define the 77 opcodes and instruction encoding/decoding
-- **Key types**: Instruction (uint32), OpCode, OpMode
-- **Key operations**: GETARG_A/B/C/Bx/sBx/sJ, CREATE_ABC/ABx/AsBx/Ax/sJ
-- **Reference**: .analysis/02-opcodes-instruction-format.md
+| Module | Interface File | Key Types |
+|--------|---------------|-----------|
+| **§5.1 object** | `internal/object/api/api.go` | TValue, Tag, Type, LuaString, Proto, StackValue |
+| **§5.2 opcode** | `internal/opcode/api/api.go` | Instruction (uint32), OpCode (85 opcodes), encode/decode |
 
-### §5.3 luastring — String Interning
-- **Responsibility**: Manage Lua strings with interning for short strings
-- **Key types**: LuaString (struct wrapping Go string + hash + interned flag)
-- **Key operations**: NewString, Intern, Hash, Compare
-- **Reference**: .analysis/07-runtime-infrastructure.md §4
+### Layer 1 — Core Data Structures
 
-### §5.4 table — Lua Tables
-- **Responsibility**: Implement Lua's hybrid array+hash table
-- **Key types**: Table (struct with array []TValue + hash part)
-- **Key operations**: Get, Set, Next, Length, Resize
-- **Key algorithm**: Brent's variation for collision resolution
-- **Reference**: .analysis/07-runtime-infrastructure.md §3
+| Module | Interface File | Key Types |
+|--------|---------------|-----------|
+| **§5.3 luastring** | `internal/luastring/api/api.go` | StringTable, Hash, NewShort/NewLong, Equal |
+| **§5.4 table** | `internal/table/api/api.go` | Table (array+hash), Node, Get/Set/Next/RawLen |
 
-### §5.5 state — Lua State
-- **Responsibility**: Manage LuaState (per-thread) and GlobalState (shared)
-- **Key types**: LuaState, GlobalState, CallInfo (doubly-linked list)
-- **Key operations**: NewState, stack grow/shrink, CallInfo push/pop
-- **Reference**: .analysis/07-runtime-infrastructure.md §1, .analysis/04-call-return-error.md §1
+### Layer 2 — Runtime
 
-### §5.6 closure — Closures & Upvalues
-- **Responsibility**: Manage Lua closures, C closures, and upvalue lifecycle
-- **Key types**: LClosure, CClosure, UpVal (open/closed duality)
-- **Key operations**: NewClosure, FindUpval, CloseUpvalues
-- **Key algorithm**: Open upvalue list (sorted by stack level), close = copy + redirect
-- **Reference**: .analysis/07-runtime-infrastructure.md §2
+| Module | Interface File | Key Types |
+|--------|---------------|-----------|
+| **§5.5 state** | `internal/state/api/api.go` | LuaState, GlobalState, CallInfo, CFunction, LuaError |
+| **§5.6 closure** | `internal/closure/api/api.go` | LClosure, CClosure, UpVal (open/closed duality) |
+| **§5.7 metamethod** | `internal/metamethod/api/api.go` | TMS enum (25 methods), fasttm cache helpers |
 
-### §5.7 metamethod — Tag Methods
-- **Responsibility**: Dispatch metamethods (__index, __newindex, __add, etc.)
-- **Key types**: TMS enum (25 metamethods), TagMethodCache
-- **Key operations**: GetTM, GetTMByObj, CallTM, fasttm optimization
-- **Reference**: .analysis/07-runtime-infrastructure.md §5
+### Layer 3 — Compiler
 
-### §5.8 lex — Lexer
-- **Responsibility**: Convert Lua source text to token stream
-- **Key types**: Token, TokenType, LexState
-- **Key operations**: Next (advance to next token), Lookahead
-- **Reference**: .analysis/06-compiler-pipeline.md §2
+| Module | Interface File | Key Types |
+|--------|---------------|-----------|
+| **§5.8 lex** | `internal/lex/api/api.go` | TokenType, Token, LexState, LexReader, SyntaxError |
+| **§5.9 parse** | `internal/parse/api/api.go` | ExpDesc, FuncState, BlockCnt, Dyndata, BinOpr/UnOpr |
 
-### §5.9 parse — Parser & Code Generator
-- **Responsibility**: Parse token stream into Proto (compiled function)
-- **Key types**: FuncState, ExpDesc, BlockCnt, Proto
-- **Key operations**: Parse source → Proto with bytecode + constants + upvalues
-- **Key algorithm**: Recursive descent + Pratt precedence climbing for expressions
-- **Reference**: .analysis/06-compiler-pipeline.md §3-§4
+### Layer 4 — Execution Engine (vm + do merged)
 
-### §5.10 vm — VM Execution Loop
-- **Responsibility**: Execute bytecode (all 77 opcodes)
-- **Key types**: (uses LuaState, CallInfo, TValue from other modules)
-- **Key function**: Execute(L *LuaState, ci *CallInfo)
-- **Key patterns**: fast path / slow path, metamethod fallback
-- **Reference**: .analysis/05-vm-execution-loop.md
+| Module | Interface File | Key Types |
+|--------|---------------|-----------|
+| **§5.10 vm** | `internal/vm/api/api.go` | LuaError, Status, CallStatus flags, MultiReturn |
 
-### §5.11 do — Call/Return/Error
-- **Responsibility**: Function call mechanics, protected calls, error handling
-- **Key operations**: PreCall, PosCall, Call, PCall, Throw, Resume, Yield
-- **Key patterns**: panic/recover for error handling, CallInfo linked list management
-- **Reference**: .analysis/04-call-return-error.md
+> **Architecture note**: C's `lvm.c` and `ldo.c` are mutually recursive.
+> In Go, circular imports are forbidden, so they are merged into one `internal/vm/` package.
+> Separate files (`execute.go`, `call.go`, `arith.go`) maintain logical organization.
 
-### §5.12 api — Go API
-- **Responsibility**: Public API for manipulating Lua state from Go
-- **Key operations**: Push*, Get*, Set*, Call, PCall, Load
-- **Key pattern**: Stack-based API (same model as C API, adapted for Go)
-- **Reference**: .analysis/09-standard-libraries.md §1
+### Layer 5 — API & Standard Libraries
 
-### §5.13 stdlib — Standard Libraries
-- **Responsibility**: All Lua standard library functions
-- **Key pattern**: Each library registers functions via api.SetFuncs
-- **Sub-modules**: baselib, strlib, tablib, mathlib, iolib, oslib, dblib, utf8lib, corolib, loadlib
-- **Reference**: .analysis/09-standard-libraries.md §2-§6
+| Module | Interface File | Key Types |
+|--------|---------------|-----------|
+| **§5.12 api** | `internal/api/api/api.go` | State, CFunction, stack ops, table ops, auxiliary (luaL_*) |
+| **§5.13 stdlib** | `internal/stdlib/api/api.go` | OpenFunc, Library, Open{Base,String,Table,Math,...} |
+
+### Dependency Graph (verified: no cycles)
+
+```
+object ←── luastring, table, state, closure, parse
+opcode ←── (standalone)
+lex    ←── parse
+closure ←── parse
+vm     ←── api
+api    ←── stdlib
+```
 
 ---
 
