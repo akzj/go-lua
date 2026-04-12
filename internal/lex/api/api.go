@@ -48,9 +48,13 @@ const (
 	NumReserved // count of reserved words = 23
 )
 
+// NumReservedCount is the actual count of reserved words (23).
+// NumReserved above is a token value, not a count.
+const NumReservedCount = NumReserved - FirstReserved
+
 // Multi-char operators and value tokens
 const (
-	TK_IDIV   TokenType = iota + FirstReserved + NumReserved // //
+	TK_IDIV   TokenType = iota + NumReserved // //
 	TK_CONCAT                                                // ..
 	TK_DOTS                                                  // ...
 	TK_EQ                                                    // ==
