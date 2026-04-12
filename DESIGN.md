@@ -41,7 +41,7 @@ A complete Lua 5.5.1 virtual machine implemented in Go, capable of running the o
 Layer 0 — Foundation (no dependencies)
 ┌─────────────────────────────────────────────────────┐
 │  object     — TValue, all Lua types, type tags      │
-│  opcode     — instruction format, 77 opcodes        │
+│  opcode     — instruction format, 85 opcodes        │
 └─────────────────────────────────────────────────────┘
           │
           ▼
@@ -69,8 +69,7 @@ Layer 3 — Compiler (depends on: object, opcode, luastring)
           ▼
 Layer 4 — Execution Engine (depends on: all above)
 ┌─────────────────────────────────────────────────────┐
-│  vm         — luaV_execute, all opcode handlers     │
-│  do         — call/return, pcall, error, coroutines │
+│  vm         — VM execution + call/return (merged)    │
 └─────────────────────────────────────────────────────┘
           │
           ▼
@@ -143,13 +142,11 @@ go-lua/
 │   │   ├── api/api.go
 │   │   └── parse.go
 │   │
-│   ├── vm/                      # Layer 4: VM execution loop
+│   ├── vm/                      # Layer 4: VM execution + call/return (merged)
 │   │   ├── api/api.go
-│   │   └── vm.go
-│   │
-│   ├── do/                      # Layer 4: call/return/error
-│   │   ├── api/api.go
-│   │   └── do.go
+│   │   ├── execute.go           # opcode dispatch loop
+│   │   ├── call.go              # call/return/error handling
+│   │   └── arith.go             # arithmetic/comparison helpers
 │   │
 │   ├── api/                     # Layer 5: Go API
 │   │   ├── api/api.go
@@ -331,7 +328,7 @@ Strict bottom-up, each phase = one fork, each fork tests independently.
 | 4 | state, closure, metamethod | object, luastring, table | ~800 | Unit: state init, CallInfo, upvalue lifecycle, TM dispatch |
 | 5 | lex | object, luastring | ~400 | Unit: tokenize Lua source snippets |
 | 6 | parse | lex, object, opcode | ~1200 | Unit: parse → Proto, verify bytecode |
-| 7 | vm, do | all Layer 0-3 | ~1500 | Unit: execute simple bytecode sequences |
+| 7 | vm (merged vm+do) | all Layer 0-3 | ~1500 | Unit: execute simple bytecode sequences |
 | 8 | api, auxlib | all above | ~600 | Unit: stack manipulation, type checking |
 | 9 | stdlib (baselib first) | all above | ~1500 | Integration: run simple Lua scripts |
 | 10 | testes runner | all above | ~200 | Run lua-master/testes/, target 31/31 |
@@ -442,7 +439,7 @@ Mock dependencies where needed (e.g., table tests don't need a full LuaState).
 | Risk | Mitigation |
 |------|------------|
 | Parser complexity (2200 lines of C) | Follow C structure closely, use .analysis/06 as guide |
-| VM opcode coverage (77 opcodes) | Implement incrementally, test each category |
+| VM opcode coverage (85 opcodes) | Implement incrementally, test each category |
 | String pattern matching | Document full algorithm from .analysis/09 §4, test extensively |
 | Coroutine yield/resume | Follow .analysis/04 §8 exactly, test C→Lua→C chains |
 | setmetatable type checking | Previous bug — test explicitly with all type combinations |
