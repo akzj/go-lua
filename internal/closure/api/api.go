@@ -9,6 +9,7 @@ package api
 
 import (
 	objectapi "github.com/akzj/go-lua/internal/object/api"
+	stateapi "github.com/akzj/go-lua/internal/state/api"
 )
 
 // MaxUpVal is the maximum number of upvalues per closure.
@@ -17,28 +18,48 @@ const MaxUpVal = 255
 // ---------------------------------------------------------------------------
 // UpVal represents a captured variable (upvalue).
 //
-// Open state: Value points to a slot in the owning LuaState's stack.
-// Closed state: Value points to Own (the captured copy).
+// C4 FIX: Index-based approach to avoid dangling pointers on stack reallocation.
+//
+// Open state: StackIdx >= 0, value lives at L.Stack[StackIdx].Val
+// Closed state: StackIdx == -1, value lives in Own
 //
 // The open upvalue list is sorted by stack level in descending order.
 // ---------------------------------------------------------------------------
 type UpVal struct {
-	Value    *objectapi.TValue // points to stack slot (open) or &Own (closed)
-	Own      objectapi.TValue  // storage for closed value
-	Next     *UpVal            // next in open list (lower stack level)
-	StackIdx int               // stack index this upvalue captures (for sorting)
+	StackIdx int              // stack index when open, -1 when closed
+	Own      objectapi.TValue // storage for closed value
+	Next     *UpVal           // next in open list (lower stack level)
 }
 
 // IsOpen returns true if the upvalue still points to a stack slot.
 func (uv *UpVal) IsOpen() bool {
-	return uv.Value != &uv.Own
+	return uv.StackIdx >= 0
 }
 
-// Close captures the current value and redirects the pointer.
-// After Close(), the upvalue owns its value independently of the stack.
-func (uv *UpVal) Close() {
-	uv.Own = *uv.Value // copy value from stack
-	uv.Value = &uv.Own // redirect to own storage
+// Close captures the current value from the stack and marks as closed.
+// The caller must pass the current stack value at uv.StackIdx.
+func (uv *UpVal) Close(val objectapi.TValue) {
+	uv.Own = val
+	uv.StackIdx = -1
+}
+
+// Get returns the current value of the upvalue.
+// For open upvalues, the caller must provide the stack; for closed, uses Own.
+func (uv *UpVal) Get(stack []objectapi.StackValue) objectapi.TValue {
+	if uv.StackIdx >= 0 {
+		return stack[uv.StackIdx].Val
+	}
+	return uv.Own
+}
+
+// Set sets the value of the upvalue.
+// For open upvalues, writes to the stack; for closed, writes to Own.
+func (uv *UpVal) Set(stack []objectapi.StackValue, val objectapi.TValue) {
+	if uv.StackIdx >= 0 {
+		stack[uv.StackIdx].Val = val
+	} else {
+		uv.Own = val
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -53,17 +74,19 @@ type LClosure struct {
 // ---------------------------------------------------------------------------
 // CClosure is a Go function closure with associated upvalues.
 // Upvalues are stored inline as TValues (no sharing between closures).
+//
+// I13 FIX: Fn uses stateapi.CFunction (canonical type, not func(any)int).
 // ---------------------------------------------------------------------------
 type CClosure struct {
-	Fn     func(L any) int       // the Go function (L typed as *LuaState at call site)
-	UpVals []objectapi.TValue    // upvalues stored inline
+	Fn     stateapi.CFunction  // the Go function
+	UpVals []objectapi.TValue  // upvalues stored inline
 }
 
 // NumUpvals returns the number of upvalues.
 func (c *CClosure) NumUpvals() int { return len(c.UpVals) }
 
 // ---------------------------------------------------------------------------
-// Constructor function signatures (implemented in closure.go)
+// Constructor functions
 // ---------------------------------------------------------------------------
 
 // NewLClosure creates a Lua closure with n upvalue slots (initially nil).
@@ -76,7 +99,7 @@ func NewLClosure(p *objectapi.Proto, nUpvals int) *LClosure {
 }
 
 // NewCClosure creates a C closure with n upvalue slots (initially nil).
-func NewCClosure(fn func(L any) int, nUpvals int) *CClosure {
+func NewCClosure(fn stateapi.CFunction, nUpvals int) *CClosure {
 	cl := &CClosure{
 		Fn:     fn,
 		UpVals: make([]objectapi.TValue, nUpvals),
@@ -87,3 +110,20 @@ func NewCClosure(fn func(L any) int, nUpvals int) *CClosure {
 	}
 	return cl
 }
+
+// ---------------------------------------------------------------------------
+// Upvalue management function signatures
+// (Implemented in internal/closure/closure.go)
+//
+// I4 FIX: CloseUpvalues function signature added.
+//
+// FindUpval finds or creates an open upvalue at the given stack level.
+// The open upvalue list is maintained sorted by stack level (descending).
+// If an upvalue already exists at this level, it is returned (sharing).
+//   func FindUpval(L *stateapi.LuaState, level int) *UpVal
+//
+// CloseUpvalues closes all open upvalues at or above the given stack level.
+// This is called when leaving a scope that has captured variables.
+// Needed by OP_CLOSE, OP_RETURN, and TBC close.
+//   func CloseUpvalues(L *stateapi.LuaState, level int)
+// ---------------------------------------------------------------------------

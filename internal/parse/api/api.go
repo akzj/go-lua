@@ -18,6 +18,7 @@ import (
 
 // ---------------------------------------------------------------------------
 // ExpKind describes the kind of an expression descriptor.
+// C5 FIX: Order matches C lparser.h exactly (23 values, was 20).
 // ---------------------------------------------------------------------------
 type ExpKind int
 
@@ -32,9 +33,12 @@ const (
 	VKSTR                    // string constant; StrVal = value
 	VNONRELOC                // value in fixed register; Info = register
 	VLOCAL                   // local variable; Var.RegIdx, Var.VarIdx
+	VVARGVAR                 // vararg parameter (Lua 5.5); Var.RegIdx, Var.VarIdx
+	VGLOBAL                  // global variable (Lua 5.5); Var.RegIdx, Var.VarIdx
 	VUPVAL                   // upvalue; Info = upvalue index
 	VCONST                   // compile-time <const>; Info = actvar index
 	VINDEXED                 // t[k]; Ind.Table, Ind.Idx
+	VVARGIND                 // indexed vararg parameter (Lua 5.5); Ind.*
 	VINDEXUP                 // upval[K]; Ind.Table (upval), Ind.Idx (K index)
 	VINDEXI                  // t[integer]; Ind.Table, Ind.Idx (int value)
 	VINDEXSTR                // t["string"]; Ind.Table, Ind.Idx (K index)
@@ -140,14 +144,15 @@ type VarDesc struct {
 	RegIdx byte   // register index
 }
 
-// Variable kinds (matches C RDKREG, RDKCONST, etc.)
+// Variable kinds (C6 FIX: matches C lparser.h:102-108 exactly)
 const (
-	VDKREG     byte = 0 // regular variable
-	RDKCONST   byte = 1 // compile-time constant (<const>)
-	RDKTOCLOSE byte = 2 // to-be-closed variable (<close>)
-	RDKVAVAR   byte = 3 // named vararg parameter (5.5)
-	GDKREG     byte = 4 // global declaration (5.5)
-	GDKCONST   byte = 5 // global constant declaration (5.5)
+	VDKREG     byte = 0 // regular local
+	RDKCONST   byte = 1 // local constant
+	RDKVAVAR   byte = 2 // vararg parameter (was incorrectly 3)
+	RDKTOCLOSE byte = 3 // to-be-closed (was incorrectly 2)
+	RDKCTC     byte = 4 // local compile-time constant (was missing)
+	GDKREG     byte = 5 // regular global (was incorrectly 4)
+	GDKCONST   byte = 6 // global constant (was incorrectly 5)
 )
 
 // LabelDesc describes a label or pending goto.
