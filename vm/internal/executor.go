@@ -1218,6 +1218,11 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 		// The caller placed nArgs values starting at base.
 		// Fixed params occupy R[0]..R[nFixed-1] (relative to base).
 		// Extra args beyond nFixed are varargs — save them in frame.varargs.
+		// NOTE: We do NOT clear vararg slots after saving. The slots remain
+		// accessible to the function body for expression evaluation. In real
+		// Lua 5.4+, OP_VARARGPREP doesn't clear slots — it only saves varargs
+		// for the ... operator. Clearing would corrupt arguments needed by
+		// the function body (e.g., call(f, ...args) where args is a vararg).
 		frame := e.currentFrame()
 		base := frame.base
 		nActual := frame.nArgs
@@ -1232,10 +1237,8 @@ func (e *Executor) executeOp(op opcodes.OpCode, inst opcodes.Instruction) bool {
 			for i := 0; i < nActual-nFixed; i++ {
 				frame.varargs[i] = *e.reg(base + nFixed + i)
 			}
-			// Clear the vararg slots so they don't interfere with locals
-			for i := nFixed; i < nActual; i++ {
-				e.setNil(e.reg(base + i))
-			}
+			// DO NOT clear the vararg slots — the function body may need them
+			// (e.g., passing varargs to another function via expression evaluation)
 		}
 
 	case opcodes.OP_SETTABLEN:
