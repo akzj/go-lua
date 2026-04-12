@@ -14,6 +14,7 @@ package api
 import (
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
+	opcodeapi "github.com/akzj/go-lua/internal/opcode/api"
 )
 
 // ---------------------------------------------------------------------------
@@ -107,6 +108,9 @@ type FuncState struct {
 	FirstLocal int // index of first local in Dyndata.ActVar
 	FirstLabel int // index of first label in Dyndata.Labels
 
+	NProtos   int   // number of nested prototypes created
+	NDebugVars int  // number of debug local variables registered
+
 	NumActVar int16 // number of active variable declarations
 	NumUps    byte  // number of upvalues
 	FreeReg   byte  // first free register
@@ -139,9 +143,11 @@ type Dyndata struct {
 
 // VarDesc describes a local variable during compilation.
 type VarDesc struct {
-	Name   string // variable name
-	Kind   byte   // VDKREG, RDKCONST, etc.
-	RegIdx byte   // register index
+	Name   string          // variable name
+	Kind   byte            // VDKREG, RDKCONST, etc.
+	RegIdx byte            // register index
+	PIdx   int             // index into Proto.LocVars (debug info)
+	K      objectapi.TValue // compile-time constant value (for RDKCTC)
 }
 
 // Variable kinds (C6 FIX: matches C lparser.h:102-108 exactly)
@@ -209,3 +215,9 @@ const (
 
 // MaxVars is the maximum number of local variables in a function.
 const MaxVars = 200
+
+// MaxFStack is the maximum register index (= MaxArgA = 255).
+const MaxFStack = opcodeapi.MaxArgA
+
+// LuaMultRet is the multi-return sentinel (LUA_MULTRET = -1).
+const LuaMultRet = -1
