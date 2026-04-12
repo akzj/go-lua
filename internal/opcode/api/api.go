@@ -151,10 +151,52 @@ func SetArgA(i Instruction, v int) Instruction {
 	return (i &^ mask) | (uint32(v) << PosA & mask)
 }
 
+// SetArgB replaces the B field in an existing instruction.
+func SetArgB(i Instruction, v int) Instruction {
+	mask := uint32(((1 << SizeB) - 1) << PosB)
+	return (i &^ mask) | (uint32(v) << PosB & mask)
+}
+
+// SetArgC replaces the C field in an existing instruction.
+func SetArgC(i Instruction, v int) Instruction {
+	mask := uint32(((1 << SizeC) - 1) << PosC)
+	return (i &^ mask) | (uint32(v) << PosC & mask)
+}
+
+// SetArgK replaces the k bit in an existing instruction.
+func SetArgK(i Instruction, v int) Instruction {
+	mask := uint32(1 << PosK)
+	return (i &^ mask) | (uint32(v) << PosK & mask)
+}
+
 // SetArgSBx replaces the sBx field in an existing instruction.
 func SetArgSBx(i Instruction, v int) Instruction {
 	mask := uint32(((1 << SizeBx) - 1) << PosBx)
 	return (i &^ mask) | (uint32(v+OffsetSBx) << PosBx & mask)
+}
+
+// SetArgBx replaces the unsigned Bx field in an existing instruction.
+func SetArgBx(i Instruction, v int) Instruction {
+	mask := uint32(((1 << SizeBx) - 1) << PosBx)
+	return (i &^ mask) | (uint32(v) << PosBx & mask)
+}
+
+// SetArgSJ replaces the sJ field in an existing instruction.
+func SetArgSJ(i Instruction, v int) Instruction {
+	mask := uint32(((1 << SizeSJ) - 1) << PosSJ)
+	return (i &^ mask) | (uint32(v+OffsetSJ) << PosSJ & mask)
+}
+
+// SetOpCode replaces the opcode field in an existing instruction.
+func SetOpCode(i Instruction, op OpCode) Instruction {
+	mask := uint32((1 << SizeOP) - 1)
+	return (i &^ mask) | uint32(op)
+}
+
+// CreateSJK creates an isJ format instruction with a k bit.
+// Used by codesJ in codegen when the sJ format needs a k flag.
+func CreateSJK(op OpCode, sj, k int) Instruction {
+	return Instruction(op)<<PosOP | uint32(sj+OffsetSJ)<<PosSJ | uint32(k)<<PosK
 }
 
 // ---------------------------------------------------------------------------
