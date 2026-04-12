@@ -220,11 +220,14 @@ func getStrFromHash(t *Table, key *obj.LuaString) (obj.TValue, bool) {
 	idx := hashStr(key, hmask)
 	for {
 		nd := &t.Nodes[idx]
-		if nd.KeyTT == obj.TagShortStr && nd.KeyVal == key {
-			if !nodeIsEmpty(nd) {
-				return nd.Val, true
+		if nd.KeyTT == obj.TagShortStr {
+			ndKey := nd.KeyVal.(*obj.LuaString)
+			if ndKey == key || ndKey.Data == key.Data {
+				if !nodeIsEmpty(nd) {
+					return nd.Val, true
+				}
+				return obj.Nil, false
 			}
-			return obj.Nil, false
 		}
 		nx := nd.Next
 		if nx == 0 {
