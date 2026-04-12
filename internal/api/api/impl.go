@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
@@ -793,15 +794,6 @@ func (L *State) Call(nArgs, nResults int) {
 	ls := L.ls()
 	funcIdx := ls.Top - nArgs - 1
 	vmapi.Call(ls, funcIdx, nResults)
-	// After a main chunk (vararg) call, VARARGPREP shifts the base down,
-	// and RETURN places results starting at Stack[0] instead of funcIdx.
-	if funcIdx > 0 && ls.Top <= funcIdx {
-		nRes := ls.Top
-		for i := nRes - 1; i >= 0; i-- {
-			ls.Stack[funcIdx+i].Val = ls.Stack[i].Val
-		}
-		ls.Top = funcIdx + nRes
-	}
 	// Ensure Top >= CI.Func + 1 so the API stack is valid
 	base := ls.CI.Func + 1
 	if ls.Top < base {
@@ -818,16 +810,6 @@ func (L *State) PCall(nArgs, nResults, msgHandler int) int {
 		errFunc = L.index2stack(msgHandler)
 	}
 	status := vmapi.PCall(ls, funcIdx, nResults, errFunc)
-	// After a main chunk (vararg) call, VARARGPREP shifts the base down,
-	// and RETURN places results starting at Stack[0] instead of funcIdx.
-	// Detect this: if Top <= funcIdx and funcIdx > 0, results need moving.
-	if status == StatusOK && funcIdx > 0 && ls.Top <= funcIdx {
-		nRes := ls.Top // results are at Stack[0..Top-1]
-		for i := nRes - 1; i >= 0; i-- {
-			ls.Stack[funcIdx+i].Val = ls.Stack[i].Val
-		}
-		ls.Top = funcIdx + nRes
-	}
 	// Ensure Top >= CI.Func + 1 so the API stack is valid
 	base := ls.CI.Func + 1
 	if ls.Top < base {
@@ -1218,3 +1200,140 @@ func (r *stringReader) ReadByte() int {
 // Ensure unused imports are used
 var _ = parseapi.Parse
 var _ = lexapi.TK_EOS
+
+// --- Additional auxiliary functions needed by stdlib ---
+
+// TolString converts the value at idx to a string, using __tostring metamethod if present.
+// Pushes the result on the stack and returns it.
+func (L *State) TolString(idx int) string {
+	v := L.index2val(idx)
+	if v == nil {
+		L.PushString("nil")
+		return "nil"
+	}
+	// Check for __tostring metamethod
+	if L.GetMetafield(idx, "__tostring") {
+		L.PushValue(idx)
+		L.Call(1, 1)
+		s, _ := L.ToString(-1)
+		return s
+	}
+	// Default conversion based on type
+	switch {
+	case v.IsString():
+		s := v.StringVal().Data
+		L.PushString(s)
+		return s
+	case v.IsInteger():
+		s := fmt.Sprintf("%d", v.Integer())
+		L.PushString(s)
+		return s
+	case v.IsFloat():
+		s := objectapi.FloatToString(v.Float())
+		L.PushString(s)
+		return s
+	case v.Tt == objectapi.TagTrue:
+		L.PushString("true")
+		return "true"
+	case v.Tt == objectapi.TagFalse:
+		L.PushString("false")
+		return "false"
+	case v.IsNil():
+		L.PushString("nil")
+		return "nil"
+	default:
+		tn := L.TypeName(L.Type(idx))
+		s := fmt.Sprintf("%s: 0x%x", tn, reflect.ValueOf(v.Val).Pointer())
+		L.PushString(s)
+		return s
+	}
+}
+
+// GetMetafield pushes the metamethod field from the metatable of the value at idx.
+// Returns true if found (value pushed), false if not (nothing pushed).
+func (L *State) GetMetafield(idx int, field string) bool {
+	if !L.GetMetatable(idx) {
+		return false
+	}
+	tp := L.GetField(-1, field)
+	if tp == objectapi.TypeNil {
+		L.Pop(2) // pop nil and metatable
+		return false
+	}
+	L.Remove(-2) // remove metatable, keep field value
+	return true
+}
+
+// StringToNumber tries to convert a string to a number and pushes it.
+// Returns the length+1 on success, 0 on failure.
+func (L *State) StringToNumber(s string) int {
+	tv, ok := objectapi.StringToNumber(s)
+	if !ok {
+		return 0
+	}
+	L.push(tv)
+	return len(s) + 1
+}
+
+// PushFail pushes a "fail" value (false in Lua 5.4+).
+func (L *State) PushFail() {
+	L.PushBoolean(false)
+}
+
+// ArgCheck checks a condition for argument arg. If cond is false, raises an error.
+func (L *State) ArgCheck(cond bool, arg int, extraMsg string) {
+	if !cond {
+		L.ArgError(arg, extraMsg)
+	}
+}
+
+// ArgExpected checks that argument arg has the expected type name.
+func (L *State) ArgExpected(cond bool, arg int, tname string) {
+	if !cond {
+		L.TypeError(arg, tname)
+	}
+}
+
+// CheckOption checks that the argument at idx is a string matching one of the options.
+// Returns the index of the matched option.
+func (L *State) CheckOption(idx int, def string, opts []string) int {
+	var s string
+	if def != "" && L.IsNoneOrNil(idx) {
+		s = def
+	} else {
+		s = L.CheckString(idx)
+	}
+	for i, opt := range opts {
+		if s == opt {
+			return i
+		}
+	}
+	L.ArgError(idx, fmt.Sprintf("invalid option '%s'", s))
+	return 0 // unreachable
+}
+
+// LenI returns the length of the value at idx as an integer (calls __len if needed).
+func (L *State) LenI(idx int) int64 {
+	L.Len(idx)
+	n, ok := L.ToInteger(-1)
+	L.Pop(1)
+	if !ok {
+		L.Errorf("object length is not an integer")
+	}
+	return n
+}
+
+// GetSubTable ensures that t[fname] is a table, creating it if needed.
+// Returns true if the table already existed.
+func (L *State) GetSubTable(idx int, fname string) bool {
+	if L.GetField(idx, fname) == objectapi.TypeTable {
+		return true // table already there
+	}
+	L.Pop(1) // remove previous result
+	idx = L.AbsIndex(idx)
+	L.NewTable()
+	L.PushValue(-1)         // copy to be left at top
+	L.SetField(idx, fname)  // assign new table to field
+	return false
+}
+

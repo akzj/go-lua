@@ -32,8 +32,9 @@ func (r *stringReader) ReadByte() int {
 
 // luaResult holds a Lua execution result.
 type luaResult struct {
-	L   *stateapi.LuaState
-	top int // Top after execution
+	L       *stateapi.LuaState
+	top     int // Top after execution
+	funcIdx int // Where the function was placed (results start here)
 }
 
 // runLua compiles and executes Lua source code.
@@ -52,24 +53,21 @@ func runLua(t *testing.T, src string) luaResult {
 	funcIdx := L.Top
 	stateapi.PushValue(L, objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
 	Call(L, funcIdx, stateapi.MultiRet)
-	return luaResult{L: L, top: L.Top}
+	return luaResult{L: L, top: L.Top, funcIdx: funcIdx}
 }
 
-// get returns the i-th result (0-based from end of stack).
-// Results are placed contiguously ending at Top.
-// For i=0 returns first result, i=1 second, etc.
+// get returns the i-th result (0-based).
+// After Call with MultiRet, results start at funcIdx.
 func (r luaResult) get(i int) objectapi.TValue {
-	// After Call with MultiRet on a main chunk (vararg):
-	// Results are at Stack[0..Top-1] because RETURN undoes VARARGPREP shift.
-	// nResults = Top (since results start at 0 for main chunks).
-	if i < r.top {
-		return r.L.Stack[i].Val
+	idx := r.funcIdx + i
+	if idx < r.top {
+		return r.L.Stack[idx].Val
 	}
 	return objectapi.Nil
 }
 
 func (r luaResult) nResults() int {
-	return r.top
+	return r.top - r.funcIdx
 }
 
 // --- Test: Empty program ---
@@ -496,7 +494,7 @@ func TestCFunction(t *testing.T) {
 	funcIdx := L.Top
 	stateapi.PushValue(L, objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
 	Call(L, funcIdx, stateapi.MultiRet)
-	v := L.Stack[0].Val
+	v := L.Stack[funcIdx].Val
 	if !v.IsInteger() || v.Integer() != 30 {
 		t.Fatalf("expected 30, got %v (tag %d)", v.Val, v.Tt)
 	}
