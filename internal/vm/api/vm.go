@@ -715,7 +715,13 @@ func Concat(L *stateapi.LuaState, total int) {
 				L.Stack[top-2].Val = objectapi.MakeString(ls)
 			}
 		} else if len(s1) == 0 {
-			L.Stack[top-2].Val = L.Stack[top-1].Val
+			// Result is second operand converted to string
+			if !p2.IsString() {
+				ls := &objectapi.LuaString{Data: s2, IsShort: len(s2) <= 40}
+				L.Stack[top-2].Val = objectapi.MakeString(ls)
+			} else {
+				L.Stack[top-2].Val = L.Stack[top-1].Val
+			}
 		} else {
 			// Collect as many strings as possible
 			var parts []string

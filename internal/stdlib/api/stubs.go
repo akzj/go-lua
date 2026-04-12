@@ -35,7 +35,17 @@ func OpenUTF8(L *luaapi.State) int {
 }
 
 func OpenCoroutine(L *luaapi.State) int {
-	L.NewLib(map[string]luaapi.CFunction{})
+	L.NewLib(map[string]luaapi.CFunction{
+		"wrap": coroWrapStub,
+	})
+	return 1
+}
+
+// coroWrapStub is a minimal coroutine.wrap that just returns the function.
+// This works for simple iterator patterns that don't actually yield.
+func coroWrapStub(L *luaapi.State) int {
+	L.CheckType(1, 6) // TypeFunction = 6
+	L.PushValue(1)
 	return 1
 }
 
