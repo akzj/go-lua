@@ -88,6 +88,20 @@ const (
 // TagDeadKey is used for dead keys in table hash part (internal).
 const TagDeadKey Tag = 0x0B // LUA_TDEADKEY
 
+// ---------------------------------------------------------------------------
+// Proto flag constants (C7 FIX: replaces IsVararg bool)
+// ---------------------------------------------------------------------------
+const (
+	PF_VAHID byte = 1 // function has hidden vararg arguments
+	PF_VATAB byte = 2 // function has vararg table (Lua 5.5)
+	PF_FIXED byte = 4 // prototype has parts in fixed memory
+)
+
+// IsVararg returns true if the proto has any vararg flag set.
+func (p *Proto) IsVararg() bool {
+	return p.Flag&(PF_VAHID|PF_VATAB) != 0
+}
+
 // BaseType extracts the base type (bits 0–3) from a tag.
 func (t Tag) BaseType() Type { return Type(t & 0x0F) }
 
@@ -273,7 +287,7 @@ type Proto struct {
 	Upvalues     []UpvalDesc // upvalue descriptors
 	NumParams    byte        // number of fixed parameters
 	MaxStackSize byte        // registers needed
-	IsVararg     bool        // has ... parameter
+	Flag         byte        // function flags (PF_VAHID, PF_VATAB, PF_FIXED)
 	LineDefined  int         // first line of definition
 	LastLine     int         // last line of definition
 	Source       *LuaString  // source file name
@@ -303,6 +317,16 @@ type LocVar struct {
 	Name    *LuaString
 	StartPC int // first active instruction
 	EndPC   int // first dead instruction
+}
+
+// --- Userdata (C8 FIX: was missing entirely) ---
+
+// Userdata represents a full userdata object.
+// It holds arbitrary Go data, a metatable, and user values.
+type Userdata struct {
+	Data      any      // user data (Go value)
+	MetaTable any      // *Table at runtime (any to avoid import cycle)
+	UserVals  []TValue // user values (nuvalue)
 }
 
 // --- Stack value (TValue + to-be-closed delta) ---

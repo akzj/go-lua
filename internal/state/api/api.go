@@ -12,8 +12,9 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// CFunction is the type for Go functions callable from Lua.
+// CFunction is the CANONICAL type for Go functions callable from Lua.
 // It receives the Lua state and returns the number of results pushed.
+// All other modules should reference this type (or alias it).
 // ---------------------------------------------------------------------------
 type CFunction func(L *LuaState) int
 
@@ -34,6 +35,7 @@ const (
 
 // ---------------------------------------------------------------------------
 // CallInfo status flags (packed into CallStatus uint32)
+// Matches C exactly — verified against lstate.h
 // ---------------------------------------------------------------------------
 const (
 	CISTNResults  uint32 = 0xFF       // bits 0-7: nresults + 1
@@ -48,8 +50,8 @@ const (
 	CISTHookYield uint32 = 1 << 23    // last hook call yielded
 	CISTFin       uint32 = 1 << 24    // function called a finalizer
 
-	CISTCCMTShift = 8  // bits 8-11: __call metamethod count
-	CISTCCMTMask  = 0xF << CISTCCMTShift
+	CISTCCMTShift  = 8  // bits 8-11: __call metamethod count
+	CISTCCMTMask   = 0xF << CISTCCMTShift
 	CISTRecstShift = 12 // bits 12-14: recovery status
 )
 
@@ -68,7 +70,7 @@ const ExtraStack = 5
 // MaxResults is the maximum number of results a function can return.
 const MaxResults = 250
 
-// MultiRet signals "all results" in call/return.
+// MultiRet signals "all results" in call/return (LUA_MULTRET = -1).
 const MultiRet = -1
 
 // ---------------------------------------------------------------------------
@@ -125,14 +127,16 @@ func (ci *CallInfo) SetNResults(n int) {
 // Each coroutine has its own LuaState with its own stack.
 // ---------------------------------------------------------------------------
 type LuaState struct {
-	Stack   []objectapi.TValue // the value stack
-	Top     int                // index of first free slot
-	CI      *CallInfo          // current call info
-	BaseCI  CallInfo           // embedded base CallInfo (C host level)
+	// C3 FIX: Stack uses []StackValue (not []TValue) for TBC support.
+	// Each slot has a TBCDelta field for the to-be-closed linked list.
+	Stack   []objectapi.StackValue // the value stack
+	Top     int                    // index of first free slot
+	CI      *CallInfo              // current call info
+	BaseCI  CallInfo               // embedded base CallInfo (C host level)
 
-	Global  *GlobalState // shared global state
-	OpenUpval any         // head of open upvalue list (typed in closure module)
-	TBCList int          // stack index of top to-be-closed variable (-1 = none)
+	Global    *GlobalState // shared global state
+	OpenUpval any          // head of open upvalue list (typed in closure module)
+	TBCList   int          // stack index of top to-be-closed variable (-1 = none)
 
 	Status    int    // thread status (StatusOK, StatusYield, etc.)
 	AllowHook bool   // hook enable flag
@@ -140,8 +144,15 @@ type LuaState struct {
 	NCI       int    // number of CallInfo nodes in the list
 
 	ErrFunc int // error handler stack index
-	Hook    any // debug hook function (typed later)
 	OldPC   int // last traced PC
+
+	// C10 FIX: Debug hook fields (needed by debug.sethook/gethook)
+	Hook          any  // debug hook function (typed later)
+	BaseHookCount int  // base hook count setting
+	HookCount     int  // current hook countdown
+	HookMask      int  // which hooks active (call, return, line, count)
+	FTransfer     int  // hook value transfer: index of first value
+	NTransfer     int  // hook value transfer: number of values
 }
 
 // Yieldable returns true if the current coroutine can yield.
@@ -166,12 +177,13 @@ type GlobalState struct {
 	Registry objectapi.TValue // the registry table
 	Seed     uint32           // randomized hash seed
 
-	TMNames    [25]any // metamethod name strings (typed as *LuaString)
-	MT         [10]any // metatables for basic types (typed as *Table)
+	// I1 FIX: Concrete types where no circular dependency exists
+	TMNames [25]*objectapi.LuaString // metamethod name strings
+	MT      [9]any                   // metatables for basic types (9 = NumTypes, any to avoid Table import cycle)
 
-	MainThread *LuaState // the main thread
-	Panic      CFunction // unprotected error handler
-	MemErrMsg  any       // pre-allocated "not enough memory" string
+	MainThread *LuaState           // the main thread
+	Panic      CFunction           // unprotected error handler
+	MemErrMsg  *objectapi.LuaString // pre-allocated "not enough memory" string
 
 	// String interning table (typed in luastring module)
 	StringTable any
@@ -181,8 +193,9 @@ type GlobalState struct {
 }
 
 // ---------------------------------------------------------------------------
-// LuaError is the error type used for Lua runtime errors.
+// LuaError is the CANONICAL error type used for Lua runtime errors.
 // Lua errors are propagated via panic(LuaError{...}).
+// All modules should use this type (not define their own).
 // ---------------------------------------------------------------------------
 type LuaError struct {
 	Status  int              // error code (StatusErrRun, etc.)
@@ -192,6 +205,25 @@ type LuaError struct {
 func (e LuaError) Error() string {
 	return "lua error" // detailed formatting done by the API layer
 }
+
+// ---------------------------------------------------------------------------
+// LuaYield is the type used for coroutine yield via panic/recover.
+// Distinct from LuaError so recover() can distinguish error from yield.
+// I5 FIX: Added for coroutine support.
+// ---------------------------------------------------------------------------
+type LuaYield struct {
+	NResults int // number of results to yield
+}
+
+// ---------------------------------------------------------------------------
+// Hook mask constants (matches C LUA_MASK*)
+// ---------------------------------------------------------------------------
+const (
+	MaskCall  = 1 << 0 // LUA_MASKCALL
+	MaskRet   = 1 << 1 // LUA_MASKRET
+	MaskLine  = 1 << 2 // LUA_MASKLINE
+	MaskCount = 1 << 3 // LUA_MASKCOUNT
+)
 
 // ---------------------------------------------------------------------------
 // Registry indices (matches C LUA_RIDX_*)

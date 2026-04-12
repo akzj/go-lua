@@ -10,7 +10,6 @@ package api
 
 import (
 	objectapi "github.com/akzj/go-lua/internal/object/api"
-	vmapi "github.com/akzj/go-lua/internal/vm/api"
 )
 
 // CFunction is the type for Go functions callable from Lua.
@@ -286,10 +285,10 @@ const (
 func (L *State) Call(nArgs, nResults int) {}
 
 // PCall performs a protected call. Returns status code.
-func (L *State) PCall(nArgs, nResults, msgHandler int) vmapi.Status { return 0 }
+func (L *State) PCall(nArgs, nResults, msgHandler int) int { return 0 }
 
 // Load loads a Lua chunk from a string. Pushes the compiled function.
-func (L *State) Load(code string, name string, mode string) vmapi.Status { return 0 }
+func (L *State) Load(code string, name string, mode string) int { return 0 }
 
 // DoString loads and executes a string.
 func (L *State) DoString(code string) error { return nil }
@@ -416,3 +415,66 @@ type DebugInfo struct {
 	NParams         int    // number of parameters
 	IsVararg        bool   // is a vararg function
 }
+
+// --- Debug Hook API (I8 FIX) ---
+
+// SetHook sets the debug hook function with the given mask and count.
+func (L *State) SetHook(f interface{}, mask, count int) {}
+
+// GetHook returns the current debug hook function.
+func (L *State) GetHook() interface{} { return nil }
+
+// GetHookMask returns the current hook mask.
+func (L *State) GetHookMask() int { return 0 }
+
+// GetHookCount returns the current hook count.
+func (L *State) GetHookCount() int { return 0 }
+
+// GetLocal gets the value of a local variable. Returns name or "" if invalid.
+func (L *State) GetLocal(ar *DebugInfo, n int) string { return "" }
+
+// SetLocal sets the value of a local variable. Returns name or "" if invalid.
+func (L *State) SetLocal(ar *DebugInfo, n int) string { return "" }
+
+// --- Coroutine API (C9 FIX) ---
+
+// NewThread creates a new Lua thread (coroutine) sharing the same global state.
+func (L *State) NewThread() *State { return nil }
+
+// PushThread pushes the thread onto its own stack. Returns true if main thread.
+func (L *State) PushThread() bool { return false }
+
+// Resume starts or resumes a coroutine. Returns (status, true if resumable).
+func (L *State) Resume(from *State, nArgs int) (int, bool) { return 0, false }
+
+// YieldK yields a coroutine with a continuation.
+func (L *State) YieldK(nResults int, ctx int, k CFunction) int { return 0 }
+
+// Yield yields a coroutine (no continuation).
+func (L *State) Yield(nResults int) int { return 0 }
+
+// IsYieldable returns true if the running coroutine can yield.
+func (L *State) IsYieldable() bool { return false }
+
+// XMove moves n values between two threads sharing the same global state.
+func (L *State) XMove(to *State, n int) {}
+
+// ToThread converts the value at idx to a State (thread). Returns nil if not a thread.
+func (L *State) ToThread(idx int) *State { return nil }
+
+// --- Userdata API (I9 FIX) ---
+
+// ToUserdata returns the userdata value at idx, or nil.
+func (L *State) ToUserdata(idx int) interface{} { return nil }
+
+// GetIUserValue pushes the n-th user value of the userdata at idx.
+// Returns the type of the pushed value.
+func (L *State) GetIUserValue(idx int, n int) objectapi.Type { return 0 }
+
+// SetIUserValue sets the n-th user value of the userdata at idx from top. Pops value.
+// Returns true if the userdata has that user value.
+func (L *State) SetIUserValue(idx int, n int) bool { return false }
+
+// ToPointer returns a generic pointer representation of the value at idx.
+func (L *State) ToPointer(idx int) interface{} { return nil }
+
