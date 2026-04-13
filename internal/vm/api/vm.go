@@ -664,7 +664,12 @@ func tryConcatTM(L *stateapi.LuaState) {
 		tm = mmapi.GetTMByObj(L.Global, p2, mmapi.TM_CONCAT)
 	}
 	if tm.IsNil() {
-		RunError(L, "attempt to concatenate a "+objectapi.TypeNames[p1.Type()]+" value")
+		// Report the type of the non-string/non-number operand
+		errType := p1
+		if p1.IsString() || p1.IsNumber() {
+			errType = p2
+		}
+		RunError(L, "attempt to concatenate a "+objectapi.TypeNames[errType.Type()]+" value")
 	}
 	result := callTMRes(L, tm, p1, p2)
 	L.Stack[top-2].Val = result
@@ -807,13 +812,19 @@ func Concat(L *stateapi.LuaState, total int) {
 		s1, ok1 := toStringForConcat(p1)
 		s2, ok2 := toStringForConcat(p2)
 		if !ok1 || !ok2 {
+			// tryConcatTM handles L.Top adjustment internally:
+			// sets L.Stack[top-2] = result and L.Top = top - 1
 			tryConcatTM(L)
+			total -= n - 1
+			// Do NOT adjust L.Top here — tryConcatTM already did it
 		} else if len(s2) == 0 {
 			// Result is first operand (already converted to string)
 			if !p1.IsString() {
 				ls := &objectapi.LuaString{Data: s1, IsShort: len(s1) <= 40}
 				L.Stack[top-2].Val = objectapi.MakeString(ls)
 			}
+			total -= n - 1
+			L.Top -= n - 1
 		} else if len(s1) == 0 {
 			// Result is second operand converted to string
 			if !p2.IsString() {
@@ -822,6 +833,8 @@ func Concat(L *stateapi.LuaState, total int) {
 			} else {
 				L.Stack[top-2].Val = L.Stack[top-1].Val
 			}
+			total -= n - 1
+			L.Top -= n - 1
 		} else {
 			// Collect as many strings as possible
 			var parts []string
@@ -837,9 +850,9 @@ func Concat(L *stateapi.LuaState, total int) {
 			result := strings.Join(parts, "")
 			ls := &objectapi.LuaString{Data: result, IsShort: len(result) <= 40}
 			L.Stack[top-n].Val = objectapi.MakeString(ls)
+			total -= n - 1
+			L.Top -= n - 1
 		}
-		total -= n - 1
-		L.Top -= n - 1
 	}
 }
 
