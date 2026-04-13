@@ -90,11 +90,17 @@ func debugGetinfo(L *luaapi.State) int {
 	return 1
 }
 
-// debug.getupvalue(f, up) — stub returning name and value of upvalue
+// debug.getupvalue(f, up) — returns name and value of upvalue
 func debugGetupvalue(L *luaapi.State) int {
-	// Minimal: return nil (no upvalue info available)
-	L.PushNil()
-	return 1
+	n := int(L.CheckInteger(2))
+	name := L.GetUpvalue(1, n)
+	if name == "" {
+		L.PushNil()
+		return 1
+	}
+	L.PushString(name) // push name
+	L.Insert(-2)       // move name before value (GetUpvalue already pushed value)
+	return 2
 }
 
 // debug.sethook([thread,] hook, mask [, count]) — stub (no-op)
