@@ -351,7 +351,7 @@ func TestMathType(t *testing.T) {
 	L := newState(t)
 	doString(t, L, `assert(math.type(1) == "integer")`)
 	doString(t, L, `assert(math.type(1.0) == "float")`)
-	doString(t, L, `assert(math.type("x") == false)`)
+	doString(t, L, `assert(math.type("x") == nil)`)
 }
 
 func TestMathTointeger(t *testing.T) {
