@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
+	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
 	mmapi "github.com/akzj/go-lua/internal/metamethod/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 	opcodeapi "github.com/akzj/go-lua/internal/opcode/api"
@@ -857,6 +858,18 @@ func appendFloat(buf []byte, f float64) []byte {
 // Concat
 // ---------------------------------------------------------------------------
 
+// internString creates a properly interned LuaString via the global string table.
+// This ensures correct hash values for table key lookups.
+func internString(L *stateapi.LuaState, s string) *objectapi.LuaString {
+	st := L.Global.StringTable.(*luastringapi.StringTable)
+	return st.Intern(s)
+}
+
+// makeInternedString creates a TValue string that is properly interned.
+func makeInternedString(L *stateapi.LuaState, s string) objectapi.TValue {
+	return objectapi.MakeString(internString(L, s))
+}
+
 // Concat concatenates 'total' values on the stack from L.Top-total to L.Top-1.
 func Concat(L *stateapi.LuaState, total int) {
 	if total == 1 {
@@ -878,16 +891,14 @@ func Concat(L *stateapi.LuaState, total int) {
 		} else if len(s2) == 0 {
 			// Result is first operand (already converted to string)
 			if !p1.IsString() {
-				ls := &objectapi.LuaString{Data: s1, IsShort: len(s1) <= 40}
-				L.Stack[top-2].Val = objectapi.MakeString(ls)
+				L.Stack[top-2].Val = makeInternedString(L, s1)
 			}
 			total -= n - 1
 			L.Top -= n - 1
 		} else if len(s1) == 0 {
 			// Result is second operand converted to string
 			if !p2.IsString() {
-				ls := &objectapi.LuaString{Data: s2, IsShort: len(s2) <= 40}
-				L.Stack[top-2].Val = objectapi.MakeString(ls)
+				L.Stack[top-2].Val = makeInternedString(L, s2)
 			} else {
 				L.Stack[top-2].Val = L.Stack[top-1].Val
 			}
@@ -906,8 +917,7 @@ func Concat(L *stateapi.LuaState, total int) {
 				n++
 			}
 			result := strings.Join(parts, "")
-			ls := &objectapi.LuaString{Data: result, IsShort: len(result) <= 40}
-			L.Stack[top-n].Val = objectapi.MakeString(ls)
+			L.Stack[top-n].Val = makeInternedString(L, result)
 			total -= n - 1
 			L.Top -= n - 1
 		}
