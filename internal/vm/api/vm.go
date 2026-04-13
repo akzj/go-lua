@@ -483,6 +483,26 @@ func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) b
 	return !result.IsFalsy()
 }
 
+// callOrderITM calls an order metamethod for comparison-with-immediate opcodes.
+// Mirrors: luaT_callorderiTM in ltm.c
+// p1 is the register value, im is the immediate integer, flip indicates whether
+// arguments should be swapped (for GT/GE), isf indicates the immediate is float,
+// event is TM_LT or TM_LE.
+func callOrderITM(L *stateapi.LuaState, p1 objectapi.TValue, im int64, flip bool, isf bool, event mmapi.TMS) bool {
+	// Create TValue for the immediate
+	var p2 objectapi.TValue
+	if isf {
+		p2 = objectapi.MakeFloat(float64(im))
+	} else {
+		p2 = objectapi.MakeInteger(im)
+	}
+	// Flip arguments if needed (GT/GE use flip)
+	if flip {
+		return callOrderTM(L, p2, p1, event)
+	}
+	return callOrderTM(L, p1, p2, event)
+}
+
 // EqualObj performs t1 == t2 with metamethods.
 func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 	if t1.Tt != t2.Tt {
@@ -1974,6 +1994,10 @@ startfunc:
 				cond = v.Integer() < im
 			} else if v.IsFloat() {
 				cond = v.Float() < float64(im)
+			} else {
+				// Metamethod fallback: callOrderITM(L, v, im, false, isf, TM_LT)
+				isf := opcodeapi.GetArgC(inst) != 0
+				cond = callOrderITM(L, v, im, false, isf, mmapi.TM_LT)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++
@@ -1989,6 +2013,9 @@ startfunc:
 				cond = v.Integer() <= im
 			} else if v.IsFloat() {
 				cond = v.Float() <= float64(im)
+			} else {
+				isf := opcodeapi.GetArgC(inst) != 0
+				cond = callOrderITM(L, v, im, false, isf, mmapi.TM_LE)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++
@@ -2004,6 +2031,10 @@ startfunc:
 				cond = v.Integer() > im
 			} else if v.IsFloat() {
 				cond = v.Float() > float64(im)
+			} else {
+				// GTI: a > im ⟺ im < a, so flip=true, TM_LT
+				isf := opcodeapi.GetArgC(inst) != 0
+				cond = callOrderITM(L, v, im, true, isf, mmapi.TM_LT)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++
@@ -2019,6 +2050,10 @@ startfunc:
 				cond = v.Integer() >= im
 			} else if v.IsFloat() {
 				cond = v.Float() >= float64(im)
+			} else {
+				// GEI: a >= im ⟺ im <= a, so flip=true, TM_LE
+				isf := opcodeapi.GetArgC(inst) != 0
+				cond = callOrderITM(L, v, im, true, isf, mmapi.TM_LE)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++
