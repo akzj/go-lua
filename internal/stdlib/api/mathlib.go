@@ -208,9 +208,17 @@ func math_modf(L *luaapi.State) int {
 		L.PushNumber(0.0)                // fractional = 0.0
 	} else {
 		x := L.CheckNumber(1)
-		i, f := math.Modf(x)
-		L.PushNumber(i)
-		L.PushNumber(f)
+		if math.IsInf(x, 0) {
+			L.PushNumber(x)   // integral = ±inf
+			L.PushNumber(0.0) // fractional = 0.0 (C Lua behavior)
+		} else if math.IsNaN(x) {
+			L.PushNumber(x) // NaN
+			L.PushNumber(x) // NaN
+		} else {
+			i, f := math.Modf(x)
+			L.PushNumber(i)
+			L.PushNumber(f)
+		}
 	}
 	return 2
 }
