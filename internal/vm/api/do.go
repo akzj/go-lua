@@ -675,3 +675,70 @@ func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 		internProtoStrings(L, child)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// To-be-closed (TBC) variable support
+// ---------------------------------------------------------------------------
+
+// MarkTBC marks a stack slot as to-be-closed.
+// Mirrors: luaF_newtbcupval in lfunc.c
+func MarkTBC(L *stateapi.LuaState, level int) {
+	if L.TBCList < 0 {
+		// First TBC variable — delta is level+1 (encode as 1-based)
+		L.Stack[level].TBCDelta = uint16(level + 1)
+	} else {
+		delta := level - L.TBCList
+		if delta <= 0 {
+			delta = 1 // safety
+		}
+		L.Stack[level].TBCDelta = uint16(delta)
+	}
+	L.TBCList = level
+}
+
+// CloseTBC calls __close on all TBC variables from L.TBCList down to (but not including) level.
+// Then resets L.TBCList to the previous TBC variable below level.
+// Mirrors: luaF_close (the TBC portion) in lfunc.c
+func CloseTBC(L *stateapi.LuaState, level int) {
+	for L.TBCList >= level {
+		tbc := L.TBCList
+		delta := int(L.Stack[tbc].TBCDelta)
+		L.Stack[tbc].TBCDelta = 0 // clear
+
+		// Compute previous TBC index
+		if delta <= 0 || tbc-delta+1 < 0 {
+			L.TBCList = -1 // no more
+		} else {
+			prev := tbc - delta
+			if delta == tbc+1 {
+				// This was the first TBC (delta encoded as level+1)
+				L.TBCList = -1
+			} else {
+				L.TBCList = prev
+			}
+		}
+
+		// Call __close metamethod if the value is not nil and not false
+		obj := L.Stack[tbc].Val
+		if obj.IsNil() || (obj.Tt == objectapi.TagFalse) {
+			continue
+		}
+
+		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
+		if !tm.IsNil() {
+			// __close(obj, nil) — nil means normal close (not error)
+			top := L.Top
+			if top+3 >= len(L.Stack) {
+				// Grow stack if needed
+				newStack := make([]objectapi.StackValue, len(L.Stack)*2)
+				copy(newStack, L.Stack)
+				L.Stack = newStack
+			}
+			L.Stack[top].Val = tm
+			L.Stack[top+1].Val = obj
+			L.Stack[top+2].Val = objectapi.Nil
+			L.Top = top + 3
+			Call(L, top, 0)
+		}
+	}
+}

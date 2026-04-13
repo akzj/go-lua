@@ -1176,10 +1176,11 @@ startfunc:
 
 		case opcodeapi.OP_CLOSE:
 			closureapi.CloseUpvals(L, ra)
+			CloseTBC(L, ra)
 
 		case opcodeapi.OP_TBC:
-			// To-be-closed: mark the variable
-			// Simplified: just note it (full TBC support deferred)
+			// To-be-closed: mark the variable in the TBC linked list
+			MarkTBC(L, ra)
 
 		// ===== Table access =====
 
