@@ -201,6 +201,40 @@ func math_randomseed(L *luaapi.State) int {
 	return 0
 }
 
+// math_modf implements math.modf(x) — returns integral and fractional parts.
+func math_modf(L *luaapi.State) int {
+	if L.IsInteger(1) {
+		L.PushInteger(L.CheckInteger(1)) // integer: integral = x
+		L.PushNumber(0.0)                // fractional = 0.0
+	} else {
+		x := L.CheckNumber(1)
+		i, f := math.Modf(x)
+		L.PushNumber(i)
+		L.PushNumber(f)
+	}
+	return 2
+}
+
+// math_deg implements math.deg(x) — radians to degrees.
+func math_deg(L *luaapi.State) int {
+	L.PushNumber(L.CheckNumber(1) * (180.0 / math.Pi))
+	return 1
+}
+
+// math_rad implements math.rad(x) — degrees to radians.
+func math_rad(L *luaapi.State) int {
+	L.PushNumber(L.CheckNumber(1) * (math.Pi / 180.0))
+	return 1
+}
+
+// math_ult implements math.ult(m, n) — unsigned integer comparison.
+func math_ult(L *luaapi.State) int {
+	m := L.CheckInteger(1)
+	n := L.CheckInteger(2)
+	L.PushBoolean(uint64(m) < uint64(n))
+	return 1
+}
+
 // OpenMath opens the math library.
 func OpenMath(L *luaapi.State) int {
 	mathFuncs := map[string]luaapi.CFunction{
@@ -210,12 +244,15 @@ func OpenMath(L *luaapi.State) int {
 		"atan":       math_atan,
 		"ceil":       math_ceil,
 		"cos":        math_cos,
+		"deg":        math_deg,
 		"exp":        math_exp,
 		"floor":      math_floor,
 		"fmod":       math_fmod,
 		"log":        math_log,
 		"max":        math_max,
 		"min":        math_min,
+		"modf":       math_modf,
+		"rad":        math_rad,
 		"random":     math_random,
 		"randomseed": math_randomseed,
 		"sin":        math_sin,
@@ -223,6 +260,7 @@ func OpenMath(L *luaapi.State) int {
 		"tan":        math_tan,
 		"tointeger":  math_tointeger,
 		"type":       math_type,
+		"ult":        math_ult,
 	}
 	L.NewLib(mathFuncs)
 
