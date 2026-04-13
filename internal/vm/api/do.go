@@ -69,13 +69,37 @@ func ErrorErr(L *stateapi.LuaState) {
 	Throw(L, stateapi.StatusErrErr)
 }
 
+// ErrorMsg calls the error handler (if set) then throws a runtime error.
+// Mirrors: luaG_errormsg in ldebug.c
+// The error object must already be on the stack at L.Top-1.
+func ErrorMsg(L *stateapi.LuaState) {
+	if L.ErrFunc != 0 {
+		errFunc := L.Stack[L.ErrFunc].Val
+		// Stack: [..., errmsg] (at Top-1)
+		// Rearrange to: [..., handler, errmsg]
+		L.Stack[L.Top].Val = L.Stack[L.Top-1].Val // copy errmsg up
+		L.Stack[L.Top-1].Val = errFunc             // put handler below
+		L.Top++
+		// Call handler(errmsg) → 1 result, protected
+		status := RunProtected(L, func() {
+			Call(L, L.Top-2, 1)
+		})
+		if status != stateapi.StatusOK {
+			// Error in error handler
+			ErrorErr(L)
+		}
+		// handler's return value is now at Top-1, replacing original error
+	}
+	Throw(L, stateapi.StatusErrRun)
+}
+
 // RunError raises a runtime error with a string message.
 // Mirrors: luaG_runerror in ldebug.c — adds source:line: prefix for Lua frames.
 func RunError(L *stateapi.LuaState, msg string) {
 	msg = addInfo(L, msg)
 	s := &objectapi.LuaString{Data: msg, IsShort: len(msg) <= 40}
 	stateapi.PushValue(L, objectapi.MakeString(s))
-	Throw(L, stateapi.StatusErrRun)
+	ErrorMsg(L)
 }
 
 // ---------------------------------------------------------------------------
