@@ -70,7 +70,9 @@ func ErrorErr(L *stateapi.LuaState) {
 }
 
 // RunError raises a runtime error with a string message.
+// Mirrors: luaG_runerror in ldebug.c — adds source:line: prefix for Lua frames.
 func RunError(L *stateapi.LuaState, msg string) {
+	msg = addInfo(L, msg)
 	s := &objectapi.LuaString{Data: msg, IsShort: len(msg) <= 40}
 	stateapi.PushValue(L, objectapi.MakeString(s))
 	Throw(L, stateapi.StatusErrRun)
