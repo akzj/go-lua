@@ -914,11 +914,75 @@ func (L *State) NewUserdata(size int, nUV int) interface{} {
 
 // GetUpvalue pushes the value of upvalue n of the closure at funcIdx.
 func (L *State) GetUpvalue(funcIdx, n int) string {
+	v := L.index2val(funcIdx)
+	if v == nil {
+		return ""
+	}
+	switch v.Tt {
+	case objectapi.TagLuaClosure:
+		cl := v.Val.(*closureapi.LClosure)
+		if n < 1 || n > len(cl.UpVals) {
+			return ""
+		}
+		uv := cl.UpVals[n-1]
+		if uv == nil {
+			return ""
+		}
+		val := uv.Get(L.ls().Stack)
+		L.push(val)
+		// Return the name from Proto.Upvalues debug info
+		if n-1 < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[n-1].Name != nil {
+			return cl.Proto.Upvalues[n-1].Name.String()
+		}
+		return ""
+	case objectapi.TagCClosure:
+		cc := v.Val.(*closureapi.CClosure)
+		if n < 1 || n > len(cc.UpVals) {
+			return ""
+		}
+		L.push(cc.UpVals[n-1])
+		return "" // C closures have no upvalue names
+	}
 	return ""
 }
 
 // SetUpvalue sets upvalue n of the closure at funcIdx from the top value.
 func (L *State) SetUpvalue(funcIdx, n int) string {
+	v := L.index2val(funcIdx)
+	if v == nil {
+		return ""
+	}
+	switch v.Tt {
+	case objectapi.TagLuaClosure:
+		cl := v.Val.(*closureapi.LClosure)
+		if n < 1 || n > len(cl.UpVals) {
+			return ""
+		}
+		uv := cl.UpVals[n-1]
+		if uv == nil {
+			return ""
+		}
+		val := L.index2val(-1)
+		if val != nil {
+			uv.Set(L.ls().Stack, *val)
+		}
+		L.Pop(1)
+		if n-1 < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[n-1].Name != nil {
+			return cl.Proto.Upvalues[n-1].Name.String()
+		}
+		return ""
+	case objectapi.TagCClosure:
+		cc := v.Val.(*closureapi.CClosure)
+		if n < 1 || n > len(cc.UpVals) {
+			return ""
+		}
+		val := L.index2val(-1)
+		if val != nil {
+			cc.UpVals[n-1] = *val
+		}
+		L.Pop(1)
+		return ""
+	}
 	return ""
 }
 
