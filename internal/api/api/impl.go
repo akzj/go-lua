@@ -1403,7 +1403,7 @@ func (L *State) StringToNumber(s string) int {
 
 // PushFail pushes a "fail" value (false in Lua 5.4+).
 func (L *State) PushFail() {
-	L.PushBoolean(false)
+	L.PushNil()
 }
 
 // ArgCheck checks a condition for argument arg. If cond is false, raises an error.
