@@ -391,6 +391,7 @@ func OpenBase(L *luaapi.State) int {
 		"tonumber":       luaB_tonumber,
 		"tostring":       luaB_tostring,
 		"type":           luaB_type,
+		"unpack":         tabUnpack, // global alias for table.unpack (Lua 5.5 compat)
 		"warn":           luaB_warn,
 		"xpcall":         luaB_xpcall,
 	}

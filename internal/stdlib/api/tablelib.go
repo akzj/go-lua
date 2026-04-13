@@ -152,6 +152,16 @@ func tabUnpack(L *luaapi.State) int {
 
 // --- sort ---
 
+// tabCreate implements table.create(n [,m]).
+// Creates a new table with pre-allocated array (n) and hash (m) slots.
+// Lua 5.5 new function.
+func tabCreate(L *luaapi.State) int {
+	nArr := L.CheckInteger(1)
+	nRec := L.OptInteger(2, 0)
+	L.CreateTable(int(nArr), int(nRec))
+	return 1
+}
+
 func tabSort(L *luaapi.State) int {
 	n := auxGetN(L, 1)
 	hasComp := !L.IsNoneOrNil(2)
@@ -249,6 +259,7 @@ func swapI(L *luaapi.State, i, j int64) {
 // OpenTable opens the table library.
 func OpenTable(L *luaapi.State) int {
 	tabFuncs := map[string]luaapi.CFunction{
+		"create":  tabCreate,
 		"insert":  tabInsert,
 		"remove":  tabRemove,
 		"move":    tabMove,
