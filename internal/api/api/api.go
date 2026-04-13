@@ -104,6 +104,7 @@ type DebugInfo struct {
 	NUps            int    // number of upvalues
 	NParams         int    // number of parameters
 	IsVararg        bool   // is a vararg function
+	ci              interface{} // internal: *stateapi.CallInfo (not exposed to Lua)
 }
 
 // Status codes

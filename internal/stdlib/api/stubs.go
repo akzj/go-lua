@@ -74,19 +74,70 @@ func debugTraceback(L *luaapi.State) int {
 	return 1
 }
 
-// debug.getinfo([thread,] f [, what]) — stub returning minimal info table
+// debug.getinfo([thread,] f [, what]) — returns debug info table
+// Mirrors: db_getinfo in ldblib.c
 func debugGetinfo(L *luaapi.State) int {
-	L.CreateTable(0, 4)
-	L.PushString("")
+	// Parse arguments: getinfo(level [, what])
+	var ar *luaapi.DebugInfo
+	var ok bool
+	what := "flnSu" // default: all options
+
+	if L.Type(1) == 3 { // number = stack level
+		level := int(L.CheckInteger(1))
+		if L.GetTop() >= 2 {
+			what = L.CheckString(2)
+		}
+		ar, ok = L.GetStack(level + 1) // +1 to skip getinfo itself
+		if !ok {
+			L.PushNil()
+			return 1
+		}
+	} else {
+		// function argument — not yet supported, return minimal
+		L.CreateTable(0, 4)
+		L.PushString("")
+		L.SetField(-2, "name")
+		L.PushString("Lua")
+		L.SetField(-2, "what")
+		L.PushString("")
+		L.SetField(-2, "source")
+		L.PushInteger(0)
+		L.SetField(-2, "currentline")
+		L.PushString("")
+		L.SetField(-2, "namewhat")
+		return 1
+	}
+
+	// Fill additional fields based on 'what' string
+	L.GetInfo(what, ar)
+
+	// Build result table
+	L.CreateTable(0, 8)
+
+	// Always populate basic fields from ar
+	L.PushString(ar.Name)
 	L.SetField(-2, "name")
-	L.PushString("Lua")
-	L.SetField(-2, "what")
-	L.PushString("")
-	L.SetField(-2, "source")
-	L.PushInteger(0)
-	L.SetField(-2, "currentline")
-	L.PushString("")
+	L.PushString(ar.NameWhat)
 	L.SetField(-2, "namewhat")
+	L.PushString(ar.What)
+	L.SetField(-2, "what")
+	L.PushString(ar.Source)
+	L.SetField(-2, "source")
+	L.PushString(ar.ShortSrc)
+	L.SetField(-2, "short_src")
+	L.PushInteger(int64(ar.CurrentLine))
+	L.SetField(-2, "currentline")
+	L.PushInteger(int64(ar.LineDefined))
+	L.SetField(-2, "linedefined")
+	L.PushInteger(int64(ar.LastLineDefined))
+	L.SetField(-2, "lastlinedefined")
+	L.PushInteger(int64(ar.NUps))
+	L.SetField(-2, "nups")
+	L.PushInteger(int64(ar.NParams))
+	L.SetField(-2, "nparams")
+	L.PushBoolean(ar.IsVararg)
+	L.SetField(-2, "isvararg")
+
 	return 1
 }
 

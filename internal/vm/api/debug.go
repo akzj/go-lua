@@ -149,6 +149,18 @@ func kname(p *objectapi.Proto, index int) (kind string, name string) {
 	return "", "?"
 }
 
+// kname2 returns just the string value of constant at index (for field names).
+func kname2(p *objectapi.Proto, index int) string {
+	if index < 0 || index >= len(p.Constants) {
+		return "?"
+	}
+	kv := p.Constants[index]
+	if kv.IsString() {
+		return kv.Val.(*objectapi.LuaString).Data
+	}
+	return "?"
+}
+
 // findSetReg scans backward from 'lastpc' to find the instruction that
 // last set register 'reg'. Returns the PC of that instruction, or -1.
 // Simplified version of findsetreg in ldebug.c.
@@ -160,7 +172,9 @@ func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
 		switch op {
 		case opcodeapi.OP_LOADK, opcodeapi.OP_LOADKX, opcodeapi.OP_LOADFALSE,
 			opcodeapi.OP_LOADTRUE, opcodeapi.OP_LOADNIL, opcodeapi.OP_LOADI,
-			opcodeapi.OP_LOADF, opcodeapi.OP_MOVE, opcodeapi.OP_GETUPVAL:
+			opcodeapi.OP_LOADF, opcodeapi.OP_MOVE, opcodeapi.OP_GETUPVAL,
+			opcodeapi.OP_CLOSURE, opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE,
+			opcodeapi.OP_GETI, opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
 			if a == reg {
 				return pc
 			}
@@ -172,9 +186,13 @@ func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
 // basicGetObjName traces the origin of register 'reg' at 'pc' in proto 'p'.
 // Returns (kind, name) where kind is "constant", "local", "upvalue", or "".
 // Simplified version of basicgetobjname in ldebug.c.
-func basicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name string) {
+func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name string) {
 	setpc := findSetReg(p, pc, reg)
 	if setpc < 0 {
+		// No instruction found that sets this register — try local variable name
+		if name := locVarName(p, pc, reg); name != "" {
+			return "local", name
+		}
 		return "", ""
 	}
 	inst := p.Code[setpc]
@@ -189,15 +207,49 @@ func basicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 	case opcodeapi.OP_MOVE:
 		b := opcodeapi.GetArgB(inst)
 		if b < opcodeapi.GetArgA(inst) {
-			return basicGetObjName(p, setpc, b)
+			return BasicGetObjName(p, setpc, b)
 		}
 	case opcodeapi.OP_GETUPVAL:
 		b := opcodeapi.GetArgB(inst)
 		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil {
 			return "upvalue", p.Upvalues[b].Name.Data
 		}
+	case opcodeapi.OP_GETTABUP:
+		// Table access from upvalue: upvalues[B][K[C]]
+		k := opcodeapi.GetArgC(inst)
+		if k < len(p.Constants) {
+			return "field", kname2(p, k)
+		}
+	case opcodeapi.OP_GETFIELD:
+		// Table field access: reg[A] = reg[B][K[C]]
+		k := opcodeapi.GetArgC(inst)
+		if k < len(p.Constants) {
+			return "field", kname2(p, k)
+		}
+	}
+	// Fallback: check LocVars for a local variable name at the call site PC.
+	if name := locVarName(p, pc, reg); name != "" {
+		return "local", name
 	}
 	return "", ""
+}
+
+// locVarName returns the local variable name for register 'reg' at instruction 'pc',
+// or "" if not found. Mirrors: locvarname in ldebug.c.
+func locVarName(p *objectapi.Proto, pc int, reg int) string {
+	idx := 0
+	for i := range p.LocVars {
+		if p.LocVars[i].StartPC <= pc && pc < p.LocVars[i].EndPC {
+			if idx == reg {
+				if p.LocVars[i].Name != nil {
+					return p.LocVars[i].Name.Data
+				}
+				return ""
+			}
+			idx++
+		}
+	}
+	return ""
 }
 
 // VarInfo returns a formatted variable description for a register value,
@@ -216,7 +268,7 @@ func VarInfo(L *stateapi.LuaState, reg int) string {
 	if pc < 0 {
 		pc = 0
 	}
-	kind, name := basicGetObjName(cl.Proto, pc, reg)
+	kind, name := BasicGetObjName(cl.Proto, pc, reg)
 	if kind == "" {
 		return ""
 	}

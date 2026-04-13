@@ -11,6 +11,7 @@ import (
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
 	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
+	opcodeapi "github.com/akzj/go-lua/internal/opcode/api"
 	parseapi "github.com/akzj/go-lua/internal/parse/api"
 	stateapi "github.com/akzj/go-lua/internal/state/api"
 	tableapi "github.com/akzj/go-lua/internal/table/api"
@@ -1209,6 +1210,8 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		return nil, false
 	}
 	ar := &DebugInfo{}
+	// Store this CI for GetInfo to use
+	ar.ci = ci
 	fval := ls.Stack[ci.Func].Val
 	switch fval.Tt {
 	case objectapi.TagLuaClosure:
@@ -1243,9 +1246,54 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 }
 
 // GetInfo fills debug info fields specified by what string.
+// Mirrors: lua_getinfo in lapi.c
 func (L *State) GetInfo(what string, ar *DebugInfo) bool {
-	// Already filled by GetStack for basic cases
-	return ar != nil
+	if ar == nil {
+		return false
+	}
+	ls := L.ls()
+	for i := 0; i < len(what); i++ {
+		switch what[i] {
+		case 'n':
+			if ar.ci == nil {
+				break
+			}
+			queriedCI, ok := ar.ci.(*stateapi.CallInfo)
+			if !ok {
+				break
+			}
+			caller := queriedCI.Prev
+			if caller == nil {
+				break
+			}
+			fval := ls.Stack[caller.Func].Val
+			if fval.Tt != objectapi.TagLuaClosure {
+				break
+			}
+			cl := fval.Val.(*closureapi.LClosure)
+			p := cl.Proto
+			if p == nil {
+				break
+			}
+			pc := caller.SavedPC - 1
+			if pc < 0 || pc >= len(p.Code) {
+				break
+			}
+			inst := p.Code[pc]
+			op := opcodeapi.GetOpCode(inst)
+			if op == opcodeapi.OP_CALL || op == opcodeapi.OP_TAILCALL {
+				reg := int(opcodeapi.GetArgA(inst))
+				kind, name := vmapi.BasicGetObjName(p, pc, reg)
+				if name != "" {
+					ar.Name = name
+					ar.NameWhat = kind
+				}
+			}
+		case 'S', 'l', 'u', 'f':
+			// Already filled by GetStack
+		}
+	}
+	return true
 }
 
 // shortSrc creates a short source name for error messages.
@@ -1464,3 +1512,17 @@ func (L *State) GetSubTable(idx int, fname string) bool {
 	return false
 }
 
+
+// DebugGetProto returns the Proto of the LClosure at top of stack (for testing).
+func DebugGetProto(L *State) *objectapi.Proto {
+	ls := L.ls()
+	if ls.Top <= 0 {
+		return nil
+	}
+	fval := ls.Stack[ls.Top-1].Val
+	if fval.Tt != objectapi.TagLuaClosure {
+		return nil
+	}
+	cl := fval.Val.(*closureapi.LClosure)
+	return cl.Proto
+}
