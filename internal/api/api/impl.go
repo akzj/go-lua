@@ -1087,8 +1087,7 @@ func (L *State) TypeError(arg int, tname string) int {
 
 // Where pushes "source:line: " for the given call level.
 func (L *State) Where(level int) {
-	// Basic implementation: just push empty string for now
-	// Full implementation would walk the call stack
+	// Mirrors: luaL_where in lauxlib.c
 	ls := L.ls()
 	ci := ls.CI
 	// Walk up 'level' call frames
@@ -1099,14 +1098,14 @@ func (L *State) Where(level int) {
 		fval := ls.Stack[ci.Func].Val
 		if fval.Tt == objectapi.TagLuaClosure {
 			cl := fval.Val.(*closureapi.LClosure)
-			source := cl.Proto.Source
-			line := 0
-			if ci.SavedPC > 0 && int(ci.SavedPC-1) < len(cl.Proto.LineInfo) {
-				line = int(cl.Proto.LineInfo[ci.SavedPC-1])
+			pc := ci.SavedPC - 1
+			if pc < 0 {
+				pc = 0
 			}
+			line := vmapi.GetFuncLine(cl.Proto, pc)
 			srcName := "?"
-			if source != nil {
-				srcName = source.Data
+			if cl.Proto.Source != nil {
+				srcName = vmapi.ShortSrc(cl.Proto.Source.Data)
 			}
 			L.PushString(fmt.Sprintf("%s:%d: ", srcName, line))
 			return
@@ -1230,9 +1229,11 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 			ar.What = "Lua"
 		}
 		// Current line
-		if ci.SavedPC > 0 && int(ci.SavedPC-1) < len(p.LineInfo) {
-			ar.CurrentLine = int(p.LineInfo[ci.SavedPC-1])
+		pc := ci.SavedPC - 1
+		if pc < 0 {
+			pc = 0
 		}
+		ar.CurrentLine = vmapi.GetFuncLine(p, pc)
 	case objectapi.TagCClosure, objectapi.TagLightCFunc:
 		ar.Source = "=[C]"
 		ar.ShortSrc = "[C]"
