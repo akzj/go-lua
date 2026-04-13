@@ -895,7 +895,7 @@ func (L *State) DoFile(filename string) error {
 
 // Error raises a Lua error with the value at the top of the stack.
 func (L *State) Error() int {
-	vmapi.Throw(L.ls(), stateapi.StatusErrRun)
+	vmapi.ErrorMsg(L.ls())
 	return 0 // unreachable
 }
 
