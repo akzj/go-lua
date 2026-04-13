@@ -75,6 +75,21 @@ func SetInput(ls *LexState) {
 	ls.Current = ls.Reader.ReadByte()
 }
 
+// SkipShebang skips a Unix shebang line (#! or # comment) at the start of
+// source. Must be called after SetInput and before Next.
+// Mirrors skipcomment in lauxlib.c.
+func SkipShebang(ls *LexState) {
+	if ls.Current == '#' {
+		for ls.Current != '\n' && ls.Current != EOZ {
+			next(ls)
+		}
+		if ls.Current == '\n' {
+			next(ls) // skip the newline itself
+			ls.Line++
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Character-level helpers
 // ---------------------------------------------------------------------------
@@ -481,23 +496,29 @@ func readUTF8Esc(ls *LexState) {
 	// Remove the '\' that was saved
 	ls.Buf = ls.Buf[:savedBackslashPos]
 
-	// Encode UTF-8
-	if r <= 0x7F {
-		save(ls, int(r))
-	} else if r <= 0x7FF {
-		save(ls, int(0xC0|(r>>6)))
-		save(ls, int(0x80|(r&0x3F)))
-	} else if r <= 0xFFFF {
-		save(ls, int(0xE0|(r>>12)))
-		save(ls, int(0x80|((r>>6)&0x3F)))
-		save(ls, int(0x80|(r&0x3F)))
-	} else if r <= 0x10FFFF {
-		save(ls, int(0xF0|(r>>18)))
-		save(ls, int(0x80|((r>>12)&0x3F)))
-		save(ls, int(0x80|((r>>6)&0x3F)))
-		save(ls, int(0x80|(r&0x3F)))
+	// Encode UTF-8 (generalized, supports up to 0x7FFFFFFF like C Lua)
+	// Mirrors luaO_utf8esc in lobject.c
+	const utf8BufSz = 8
+	var buf [utf8BufSz]byte
+	n := 1
+	if r < 0x80 { // ASCII
+		buf[utf8BufSz-1] = byte(r)
 	} else {
-		escError(ls, "UTF-8 value too large")
+		mfb := uint32(0x3F) // maximum that fits in first byte
+		for {
+			buf[utf8BufSz-n] = byte(0x80 | (r & 0x3F))
+			n++
+			r >>= 6
+			mfb >>= 1
+			if r <= mfb {
+				break
+			}
+		}
+		buf[utf8BufSz-n] = byte((^mfb << 1) | r) // first byte
+	}
+	// Save encoded bytes in forward order
+	for i := utf8BufSz - n; i < utf8BufSz; i++ {
+		save(ls, int(buf[i]))
 	}
 }
 

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
@@ -655,4 +658,46 @@ func TestProtoReturnInstruction(t *testing.T) {
 	if lastOp != opcodeapi.OP_RETURN && lastOp != opcodeapi.OP_RETURN0 && lastOp != opcodeapi.OP_RETURN1 {
 		t.Errorf("last instruction should be RETURN variant, got opcode %d", lastOp)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParseAllTestes — parse ALL Lua 5.5.1 testes files (34/34 expected)
+// ---------------------------------------------------------------------------
+
+func TestParseAllTestes(t *testing.T) {
+	testesDir := filepath.Join("..", "..", "..", "lua-master", "testes")
+	entries, err := os.ReadDir(testesDir)
+	if err != nil {
+		t.Skipf("testes directory not found: %v", err)
+	}
+
+	var passed, failed int
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".lua") {
+			continue
+		}
+		t.Run(e.Name(), func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(testesDir, e.Name()))
+			if err != nil {
+				t.Fatalf("read error: %v", err)
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					failed++
+					t.Fatalf("PANIC: %v", r)
+				}
+			}()
+
+			reader := newStringReader(string(data))
+			p := Parse("@"+e.Name(), reader)
+			if p == nil {
+				failed++
+				t.Fatalf("Parse returned nil")
+			}
+			passed++
+			t.Logf("PASS (%d instructions)", len(p.Code))
+		})
+	}
+	t.Logf("Results: %d passed, %d failed", passed, failed)
 }
