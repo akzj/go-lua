@@ -867,6 +867,28 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 	RunError(L, "'__index' chain too long; possible loop")
 }
 
+// tableSetWithMeta sets a key in a table, checking for __newindex metamethod
+// when the key doesn't already exist. This is the "fast set + fallback" pattern
+// matching C Lua's luaV_fastset / luaV_finishset.
+func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val objectapi.TValue) {
+	h := tval.Val.(*tableapi.Table)
+	// Fast path: key already exists → just overwrite
+	_, found := h.Get(key)
+	if found {
+		h.Set(key, val)
+		return
+	}
+	// Key absent — check for __newindex metamethod
+	tm := getTableTM(h, mmapi.TM_NEWINDEX)
+	if tm.IsNil() {
+		// No metamethod — raw set
+		h.Set(key, val)
+		return
+	}
+	// Has __newindex — delegate to FinishSet which handles the chain
+	FinishSet(L, tval, key, val)
+}
+
 // FinishSet completes a table set with __newindex metamethod chain.
 func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 	for loop := 0; loop < maxTagLoop; loop++ {
@@ -1273,8 +1295,7 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				h := tval.Val.(*tableapi.Table)
-				h.Set(rb, rc)
+				tableSetWithMeta(L, tval, rb, rc)
 			} else {
 				FinishSet(L, tval, rb, rc)
 			}
@@ -1289,8 +1310,7 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				h := tval.Val.(*tableapi.Table)
-				h.SetInt(b, rc)
+				tableSetWithMeta(L, tval, objectapi.MakeInteger(b), rc)
 			} else {
 				FinishSet(L, tval, objectapi.MakeInteger(b), rc)
 			}
@@ -1305,8 +1325,7 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				h := tval.Val.(*tableapi.Table)
-				h.Set(rb, rc)
+				tableSetWithMeta(L, tval, rb, rc)
 			} else {
 				FinishSet(L, tval, rb, rc)
 			}
