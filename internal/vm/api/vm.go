@@ -94,6 +94,31 @@ func floatToIntegerCeil(f float64) (int64, bool) {
 	return 0, false
 }
 
+// toNumberTV converts a TValue to a numeric TValue, preserving int/float type.
+// For strings, uses StringToNumber which returns int for "10", float for "10.5".
+// This is used for arithmetic coercion where type preservation matters.
+func toNumberTV(v objectapi.TValue) (objectapi.TValue, bool) {
+	switch v.Tt {
+	case objectapi.TagFloat, objectapi.TagInteger:
+		return v, true
+	case objectapi.TagShortStr, objectapi.TagLongStr:
+		return objectapi.StringToNumber(v.Val.(*objectapi.LuaString).Data)
+	}
+	return objectapi.Nil, false
+}
+
+// arithBinTV performs a binary arithmetic operation on two TValues with proper
+// int/float type preservation. If both operands are integers, uses intOp;
+// otherwise converts both to float and uses floatOp.
+func arithBinTV(a, b objectapi.TValue, intOp func(int64, int64) int64, floatOp func(float64, float64) float64) objectapi.TValue {
+	if a.IsInteger() && b.IsInteger() {
+		return objectapi.MakeInteger(intOp(a.Integer(), b.Integer()))
+	}
+	fa := toFloat(a)
+	fb := toFloat(b)
+	return objectapi.MakeFloat(floatOp(fa, fb))
+}
+
 // stringToNumber tries to parse a string as a number (float64).
 func stringToNumber(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
@@ -1445,9 +1470,13 @@ startfunc:
 			} else if rb.IsFloat() {
 				L.Stack[ra].Val = objectapi.MakeFloat(rb.Float() + float64(ic))
 				ci.SavedPC++
-			} else if nb, ok := ToNumber(rb); ok {
-				// String→number coercion (e.g. "10" + 5)
-				L.Stack[ra].Val = objectapi.MakeFloat(nb + float64(ic))
+			} else if nv, ok := toNumberTV(rb); ok {
+				// String→number coercion preserving int/float type
+				if nv.IsInteger() {
+					L.Stack[ra].Val = objectapi.MakeInteger(nv.Integer() + ic)
+				} else {
+					L.Stack[ra].Val = objectapi.MakeFloat(nv.Float() + float64(ic))
+				}
 				ci.SavedPC++
 			}
 			// else: fall through to MMBIN on next instruction
@@ -1461,10 +1490,10 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() + kc.Integer())
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(kc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(kc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(nb + nc)
+					L.Stack[ra].Val = arithBinTV(nb, nc, func(a, b int64) int64 { return a + b }, func(a, b float64) float64 { return a + b })
 					ci.SavedPC++
 				}
 			}
@@ -1476,10 +1505,10 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() - kc.Integer())
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(kc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(kc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(nb - nc)
+					L.Stack[ra].Val = arithBinTV(nb, nc, func(a, b int64) int64 { return a - b }, func(a, b float64) float64 { return a - b })
 					ci.SavedPC++
 				}
 			}
@@ -1491,10 +1520,10 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() * kc.Integer())
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(kc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(kc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(nb * nc)
+					L.Stack[ra].Val = arithBinTV(nb, nc, func(a, b int64) int64 { return a * b }, func(a, b float64) float64 { return a * b })
 					ci.SavedPC++
 				}
 			}
@@ -1506,10 +1535,14 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, rb.Integer(), kc.Integer()))
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(kc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(kc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(FMod(nb, nc))
+					if nb.IsInteger() && nc.IsInteger() {
+						L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
+					} else {
+						L.Stack[ra].Val = objectapi.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
+					}
 					ci.SavedPC++
 				}
 			}
@@ -1541,10 +1574,14 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, rb.Integer(), kc.Integer()))
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(kc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(kc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(math.Floor(nb / nc))
+					if nb.IsInteger() && nc.IsInteger() {
+						L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
+					} else {
+						L.Stack[ra].Val = objectapi.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
+					}
 					ci.SavedPC++
 				}
 			}
@@ -1608,10 +1645,10 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() + rc.Integer())
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(rc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(rc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(nb + nc)
+					L.Stack[ra].Val = arithBinTV(nb, nc, func(a, b int64) int64 { return a + b }, func(a, b float64) float64 { return a + b })
 					ci.SavedPC++
 				}
 			}
@@ -1623,10 +1660,10 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() - rc.Integer())
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(rc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(rc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(nb - nc)
+					L.Stack[ra].Val = arithBinTV(nb, nc, func(a, b int64) int64 { return a - b }, func(a, b float64) float64 { return a - b })
 					ci.SavedPC++
 				}
 			}
@@ -1638,10 +1675,10 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() * rc.Integer())
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(rc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(rc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(nb * nc)
+					L.Stack[ra].Val = arithBinTV(nb, nc, func(a, b int64) int64 { return a * b }, func(a, b float64) float64 { return a * b })
 					ci.SavedPC++
 				}
 			}
@@ -1653,10 +1690,14 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, rb.Integer(), rc.Integer()))
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(rc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(rc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(FMod(nb, nc))
+					if nb.IsInteger() && nc.IsInteger() {
+						L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
+					} else {
+						L.Stack[ra].Val = objectapi.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
+					}
 					ci.SavedPC++
 				}
 			}
@@ -1688,10 +1729,14 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, rb.Integer(), rc.Integer()))
 				ci.SavedPC++
 			} else {
-				nb, ok1 := ToNumber(rb)
-				nc, ok2 := ToNumber(rc)
+				nb, ok1 := toNumberTV(rb)
+				nc, ok2 := toNumberTV(rc)
 				if ok1 && ok2 {
-					L.Stack[ra].Val = objectapi.MakeFloat(math.Floor(nb / nc))
+					if nb.IsInteger() && nc.IsInteger() {
+						L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
+					} else {
+						L.Stack[ra].Val = objectapi.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
+					}
 					ci.SavedPC++
 				}
 			}
@@ -1781,9 +1826,13 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(-rb.Integer())
 			} else if rb.IsFloat() {
 				L.Stack[ra].Val = objectapi.MakeFloat(-rb.Float())
-			} else if nb, ok := ToNumber(rb); ok {
-				// String→number coercion (e.g. -"10" == -10.0)
-				L.Stack[ra].Val = objectapi.MakeFloat(-nb)
+			} else if nb, ok := toNumberTV(rb); ok {
+				// String→number coercion preserving int/float type
+				if nb.IsInteger() {
+					L.Stack[ra].Val = objectapi.MakeInteger(-nb.Integer())
+				} else {
+					L.Stack[ra].Val = objectapi.MakeFloat(-nb.Float())
+				}
 			} else {
 				tryBinTM(L, rb, rb, ra, mmapi.TM_UNM)
 			}
