@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"unicode"
 
@@ -903,22 +904,347 @@ func gsubReplace(repl string, ms *matchState, si, ei int) string {
 	return sb.String()
 }
 
+// packOptSize returns the byte size for a single pack format character.
+// Matches C Lua's getdetails() in lstrlib.c.
+// On 64-bit: lua_Integer=int64(8), lua_Number=float64(8), size_t=8, int=4, short=2, long=8.
+func packOptSize(fmt byte) int {
+	switch fmt {
+	case 'b', 'B':
+		return 1
+	case 'h', 'H':
+		return 2
+	case 'l', 'L':
+		return 8 // sizeof(long) on 64-bit
+	case 'j', 'J':
+		return 8 // sizeof(lua_Integer)
+	case 'T':
+		return 8 // sizeof(size_t)
+	case 'f':
+		return 4 // sizeof(float)
+	case 'n':
+		return 8 // sizeof(lua_Number)
+	case 'd':
+		return 8 // sizeof(double)
+	default:
+		return 0 // unknown
+	}
+}
+
+// str_packsize implements string.packsize(fmt).
+func str_packsize(L *luaapi.State) int {
+	fmtStr := L.CheckString(1)
+	total := 0
+	i := 0
+	for i < len(fmtStr) {
+		c := fmtStr[i]
+		i++
+		switch {
+		case c == '<' || c == '>' || c == '=' || c == '!':
+			// endianness/alignment markers — skip
+			continue
+		case c >= '0' && c <= '9':
+			// skip digits (alignment specifier after !)
+			continue
+		case c == ' ':
+			continue
+		case c == 'x':
+			total++ // one padding byte
+		case c == 'X':
+			// empty alignment item — skip
+			continue
+		case c == 'i', c == 'I':
+			// i[n] / I[n] — optional size follows
+			sz := 4 // default = sizeof(int)
+			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
+				sz = int(fmtStr[i] - '0')
+				i++
+				for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+					sz = sz*10 + int(fmtStr[i]-'0')
+					i++
+				}
+			}
+			total += sz
+		case c == 's':
+			L.ArgError(1, "variable-length format")
+			return 0
+		case c == 'z':
+			L.ArgError(1, "variable-length format")
+			return 0
+		default:
+			sz := packOptSize(c)
+			if sz == 0 {
+				L.ArgError(1, fmt.Sprintf("invalid format option '%c'", c))
+				return 0
+			}
+			total += sz
+		}
+	}
+	L.PushInteger(int64(total))
+	return 1
+}
+
+// str_pack implements string.pack(fmt, v1, v2, ...).
+func str_pack(L *luaapi.State) int {
+	fmtStr := L.CheckString(1)
+	var buf []byte
+	arg := 2
+	i := 0
+	isLittle := true // default: native (assume little-endian)
+	for i < len(fmtStr) {
+		c := fmtStr[i]
+		i++
+		switch {
+		case c == '<':
+			isLittle = true
+			continue
+		case c == '>':
+			isLittle = false
+			continue
+		case c == '=', c == '!':
+			continue
+		case c >= '0' && c <= '9', c == ' ':
+			continue
+		case c == 'x':
+			buf = append(buf, 0)
+		case c == 'b':
+			v := L.CheckInteger(arg)
+			arg++
+			buf = append(buf, byte(int8(v)))
+		case c == 'B':
+			v := L.CheckInteger(arg)
+			arg++
+			buf = append(buf, byte(v))
+		case c == 'i', c == 'I':
+			sz := 4
+			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
+				sz = int(fmtStr[i] - '0')
+				i++
+				for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+					sz = sz*10 + int(fmtStr[i]-'0')
+					i++
+				}
+			}
+			v := L.CheckInteger(arg)
+			arg++
+			buf = appendInt(buf, uint64(v), sz, isLittle)
+		case c == 'h', c == 'H':
+			v := L.CheckInteger(arg)
+			arg++
+			buf = appendInt(buf, uint64(v), 2, isLittle)
+		case c == 'l', c == 'L':
+			v := L.CheckInteger(arg)
+			arg++
+			buf = appendInt(buf, uint64(v), 8, isLittle)
+		case c == 'j', c == 'J':
+			v := L.CheckInteger(arg)
+			arg++
+			buf = appendInt(buf, uint64(v), 8, isLittle)
+		case c == 'f':
+			v := float32(L.CheckNumber(arg))
+			arg++
+			bits := math.Float32bits(v)
+			buf = appendInt(buf, uint64(bits), 4, isLittle)
+		case c == 'd', c == 'n':
+			v := L.CheckNumber(arg)
+			arg++
+			bits := math.Float64bits(v)
+			buf = appendInt(buf, bits, 8, isLittle)
+		case c == 's':
+			sz := 8 // default s size
+			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
+				sz = int(fmtStr[i] - '0')
+				i++
+			}
+			s := L.CheckString(arg)
+			arg++
+			buf = appendInt(buf, uint64(len(s)), sz, isLittle)
+			buf = append(buf, s...)
+		case c == 'z':
+			s := L.CheckString(arg)
+			arg++
+			buf = append(buf, s...)
+			buf = append(buf, 0)
+		default:
+			// skip unknown
+		}
+	}
+	L.PushString(string(buf))
+	return 1
+}
+
+// str_unpack implements string.unpack(fmt, s [, pos]).
+func str_unpack(L *luaapi.State) int {
+	fmtStr := L.CheckString(1)
+	data := L.CheckString(2)
+	pos := int(L.OptInteger(3, 1)) - 1 // Lua 1-based to 0-based
+	if pos < 0 {
+		pos = 0
+	}
+
+	isLittle := true
+	i := 0
+	nret := 0
+	for i < len(fmtStr) {
+		c := fmtStr[i]
+		i++
+		switch {
+		case c == '<':
+			isLittle = true
+			continue
+		case c == '>':
+			isLittle = false
+			continue
+		case c == '=', c == '!':
+			continue
+		case c >= '0' && c <= '9', c == ' ':
+			continue
+		case c == 'x':
+			pos++
+		case c == 'b':
+			if pos >= len(data) {
+				L.ArgError(2, "data string too short")
+			}
+			L.PushInteger(int64(int8(data[pos])))
+			pos++
+			nret++
+		case c == 'B':
+			if pos >= len(data) {
+				L.ArgError(2, "data string too short")
+			}
+			L.PushInteger(int64(data[pos]))
+			pos++
+			nret++
+		case c == 'i', c == 'I':
+			sz := 4
+			signed := c == 'i'
+			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
+				sz = int(fmtStr[i] - '0')
+				i++
+				for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+					sz = sz*10 + int(fmtStr[i]-'0')
+					i++
+				}
+			}
+			v := readInt(data, pos, sz, isLittle, signed)
+			L.PushInteger(v)
+			pos += sz
+			nret++
+		case c == 'h':
+			v := readInt(data, pos, 2, isLittle, true)
+			L.PushInteger(v)
+			pos += 2
+			nret++
+		case c == 'H':
+			v := readInt(data, pos, 2, isLittle, false)
+			L.PushInteger(v)
+			pos += 2
+			nret++
+		case c == 'l', c == 'j':
+			v := readInt(data, pos, 8, isLittle, true)
+			L.PushInteger(v)
+			pos += 8
+			nret++
+		case c == 'L', c == 'J':
+			v := readInt(data, pos, 8, isLittle, false)
+			L.PushInteger(v)
+			pos += 8
+			nret++
+		case c == 'f':
+			bits := uint32(readUint(data, pos, 4, isLittle))
+			L.PushNumber(float64(math.Float32frombits(bits)))
+			pos += 4
+			nret++
+		case c == 'd', c == 'n':
+			bits := readUint(data, pos, 8, isLittle)
+			L.PushNumber(math.Float64frombits(bits))
+			pos += 8
+			nret++
+		case c == 's':
+			sz := 8
+			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
+				sz = int(fmtStr[i] - '0')
+				i++
+			}
+			slen := int(readUint(data, pos, sz, isLittle))
+			pos += sz
+			L.PushString(data[pos : pos+slen])
+			pos += slen
+			nret++
+		case c == 'z':
+			end := pos
+			for end < len(data) && data[end] != 0 {
+				end++
+			}
+			L.PushString(data[pos:end])
+			pos = end + 1
+			nret++
+		default:
+			// skip
+		}
+	}
+	L.PushInteger(int64(pos + 1)) // return final position (1-based)
+	return nret + 1
+}
+
+func appendInt(buf []byte, v uint64, size int, little bool) []byte {
+	b := make([]byte, size)
+	if little {
+		for i := 0; i < size; i++ {
+			b[i] = byte(v >> (uint(i) * 8))
+		}
+	} else {
+		for i := size - 1; i >= 0; i-- {
+			b[i] = byte(v)
+			v >>= 8
+		}
+	}
+	return append(buf, b...)
+}
+
+func readUint(data string, pos, size int, little bool) uint64 {
+	var v uint64
+	if little {
+		for i := size - 1; i >= 0; i-- {
+			v = (v << 8) | uint64(data[pos+i])
+		}
+	} else {
+		for i := 0; i < size; i++ {
+			v = (v << 8) | uint64(data[pos+i])
+		}
+	}
+	return v
+}
+
+func readInt(data string, pos, size int, little, signed bool) int64 {
+	v := readUint(data, pos, size, little)
+	if signed && size < 8 {
+		mask := uint64(1) << (uint(size)*8 - 1)
+		if v&mask != 0 {
+			v |= ^((uint64(1) << (uint(size) * 8)) - 1)
+		}
+	}
+	return int64(v)
+}
+
 // OpenString opens the string library.
 func OpenString(L *luaapi.State) int {
 	strFuncs := map[string]luaapi.CFunction{
-		"byte":    str_byte,
-		"char":    str_char,
-		"find":    str_find,
-		"format":  str_format,
-		"gmatch":  str_gmatch,
-		"gsub":    str_gsub,
-		"len":     str_len,
-		"lower":   str_lower,
-		"match":   str_match,
-		"rep":     str_rep,
-		"reverse": str_reverse,
-		"sub":     str_sub,
-		"upper":   str_upper,
+		"byte":     str_byte,
+		"char":     str_char,
+		"find":     str_find,
+		"format":   str_format,
+		"gmatch":   str_gmatch,
+		"gsub":     str_gsub,
+		"len":      str_len,
+		"lower":    str_lower,
+		"match":    str_match,
+		"pack":     str_pack,
+		"packsize": str_packsize,
+		"rep":      str_rep,
+		"reverse":  str_reverse,
+		"sub":      str_sub,
+		"unpack":   str_unpack,
+		"upper":    str_upper,
 	}
 	L.NewLib(strFuncs)
 

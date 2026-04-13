@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"unicode"
 
@@ -436,14 +437,21 @@ func luaB_loadfile(L *luaapi.State) int {
 }
 
 func luaB_collectgarbage(L *luaapi.State) int {
-	// Stub — Go GC handles this
 	opts := []string{"stop", "restart", "collect", "count", "step", "isrunning", "generational", "incremental"}
 	o := L.CheckOption(1, "collect", opts)
 	switch o {
+	case 2: // collect
+		runtime.GC()
+		L.PushInteger(0)
+		return 1
 	case 3: // count
-		L.PushNumber(0) // Go GC doesn't expose this easily
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		kb := float64(m.Alloc) / 1024.0
+		L.PushNumber(kb)
 		return 1
 	case 4: // step
+		runtime.GC()
 		L.PushBoolean(true)
 		return 1
 	case 5: // isrunning

@@ -158,6 +158,18 @@ func tabUnpack(L *luaapi.State) int {
 func tabCreate(L *luaapi.State) int {
 	nArr := L.CheckInteger(1)
 	nRec := L.OptInteger(2, 0)
+	const intMax = int64(0x7FFFFFFF) // C INT_MAX — matches C Lua's check
+	L.ArgCheck(nArr >= 0 && nArr <= intMax, 1, "out of range")
+	L.ArgCheck(nRec >= 0 && nRec <= intMax, 2, "out of range")
+	// C Lua also checks for table overflow (hash part too large)
+	if nRec > 0 {
+		const maxHash = 1 << 30
+		if nRec > maxHash {
+			L.PushString("table overflow")
+			L.Error()
+			return 0
+		}
+	}
 	L.CreateTable(int(nArr), int(nRec))
 	return 1
 }
