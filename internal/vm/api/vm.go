@@ -588,6 +588,8 @@ func getTableTM(t *tableapi.Table, event mmapi.TMS) objectapi.TValue {
 // ---------------------------------------------------------------------------
 
 // callTMRes calls a metamethod with two arguments and returns the result.
+// IMPORTANT: Uses L.Top as scratch space. Callers must ensure L.Top is above
+// any registers they need preserved (PosCall moves result to the func slot).
 func callTMRes(L *stateapi.LuaState, tm, p1, p2 objectapi.TValue) objectapi.TValue {
 	// Push: tm, p1, p2
 	top := L.Top
@@ -596,8 +598,8 @@ func callTMRes(L *stateapi.LuaState, tm, p1, p2 objectapi.TValue) objectapi.TVal
 	L.Stack[top+2].Val = p2
 	L.Top = top + 3
 	Call(L, top, 1)
-	result := L.Stack[L.Top-1].Val
-	L.Top--
+	result := L.Stack[top].Val // PosCall moves result to func slot
+	L.Top = top                // restore top
 	return result
 }
 
@@ -854,6 +856,10 @@ func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
 		if mt != nil {
 			tm := getTableTM(h, mmapi.TM_LEN)
 			if !tm.IsNil() {
+				// Ensure L.Top is above ra so callTMRes doesn't clobber live registers
+				if L.Top <= ra {
+					L.Top = ra + 1
+				}
 				result := callTMRes(L, tm, rb, rb)
 				L.Stack[ra].Val = result
 				return
@@ -867,6 +873,10 @@ func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
 		tm := mmapi.GetTMByObj(L.Global, rb, mmapi.TM_LEN)
 		if tm.IsNil() {
 			RunError(L, "attempt to get length of a "+objectapi.TypeNames[rb.Type()]+" value")
+		}
+		// Ensure L.Top is above ra so callTMRes doesn't clobber live registers
+		if L.Top <= ra {
+			L.Top = ra + 1
 		}
 		result := callTMRes(L, tm, rb, rb)
 		L.Stack[ra].Val = result
@@ -1797,6 +1807,9 @@ startfunc:
 
 		case opcodeapi.OP_EQ:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+			// Bump L.Top to frame top so callTMRes scratch space
+			// doesn't clobber live registers (metamethod dispatch).
+			L.Top = ci.Top
 			cond := EqualObj(L, L.Stack[ra].Val, rb)
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++ // skip jump
@@ -1806,6 +1819,7 @@ startfunc:
 
 		case opcodeapi.OP_LT:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+			L.Top = ci.Top
 			cond := LessThan(L, L.Stack[ra].Val, rb)
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++
@@ -1815,6 +1829,7 @@ startfunc:
 
 		case opcodeapi.OP_LE:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+			L.Top = ci.Top
 			cond := LessEqual(L, L.Stack[ra].Val, rb)
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
 				ci.SavedPC++
