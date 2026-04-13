@@ -287,20 +287,18 @@ func adjustLocalVars(ls *lexapi.LexState, nvars int) {
 }
 
 // removeVars deactivates locals down to tolevel.
+// Unlike C Lua's removevars which decrements dyd->actvar.n (a relative shrink),
+// we do NOT shrink dyd.ActVar here. C Lua's solveGotos accesses entries past
+// the decremented .n (relying on C's lack of bounds checking). In Go, we must
+// keep those entries accessible until the function scope ends. The cleanup
+// happens in closeFunc which truncates dyd.ActVar to fs.FirstLocal.
 func removeVars(fs *FuncState, tolevel int16) {
-	dyd := fs.Lex.DynData.(*Dyndata)
-	// Set EndPC for debug info BEFORE truncating the actvar array
 	for fs.NumActVar > tolevel {
 		fs.NumActVar--
 		lv := localDebugInfo(fs, int(fs.NumActVar))
 		if lv != nil {
 			lv.EndPC = fs.PC
 		}
-	}
-	// Now safe to truncate
-	newLen := fs.FirstLocal + int(fs.NumActVar)
-	if newLen < len(dyd.ActVar) {
-		dyd.ActVar = dyd.ActVar[:newLen]
 	}
 }
 
@@ -607,7 +605,15 @@ func leaveBlock(fs *FuncState) {
 		createLabel(ls, ls.BreakName, 0, false)
 	}
 	solveGotos(fs, bl)
+	// Now that solveGotos has processed all pending gotos (adjusting their
+	// NumActVar to bl.NumActVar), it is safe to truncate dyd.ActVar.
+	// removeVars deliberately does NOT truncate (solveGotos needs the entries),
+	// so we do the equivalent of C Lua's dyd->actvar.n here.
 	dyd := ls.DynData.(*Dyndata)
+	newLen := fs.FirstLocal + int(fs.NumActVar)
+	if newLen < len(dyd.ActVar) {
+		dyd.ActVar = dyd.ActVar[:newLen]
+	}
 	if bl.Prev == nil {
 		if bl.FirstGoto < len(dyd.Gotos) {
 			undefGoto(ls, &dyd.Gotos[bl.FirstGoto])

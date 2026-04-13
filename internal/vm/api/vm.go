@@ -572,6 +572,11 @@ func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmap
 		}
 		RunError(L, "attempt to perform arithmetic on a "+objectapi.TypeNames[p1.Type()]+" value")
 	}
+	// Ensure L.Top is above res so callTMRes doesn't overwrite
+	// the destination register with its call frame arguments.
+	if res >= L.Top {
+		L.Top = res + 1
+	}
 	result := callTMRes(L, tm, p1, p2)
 	L.Stack[res].Val = result
 }
@@ -838,6 +843,12 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 			}
 		}
 		if tm.IsFunction() {
+			// Ensure L.Top is above ra so callTMRes doesn't overwrite
+			// the destination register with its call frame arguments.
+			// (ra may be beyond L.Top in complex expressions like `x == 1 and a.z`)
+			if ra >= L.Top {
+				L.Top = ra + 1
+			}
 			result := callTMRes(L, tm, t, key)
 			L.Stack[ra].Val = result
 			return
@@ -1339,6 +1350,10 @@ startfunc:
 			} else if rb.IsFloat() {
 				L.Stack[ra].Val = objectapi.MakeFloat(rb.Float() + float64(ic))
 				ci.SavedPC++
+			} else if nb, ok := ToNumber(rb); ok {
+				// String→number coercion (e.g. "10" + 5)
+				L.Stack[ra].Val = objectapi.MakeFloat(nb + float64(ic))
+				ci.SavedPC++
 			}
 			// else: fall through to MMBIN on next instruction
 
@@ -1671,6 +1686,9 @@ startfunc:
 				L.Stack[ra].Val = objectapi.MakeInteger(-rb.Integer())
 			} else if rb.IsFloat() {
 				L.Stack[ra].Val = objectapi.MakeFloat(-rb.Float())
+			} else if nb, ok := ToNumber(rb); ok {
+				// String→number coercion (e.g. -"10" == -10.0)
+				L.Stack[ra].Val = objectapi.MakeFloat(-nb)
 			} else {
 				tryBinTM(L, rb, rb, ra, mmapi.TM_UNM)
 			}
