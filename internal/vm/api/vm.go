@@ -651,20 +651,38 @@ func callTM(L *stateapi.LuaState, tm, p1, p2, p3 objectapi.TValue) {
 	Call(L, top, 0)
 }
 
+// opErrorMsg builds a type error message with optional variable info.
+// Mirrors: luaG_opinterror + luaG_typeerror in ldebug.c
+func opErrorMsg(L *stateapi.LuaState, p1, p2 objectapi.TValue, op string, reg1, reg2 int) string {
+	// Pick the wrong operand (first non-number)
+	badReg := reg1
+	badVal := p1
+	if p1.IsNumber() {
+		badReg = reg2
+		badVal = p2
+	}
+	info := ""
+	if badReg >= 0 {
+		info = VarInfo(L, badReg)
+	}
+	return "attempt to " + op + " a " + objectapi.TypeNames[badVal.Type()] + " value" + info
+}
+
 // tryBinTM tries a binary metamethod.
-func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmapi.TMS) {
+// reg1, reg2 are register hints for p1, p2 (-1 if not a register).
+func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmapi.TMS, reg1, reg2 int) {
 	tm := mmapi.GetTMByObj(L.Global, p1, event)
 	if tm.IsNil() {
 		tm = mmapi.GetTMByObj(L.Global, p2, event)
 	}
 	if tm.IsNil() {
 		if event == mmapi.TM_CONCAT {
-			RunError(L, "attempt to concatenate a "+objectapi.TypeNames[p1.Type()]+" value")
+			RunError(L, opErrorMsg(L, p1, p2, "concatenate", reg1, reg2))
 		}
 		if event >= mmapi.TM_BAND && event <= mmapi.TM_SHR || event == mmapi.TM_BNOT {
-			RunError(L, "attempt to perform bitwise operation on a "+objectapi.TypeNames[p1.Type()]+" value")
+			RunError(L, opErrorMsg(L, p1, p2, "perform bitwise operation on", reg1, reg2))
 		}
-		RunError(L, "attempt to perform arithmetic on a "+objectapi.TypeNames[p1.Type()]+" value")
+		RunError(L, opErrorMsg(L, p1, p2, "perform arithmetic on", reg1, reg2))
 	}
 	// Ensure L.Top is above res so callTMRes doesn't overwrite
 	// the destination register with its call frame arguments.
@@ -676,21 +694,21 @@ func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmap
 }
 
 // tryBiniTM tries a binary metamethod with an integer immediate operand.
-func tryBiniTM(L *stateapi.LuaState, p1 objectapi.TValue, imm int, flip bool, res int, event mmapi.TMS) {
+func tryBiniTM(L *stateapi.LuaState, p1 objectapi.TValue, imm int, flip bool, res int, event mmapi.TMS, reg1 int) {
 	p2 := objectapi.MakeInteger(int64(imm))
 	if flip {
-		tryBinTM(L, p2, p1, res, event)
+		tryBinTM(L, p2, p1, res, event, -1, reg1)
 	} else {
-		tryBinTM(L, p1, p2, res, event)
+		tryBinTM(L, p1, p2, res, event, reg1, -1)
 	}
 }
 
 // tryBinKTM tries a binary metamethod with a constant operand (possibly flipped).
-func tryBinKTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, flip bool, res int, event mmapi.TMS) {
+func tryBinKTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, flip bool, res int, event mmapi.TMS, reg1 int) {
 	if flip {
-		tryBinTM(L, p2, p1, res, event)
+		tryBinTM(L, p2, p1, res, event, -1, reg1)
 	} else {
-		tryBinTM(L, p1, p2, res, event)
+		tryBinTM(L, p1, p2, res, event, reg1, -1)
 	}
 }
 
@@ -1815,7 +1833,7 @@ startfunc:
 			tm := mmapi.TMS(opcodeapi.GetArgC(inst))
 			prevInst := code[ci.SavedPC-2]
 			result := base + opcodeapi.GetArgA(prevInst)
-			tryBinTM(L, L.Stack[ra].Val, rb, result, tm)
+			tryBinTM(L, L.Stack[ra].Val, rb, result, tm, ra-base, opcodeapi.GetArgB(inst))
 
 		case opcodeapi.OP_MMBINI:
 			imm := opcodeapi.GetArgSB(inst)
@@ -1823,7 +1841,7 @@ startfunc:
 			flip := opcodeapi.GetArgK(inst) != 0
 			prevInst := code[ci.SavedPC-2]
 			result := base + opcodeapi.GetArgA(prevInst)
-			tryBiniTM(L, L.Stack[ra].Val, imm, flip, result, tm)
+			tryBiniTM(L, L.Stack[ra].Val, imm, flip, result, tm, ra-base)
 
 		case opcodeapi.OP_MMBINK:
 			imm := k[opcodeapi.GetArgB(inst)]
@@ -1831,7 +1849,7 @@ startfunc:
 			flip := opcodeapi.GetArgK(inst) != 0
 			prevInst := code[ci.SavedPC-2]
 			result := base + opcodeapi.GetArgA(prevInst)
-			tryBinKTM(L, L.Stack[ra].Val, imm, flip, result, tm)
+			tryBinKTM(L, L.Stack[ra].Val, imm, flip, result, tm, ra-base)
 
 		// ===== Unary =====
 
@@ -1849,7 +1867,7 @@ startfunc:
 					L.Stack[ra].Val = objectapi.MakeFloat(-nb.Float())
 				}
 			} else {
-				tryBinTM(L, rb, rb, ra, mmapi.TM_UNM)
+				tryBinTM(L, rb, rb, ra, mmapi.TM_UNM, opcodeapi.GetArgB(inst), opcodeapi.GetArgB(inst))
 			}
 
 		case opcodeapi.OP_BNOT:
@@ -1858,7 +1876,7 @@ startfunc:
 			if ok {
 				L.Stack[ra].Val = objectapi.MakeInteger(^ib)
 			} else {
-				tryBinTM(L, rb, rb, ra, mmapi.TM_BNOT)
+				tryBinTM(L, rb, rb, ra, mmapi.TM_BNOT, opcodeapi.GetArgB(inst), opcodeapi.GetArgB(inst))
 			}
 
 		case opcodeapi.OP_NOT:

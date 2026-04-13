@@ -1,13 +1,14 @@
 package api
 
-// debug.go — Line number tracking and error message formatting.
-// Mirrors: luaG_getfuncline, luaG_addinfo from ldebug.c
+// debug.go — Line number tracking, error message formatting, and variable info.
+// Mirrors: luaG_getfuncline, luaG_addinfo, varinfo, kname from ldebug.c
 
 import (
 	"fmt"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
+	opcodeapi "github.com/akzj/go-lua/internal/opcode/api"
 	stateapi "github.com/akzj/go-lua/internal/state/api"
 )
 
@@ -122,4 +123,102 @@ func addInfo(L *stateapi.LuaState, msg string) string {
 		src = ShortSrc(cl.Proto.Source.Data)
 	}
 	return fmt.Sprintf("%s:%d: %s", src, line, msg)
+}
+
+// ---------------------------------------------------------------------------
+// Variable info for error messages
+// Mirrors: varinfo, kname, basicgetobjname from ldebug.c
+// ---------------------------------------------------------------------------
+
+// kname returns ("constant", name) if K[index] is a string constant.
+// Mirrors: kname in ldebug.c
+func kname(p *objectapi.Proto, index int) (kind string, name string) {
+	if index < 0 || index >= len(p.Constants) {
+		return "", "?"
+	}
+	kv := p.Constants[index]
+	if kv.IsString() {
+		return "constant", kv.Val.(*objectapi.LuaString).Data
+	}
+	if kv.IsInteger() {
+		return "constant", fmt.Sprintf("%d", kv.Val.(int64))
+	}
+	if kv.IsFloat() {
+		return "constant", fmt.Sprintf("%g", kv.Val.(float64))
+	}
+	return "", "?"
+}
+
+// findSetReg scans backward from 'lastpc' to find the instruction that
+// last set register 'reg'. Returns the PC of that instruction, or -1.
+// Simplified version of findsetreg in ldebug.c.
+func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
+	for pc := lastpc - 1; pc >= 0; pc-- {
+		inst := p.Code[pc]
+		op := opcodeapi.GetOpCode(inst)
+		a := opcodeapi.GetArgA(inst)
+		switch op {
+		case opcodeapi.OP_LOADK, opcodeapi.OP_LOADKX, opcodeapi.OP_LOADFALSE,
+			opcodeapi.OP_LOADTRUE, opcodeapi.OP_LOADNIL, opcodeapi.OP_LOADI,
+			opcodeapi.OP_LOADF, opcodeapi.OP_MOVE, opcodeapi.OP_GETUPVAL:
+			if a == reg {
+				return pc
+			}
+		}
+	}
+	return -1
+}
+
+// basicGetObjName traces the origin of register 'reg' at 'pc' in proto 'p'.
+// Returns (kind, name) where kind is "constant", "local", "upvalue", or "".
+// Simplified version of basicgetobjname in ldebug.c.
+func basicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name string) {
+	setpc := findSetReg(p, pc, reg)
+	if setpc < 0 {
+		return "", ""
+	}
+	inst := p.Code[setpc]
+	op := opcodeapi.GetOpCode(inst)
+	switch op {
+	case opcodeapi.OP_LOADK:
+		return kname(p, opcodeapi.GetArgBx(inst))
+	case opcodeapi.OP_LOADKX:
+		if setpc+1 < len(p.Code) {
+			return kname(p, opcodeapi.GetArgAx(p.Code[setpc+1]))
+		}
+	case opcodeapi.OP_MOVE:
+		b := opcodeapi.GetArgB(inst)
+		if b < opcodeapi.GetArgA(inst) {
+			return basicGetObjName(p, setpc, b)
+		}
+	case opcodeapi.OP_GETUPVAL:
+		b := opcodeapi.GetArgB(inst)
+		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil {
+			return "upvalue", p.Upvalues[b].Name.Data
+		}
+	}
+	return "", ""
+}
+
+// VarInfo returns a formatted variable description for a register value,
+// e.g. " (constant '15')" or " (local 'x')". Returns "" if unknown.
+// Mirrors: varinfo + formatvarinfo in ldebug.c
+func VarInfo(L *stateapi.LuaState, reg int) string {
+	ci := L.CI
+	if ci == nil || !ci.IsLua() {
+		return ""
+	}
+	cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	if !ok || cl.Proto == nil {
+		return ""
+	}
+	pc := ci.SavedPC - 1
+	if pc < 0 {
+		pc = 0
+	}
+	kind, name := basicGetObjName(cl.Proto, pc, reg)
+	if kind == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (%s '%s')", kind, name)
 }
