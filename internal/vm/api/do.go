@@ -63,8 +63,7 @@ func SetErrorObj(L *stateapi.LuaState, errcode int, oldtop int) {
 // ErrorErr raises an error during error handling (error in error handler).
 // Mirrors: luaD_errerr in ldo.c
 func ErrorErr(L *stateapi.LuaState) {
-	msg := &objectapi.LuaString{Data: "error in error handling", IsShort: true}
-	L.Stack[L.Top].Val = objectapi.MakeString(msg)
+	L.Stack[L.Top].Val = makeInternedString(L, "error in error handling")
 	L.Top++
 	Throw(L, stateapi.StatusErrErr)
 }
@@ -97,8 +96,7 @@ func ErrorMsg(L *stateapi.LuaState) {
 // Mirrors: luaG_runerror in ldebug.c — adds source:line: prefix for Lua frames.
 func RunError(L *stateapi.LuaState, msg string) {
 	msg = addInfo(L, msg)
-	s := &objectapi.LuaString{Data: msg, IsShort: len(msg) <= 40}
-	stateapi.PushValue(L, objectapi.MakeString(s))
+	stateapi.PushValue(L, makeInternedString(L, msg))
 	ErrorMsg(L)
 }
 
@@ -456,8 +454,7 @@ func RunProtected(L *stateapi.LuaState, f func()) (status int) {
 				// Convert syntax error to LUA_ERRSYNTAX
 				// Push error message string on stack
 				errStr := e.Error()
-				ls := &objectapi.LuaString{Data: errStr, IsShort: len(errStr) <= 40}
-				stateapi.PushValue(L, objectapi.MakeString(ls))
+				stateapi.PushValue(L, makeInternedString(L, errStr))
 				status = stateapi.StatusErrSyntax
 				L.NCCalls = oldNCCalls
 			default:
