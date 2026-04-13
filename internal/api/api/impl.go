@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -859,6 +860,23 @@ func (L *State) DoFile(filename string) error {
 			code = code[idx+1:]
 		}
 	}
+
+	// Prepend script's directory to package.path so require can find
+	// sibling .lua modules (e.g., tracegc.lua in the testes directory).
+	dir := filepath.Dir(filename)
+	if dir != "" {
+		L.GetGlobal("package")
+		if !L.IsNil(-1) {
+			L.GetField(-1, "path")
+			oldPath, _ := L.ToString(-1)
+			L.Pop(1) // pop old path
+			newPath := dir + string(filepath.Separator) + "?.lua;" + oldPath
+			L.PushString(newPath)
+			L.SetField(-2, "path")
+		}
+		L.Pop(1) // pop package table
+	}
+
 	source := "@" + filename
 	status := L.Load(code, source, "t")
 	if status != StatusOK {

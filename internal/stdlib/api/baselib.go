@@ -29,20 +29,104 @@ func luaB_print(L *luaapi.State) int {
 	return 0
 }
 
-// luaB_require — minimal require: looks up module in package.loaded (registry "_LOADED").
-// Does NOT support searchers/loaders — only pre-loaded modules work.
+// luaB_require — require with file-based Lua module loading.
+// 1. Check package.loaded (registry "_LOADED")
+// 2. If not found, search package.path for a .lua file
+// 3. Load and execute it, store result in _LOADED
 func luaB_require(L *luaapi.State) int {
 	name := L.CheckString(1)
-	// Get _LOADED table from registry
+
+	// Step 1: Check _LOADED
 	L.GetField(luaapi.RegistryIndex, "_LOADED")
 	tp := L.GetField(-1, name) // _LOADED[name]
 	if tp != objectapi.TypeNil {
 		L.Remove(-2) // remove _LOADED, keep module
 		return 1
 	}
-	L.Pop(2) // pop nil and _LOADED
-	L.Errorf("module '%s' not found", name)
-	return 0 // unreachable
+	L.Pop(1) // pop nil, keep _LOADED on stack (index -1)
+
+	// Step 2: Search package.path for a .lua file
+	filename := searchPackagePath(L, name)
+	if filename == "" {
+		L.Pop(1) // pop _LOADED
+		L.Errorf("module '%s' not found", name)
+		return 0
+	}
+
+	// Step 3: Load and execute the file
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		L.Pop(1) // pop _LOADED
+		L.Errorf("cannot read '%s': %v", filename, err)
+		return 0
+	}
+	code := string(data)
+	source := "@" + filename
+	status := L.Load(code, source, "t")
+	if status != luaapi.StatusOK {
+		msg, _ := L.ToString(-1)
+		L.Pop(2) // pop error + _LOADED
+		L.Errorf("error loading module '%s' from file '%s':\n\t%s", name, filename, msg)
+		return 0
+	}
+
+	// Push module name as argument (Lua convention)
+	L.PushString(name)
+	// PCall(1 arg, 1 result)
+	status = L.PCall(1, 1, 0)
+	if status != luaapi.StatusOK {
+		msg, _ := L.ToString(-1)
+		L.Pop(2) // pop error + _LOADED
+		L.Errorf("error running module '%s':\n\t%s", name, msg)
+		return 0
+	}
+
+	// If module returned nil/nothing, use true as the loaded value
+	if L.IsNil(-1) {
+		L.Pop(1)
+		L.PushBoolean(true)
+	}
+
+	// Store in _LOADED: _LOADED[name] = result
+	L.PushValue(-1)           // dup result
+	L.SetField(-3, name)      // _LOADED[name] = result
+	L.Remove(-2)              // remove _LOADED, keep result
+	return 1
+}
+
+// searchPackagePath searches package.path for a file matching the module name.
+// Replaces '?' in each template with name (with '.' replaced by OS separator).
+// Returns the first readable file path, or "" if not found.
+func searchPackagePath(L *luaapi.State, name string) string {
+	// Get package.path from the global "package" table
+	L.GetGlobal("package")
+	if L.IsNil(-1) {
+		L.Pop(1)
+		return ""
+	}
+	L.GetField(-1, "path")
+	path, ok := L.ToString(-1)
+	L.Pop(2) // pop path string and package table
+	if !ok || path == "" {
+		return ""
+	}
+
+	// Replace '.' in module name with '/' (directory separator)
+	fname := strings.ReplaceAll(name, ".", string(os.PathSeparator))
+
+	// Split path by ';' and try each template
+	templates := strings.Split(path, ";")
+	for _, tmpl := range templates {
+		tmpl = strings.TrimSpace(tmpl)
+		if tmpl == "" {
+			continue
+		}
+		candidate := strings.ReplaceAll(tmpl, "?", fname)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func luaB_warn(L *luaapi.State) int {
