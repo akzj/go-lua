@@ -42,6 +42,18 @@ func ToNumber(v objectapi.TValue) (float64, bool) {
 }
 
 // ToInteger tries to convert a TValue to int64.
+// toIntegerStrict converts a TValue to int64 without string coercion.
+// Used for bitwise ops which in Lua 5.5 do NOT coerce strings.
+func toIntegerStrict(v objectapi.TValue) (int64, bool) {
+	switch v.Tt {
+	case objectapi.TagInteger:
+		return v.Val.(int64), true
+	case objectapi.TagFloat:
+		return FloatToInteger(v.Val.(float64))
+	}
+	return 0, false
+}
+
 func ToInteger(v objectapi.TValue) (int64, bool) {
 	switch v.Tt {
 	case objectapi.TagInteger:
@@ -648,6 +660,9 @@ func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmap
 	if tm.IsNil() {
 		if event == mmapi.TM_CONCAT {
 			RunError(L, "attempt to concatenate a "+objectapi.TypeNames[p1.Type()]+" value")
+		}
+		if event >= mmapi.TM_BAND && event <= mmapi.TM_SHR || event == mmapi.TM_BNOT {
+			RunError(L, "attempt to perform bitwise operation on a "+objectapi.TypeNames[p1.Type()]+" value")
 		}
 		RunError(L, "attempt to perform arithmetic on a "+objectapi.TypeNames[p1.Type()]+" value")
 	}
@@ -1591,8 +1606,8 @@ startfunc:
 		case opcodeapi.OP_BANDK:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			kc := k[opcodeapi.GetArgC(inst)]
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(kc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(kc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ib & ic)
 				ci.SavedPC++
@@ -1601,8 +1616,8 @@ startfunc:
 		case opcodeapi.OP_BORK:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			kc := k[opcodeapi.GetArgC(inst)]
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(kc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(kc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ib | ic)
 				ci.SavedPC++
@@ -1611,8 +1626,8 @@ startfunc:
 		case opcodeapi.OP_BXORK:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			kc := k[opcodeapi.GetArgC(inst)]
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(kc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(kc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ib ^ ic)
 				ci.SavedPC++
@@ -1621,7 +1636,7 @@ startfunc:
 		case opcodeapi.OP_SHLI:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			ic := int64(opcodeapi.GetArgSC(inst))
-			ib, ok := ToInteger(rb)
+			ib, ok := toIntegerStrict(rb)
 			if ok {
 				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ic, ib))
 				ci.SavedPC++
@@ -1630,7 +1645,7 @@ startfunc:
 		case opcodeapi.OP_SHRI:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			ic := int64(opcodeapi.GetArgSC(inst))
-			ib, ok := ToInteger(rb)
+			ib, ok := toIntegerStrict(rb)
 			if ok {
 				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ib, -ic))
 				ci.SavedPC++
@@ -1746,8 +1761,8 @@ startfunc:
 		case opcodeapi.OP_BAND:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(rc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ib & ic)
 				ci.SavedPC++
@@ -1756,8 +1771,8 @@ startfunc:
 		case opcodeapi.OP_BOR:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(rc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ib | ic)
 				ci.SavedPC++
@@ -1766,8 +1781,8 @@ startfunc:
 		case opcodeapi.OP_BXOR:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(rc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ib ^ ic)
 				ci.SavedPC++
@@ -1776,8 +1791,8 @@ startfunc:
 		case opcodeapi.OP_SHL:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(rc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ib, ic))
 				ci.SavedPC++
@@ -1786,8 +1801,8 @@ startfunc:
 		case opcodeapi.OP_SHR:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
-			ib, ok1 := ToInteger(rb)
-			ic, ok2 := ToInteger(rc)
+			ib, ok1 := toIntegerStrict(rb)
+			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ib, -ic))
 				ci.SavedPC++
@@ -1839,7 +1854,7 @@ startfunc:
 
 		case opcodeapi.OP_BNOT:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			ib, ok := ToInteger(rb)
+			ib, ok := toIntegerStrict(rb)
 			if ok {
 				L.Stack[ra].Val = objectapi.MakeInteger(^ib)
 			} else {
