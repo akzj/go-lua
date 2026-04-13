@@ -295,23 +295,75 @@ func ShiftL(x, y int64) int64 {
 // ---------------------------------------------------------------------------
 
 // ltIntFloat checks i < f with proper handling of precision.
+// intFitsFloat checks whether an integer can be converted to float64 without
+// rounding (i.e., it fits in the 53-bit mantissa of IEEE 754 double).
+const maxIntFitsFloat = int64(1) << 53
+
+func intFitsFloat(i int64) bool {
+	// Check if i is in [-2^53, 2^53]
+	return uint64(maxIntFitsFloat+i) <= uint64(2*maxIntFitsFloat)
+}
+
+// ltIntFloat checks i < f with full precision (mirrors C Lua's LTintfloat).
 func ltIntFloat(i int64, f float64) bool {
-	return float64(i) < f
+	if f != f { // NaN
+		return false
+	}
+	if intFitsFloat(i) {
+		return float64(i) < f
+	}
+	// i doesn't fit in float — convert f to int using ceil, then compare as ints
+	// i < f  ⟺  i < ceil(f)
+	if fi, ok := floatToIntegerCeil(f); ok {
+		return i < fi
+	}
+	// f is outside int64 range — result depends on sign of f
+	return f > 0
 }
 
-// leIntFloat checks i <= f.
+// leIntFloat checks i <= f with full precision (mirrors C Lua's LEintfloat).
 func leIntFloat(i int64, f float64) bool {
-	return float64(i) <= f
+	if f != f {
+		return false
+	}
+	if intFitsFloat(i) {
+		return float64(i) <= f
+	}
+	// i <= f  ⟺  i <= floor(f)
+	if fi, ok := floatToIntegerFloor(f); ok {
+		return i <= fi
+	}
+	return f > 0
 }
 
-// ltFloatInt checks f < i.
+// ltFloatInt checks f < i with full precision (mirrors C Lua's LTfloatint).
 func ltFloatInt(f float64, i int64) bool {
-	return f < float64(i)
+	if f != f {
+		return false
+	}
+	if intFitsFloat(i) {
+		return f < float64(i)
+	}
+	// f < i  ⟺  floor(f) < i
+	if fi, ok := floatToIntegerFloor(f); ok {
+		return fi < i
+	}
+	return f < 0
 }
 
-// leFloatInt checks f <= i.
+// leFloatInt checks f <= i with full precision (mirrors C Lua's LEfloatint).
 func leFloatInt(f float64, i int64) bool {
-	return f <= float64(i)
+	if f != f {
+		return false
+	}
+	if intFitsFloat(i) {
+		return f <= float64(i)
+	}
+	// f <= i  ⟺  ceil(f) <= i
+	if fi, ok := floatToIntegerCeil(f); ok {
+		return fi <= i
+	}
+	return f < 0
 }
 
 // ltNum compares two numbers (l < r).
@@ -395,8 +447,8 @@ func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) b
 
 // EqualObj performs t1 == t2 with metamethods.
 func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
-	if t1.Type() != t2.Type() {
-		// Different base types — check int/float cross-comparison
+	if t1.Tt != t2.Tt {
+		// Different tags — check int/float cross-comparison
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
 				i2, ok := FloatToInteger(t2.Val.(float64))
@@ -466,7 +518,7 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 
 // RawEqualObj performs raw equality (no metamethods).
 func RawEqualObj(t1, t2 objectapi.TValue) bool {
-	if t1.Type() != t2.Type() {
+	if t1.Tt != t2.Tt {
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
 				i2, ok := FloatToInteger(t2.Val.(float64))
