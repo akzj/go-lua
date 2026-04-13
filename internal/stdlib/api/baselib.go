@@ -405,8 +405,14 @@ func luaB_load(L *luaapi.State) int {
 	s, ok := L.ToString(1)
 	if ok { // loading a string
 		chunkname := L.OptString(2, s)
+		// arg 3: mode (ignored — we always accept text)
 		status := L.Load(s, chunkname, "bt")
 		if status == luaapi.StatusOK {
+			// arg 4: env table — if provided, replace _ENV upvalue
+			if !L.IsNone(4) && !L.IsNil(4) {
+				L.PushValue(4)      // push env table
+				L.SetUpvalue(-2, 1) // set upvalue[1] of the closure at -2
+			}
 			return 1
 		}
 		// error: push fail, then swap with error message
