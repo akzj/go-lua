@@ -63,9 +63,16 @@ func RunGoLua(t *testing.T, code string) string {
 	L.PushCFunction(capturePrint)
 	L.SetGlobal("print")
 
-	err := L.DoString(code)
-	if err != nil {
-		t.Fatalf("go-lua failed: %v\ncode: %s", err, code)
+	// Use Load + PCall with source "=(command line)" to match C Lua's -e flag
+	status := L.Load(code, "=(command line)", "t")
+	if status != 0 {
+		msg, _ := L.ToString(-1)
+		t.Fatalf("go-lua load failed: %s\ncode: %s", msg, code)
+	}
+	status = L.PCall(0, -1, 0)
+	if status != 0 {
+		msg, _ := L.ToString(-1)
+		t.Fatalf("go-lua failed: %s\ncode: %s", msg, code)
 	}
 	return buf.String()
 }
