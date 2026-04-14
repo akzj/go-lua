@@ -8,6 +8,7 @@ import (
 
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
+	vmapi "github.com/akzj/go-lua/internal/vm/api"
 )
 
 // ---------------------------------------------------------------------------
@@ -1406,11 +1407,26 @@ func readInt(data string, pos, size int, little, signed bool) int64 {
 	return int64(v)
 }
 
+// str_dump implements string.dump(function [, strip])
+// Mirrors: str_dump in lstrlib.c
+func str_dump(L *luaapi.State) int {
+	L.CheckType(1, objectapi.TypeFunction)
+	cl := L.GetLClosure(1)
+	if cl == nil {
+		L.ArgError(1, "Lua function expected")
+	}
+	strip := L.ToBoolean(2)
+	data := vmapi.DumpProto(cl.Proto, strip)
+	L.PushString(string(data))
+	return 1
+}
+
 // OpenString opens the string library.
 func OpenString(L *luaapi.State) int {
 	strFuncs := map[string]luaapi.CFunction{
 		"byte":     str_byte,
 		"char":     str_char,
+		"dump":     str_dump,
 		"find":     str_find,
 		"format":   str_format,
 		"gmatch":   str_gmatch,
