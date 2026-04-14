@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -610,6 +611,10 @@ func (L *State) SetTable(idx int) {
 		tbl := t.Val.(*tableapi.Table)
 		key := ls.Stack[ls.Top-2].Val
 		val := ls.Stack[ls.Top-1].Val
+		// Check for NaN key — C Lua raises error, not panic
+		if key.IsFloat() && math.IsNaN(key.Float()) {
+			L.Errorf("table index is NaN")
+		}
 		tbl.Set(key, val)
 	}
 	ls.Top -= 2
@@ -1216,14 +1221,14 @@ func (L *State) Require(modname string, openf CFunction, global bool) {
 	L.Call(1, 1) // call openf(modname) -> module table on top
 
 	// Store in package.loaded
-	L.PushValue(-1)          // copy module
-	L.SetField(-3, modname)  // _LOADED[modname] = module
+	L.PushValue(-1)         // copy module
+	L.SetField(-3, modname) // _LOADED[modname] = module
 
 	L.Remove(-2) // remove _LOADED table, keep module on top
 
 	if global {
-		L.PushValue(-1)       // copy module
-		L.SetGlobal(modname)  // _G[modname] = module
+		L.PushValue(-1)      // copy module
+		L.SetGlobal(modname) // _G[modname] = module
 	}
 }
 
@@ -1374,9 +1379,9 @@ func shortSrc(source string) string {
 // ---------------------------------------------------------------------------
 
 func (L *State) SetHook(f interface{}, mask, count int) {}
-func (L *State) GetHook() interface{}                    { return nil }
-func (L *State) GetHookMask() int                        { return 0 }
-func (L *State) GetHookCount() int                       { return 0 }
+func (L *State) GetHook() interface{}                   { return nil }
+func (L *State) GetHookMask() int                       { return 0 }
+func (L *State) GetHookCount() int                      { return 0 }
 
 // GetFuncProtoInfo inspects a Lua closure at stack index `idx` and returns
 // its Proto metadata. For C functions returns defaults with ok=false.
@@ -1407,33 +1412,33 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 func shortSrcStr(source string) string {
 	return shortSrc(source)
 }
-func (L *State) GetLocal(ar *DebugInfo, n int) string    { return "" }
-func (L *State) SetLocal(ar *DebugInfo, n int) string    { return "" }
+func (L *State) GetLocal(ar *DebugInfo, n int) string { return "" }
+func (L *State) SetLocal(ar *DebugInfo, n int) string { return "" }
 
 // ---------------------------------------------------------------------------
 // Coroutine API (stubs)
 // ---------------------------------------------------------------------------
 
-func (L *State) NewThread() *State     { return nil }
+func (L *State) NewThread() *State { return nil }
 func (L *State) PushThread() bool {
 	ls := L.ls()
 	L.push(objectapi.TValue{Tt: objectapi.TagThread, Val: ls})
 	return ls.Global.MainThread == ls || ls.Global.MainThread == nil
 }
-func (L *State) Resume(from *State, nArgs int) (int, bool) { return 0, false }
+func (L *State) Resume(from *State, nArgs int) (int, bool)     { return 0, false }
 func (L *State) YieldK(nResults int, ctx int, k CFunction) int { return 0 }
-func (L *State) Yield(nResults int) int { return 0 }
-func (L *State) IsYieldable() bool     { return false }
-func (L *State) XMove(to *State, n int) {}
-func (L *State) ToThread(idx int) *State { return nil }
+func (L *State) Yield(nResults int) int                        { return 0 }
+func (L *State) IsYieldable() bool                             { return false }
+func (L *State) XMove(to *State, n int)                        {}
+func (L *State) ToThread(idx int) *State                       { return nil }
 
 // ---------------------------------------------------------------------------
 // Userdata API (stubs)
 // ---------------------------------------------------------------------------
 
-func (L *State) ToUserdata(idx int) interface{}                    { return nil }
-func (L *State) GetIUserValue(idx int, n int) objectapi.Type       { return 0 }
-func (L *State) SetIUserValue(idx int, n int) bool                 { return false }
+func (L *State) ToUserdata(idx int) interface{}              { return nil }
+func (L *State) GetIUserValue(idx int, n int) objectapi.Type { return 0 }
+func (L *State) SetIUserValue(idx int, n int) bool           { return false }
 func (L *State) ToPointer(idx int) string {
 	v := L.index2val(idx)
 	if v == nil || v.Val == nil {
@@ -1618,11 +1623,10 @@ func (L *State) GetSubTable(idx int, fname string) bool {
 	L.Pop(1) // remove previous result
 	idx = L.AbsIndex(idx)
 	L.NewTable()
-	L.PushValue(-1)         // copy to be left at top
-	L.SetField(idx, fname)  // assign new table to field
+	L.PushValue(-1)        // copy to be left at top
+	L.SetField(idx, fname) // assign new table to field
 	return false
 }
-
 
 // DebugGetProto returns the Proto of the LClosure at top of stack (for testing).
 func DebugGetProto(L *State) *objectapi.Proto {
