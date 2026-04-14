@@ -247,43 +247,41 @@ func sortComp(L *luaapi.State, a, b int64, hasComp bool) bool {
 
 func auxSort(L *luaapi.State, lo, up int64, hasComp bool) {
 	for lo < up {
-		// small arrays use insertion sort
-		if up-lo < 10 {
-			for i := lo + 1; i <= up; i++ {
-				for j := i; j > lo && sortComp(L, j, j-1, hasComp); j-- {
-					// swap t[j] and t[j-1]
-					L.GetI(1, j)
-					L.GetI(1, j-1)
-					L.SetI(1, j)
-					L.SetI(1, j-1)
-				}
-			}
-			return
-		}
-		// choose pivot as median of lo, mid, up
-		mid := lo + (up-lo)/2
-		// sort lo, mid, up
-		if sortComp(L, mid, lo, hasComp) {
-			swapI(L, lo, mid)
-		}
+		// Sort elements lo, mid, up (median-of-three)
 		if sortComp(L, up, lo, hasComp) {
 			swapI(L, lo, up)
 		}
-		if sortComp(L, up, mid, hasComp) {
+		if up-lo == 1 { // only 2 elements
+			return
+		}
+		mid := lo + (up-lo)/2
+		// Sort lo, mid, up
+		if sortComp(L, mid, lo, hasComp) {
+			swapI(L, mid, lo)
+		} else if sortComp(L, up, mid, hasComp) {
 			swapI(L, mid, up)
 		}
-		// pivot is at mid, move to up-1
+		if up-lo == 2 { // only 3 elements
+			return
+		}
+		// Move pivot (mid) to up-1
 		swapI(L, mid, up-1)
-		pivot := up - 1
+		// Partition [lo+1..up-2] around pivot at up-1
 		i := lo
 		j := up - 1
 		for {
 			i++
-			for sortComp(L, i, pivot, hasComp) {
+			for sortComp(L, i, up-1, hasComp) {
+				if i >= up-1 {
+					L.Errorf("invalid order function for sorting")
+				}
 				i++
 			}
 			j--
-			for sortComp(L, pivot, j, hasComp) {
+			for sortComp(L, up-1, j, hasComp) {
+				if j < i {
+					L.Errorf("invalid order function for sorting")
+				}
 				j--
 			}
 			if i >= j {
@@ -291,8 +289,9 @@ func auxSort(L *luaapi.State, lo, up int64, hasComp bool) {
 			}
 			swapI(L, i, j)
 		}
-		swapI(L, i, pivot)
-		// recurse on smaller partition, iterate on larger
+		// Put pivot in final position
+		swapI(L, i, up-1)
+		// Recurse on smaller partition, iterate on larger
 		if i-lo < up-i {
 			auxSort(L, lo, i-1, hasComp)
 			lo = i + 1
