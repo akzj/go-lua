@@ -195,7 +195,8 @@ func strToInt(s string, base int) (int64, bool) {
 		return 0, false
 	}
 	var n uint64
-	for _, c := range s {
+	foundDigit := false
+	for i, c := range s {
 		var digit int
 		if c >= '0' && c <= '9' {
 			digit = int(c - '0')
@@ -204,14 +205,23 @@ func strToInt(s string, base int) (int64, bool) {
 		} else if c >= 'A' && c <= 'Z' {
 			digit = int(c-'A') + 10
 		} else if unicode.IsSpace(c) {
-			break // trailing spaces ok
+			// Verify rest is all whitespace
+			rest := s[i:]
+			if strings.TrimSpace(rest) != "" {
+				return 0, false
+			}
+			break
 		} else {
 			return 0, false
 		}
 		if digit >= base {
 			return 0, false
 		}
+		foundDigit = true
 		n = n*uint64(base) + uint64(digit)
+	}
+	if !foundDigit {
+		return 0, false
 	}
 	if neg {
 		return -int64(n), true
