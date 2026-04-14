@@ -1423,21 +1423,100 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string { return "" }
 func (L *State) SetLocal(ar *DebugInfo, n int) string { return "" }
 
 // ---------------------------------------------------------------------------
-// Coroutine API (stubs)
+// Coroutine API
 // ---------------------------------------------------------------------------
 
-func (L *State) NewThread() *State { return nil }
+// NewThread creates a new Lua thread (coroutine), pushes it on the stack,
+// and returns a *State representing the new thread.
+// Mirrors: lua_newthread in lstate.c
+func (L *State) NewThread() *State {
+	ls := L.ls()
+	L1 := stateapi.NewThread(ls)
+	// Push the new thread onto the parent's stack
+	L.push(objectapi.TValue{Tt: objectapi.TagThread, Val: L1})
+	return &State{Internal: L1}
+}
+
+// PushThread pushes the running thread onto its own stack.
+// Returns true if the thread is the main thread.
 func (L *State) PushThread() bool {
 	ls := L.ls()
 	L.push(objectapi.TValue{Tt: objectapi.TagThread, Val: ls})
 	return ls.Global.MainThread == ls || ls.Global.MainThread == nil
 }
-func (L *State) Resume(from *State, nArgs int) (int, bool)     { return 0, false }
-func (L *State) YieldK(nResults int, ctx int, k CFunction) int { return 0 }
-func (L *State) Yield(nResults int) int                        { return 0 }
-func (L *State) IsYieldable() bool                             { return false }
-func (L *State) XMove(to *State, n int)                        {}
-func (L *State) ToThread(idx int) *State                       { return nil }
+
+// Resume starts or resumes a coroutine.
+// Returns (status, ok) where ok=true if status is OK or YIELD.
+// Mirrors: lua_resume in ldo.c
+func (L *State) Resume(from *State, nArgs int) (int, bool) {
+	ls := L.ls()
+	var fromLS *stateapi.LuaState
+	if from != nil {
+		fromLS = from.ls()
+	}
+	status, _ := vmapi.Resume(ls, fromLS, nArgs)
+	ok := status == stateapi.StatusOK || status == stateapi.StatusYield
+	return status, ok
+}
+
+// YieldK yields a coroutine with a continuation function.
+// Mirrors: lua_yieldk in ldo.c
+func (L *State) YieldK(nResults int, ctx int, k CFunction) int {
+	ls := L.ls()
+	if k != nil {
+		ci := ls.CI
+		ci.K = func(innerL *stateapi.LuaState, status int, context int) int {
+			wrapper := &State{Internal: innerL}
+			return k(wrapper)
+		}
+		ci.Ctx = ctx
+	}
+	vmapi.Yield(ls, nResults)
+	return 0 // unreachable — Yield panics with LuaYield
+}
+
+// Yield yields a coroutine (no continuation).
+func (L *State) Yield(nResults int) int {
+	return L.YieldK(nResults, 0, nil)
+}
+
+// IsYieldable returns true if the running coroutine can yield.
+func (L *State) IsYieldable() bool {
+	return L.ls().Yieldable()
+}
+
+// XMove moves n values from L's stack to to's stack.
+// Mirrors: lua_xmove in lapi.c
+func (L *State) XMove(to *State, n int) {
+	if L == to {
+		return
+	}
+	fromLS := L.ls()
+	toLS := to.ls()
+	fromLS.Top -= n
+	for i := 0; i < n; i++ {
+		stateapi.PushValue(toLS, fromLS.Stack[fromLS.Top+i].Val)
+	}
+}
+
+// ToThread converts the value at the given index to a *State (thread).
+// Returns nil if the value is not a thread.
+func (L *State) ToThread(idx int) *State {
+	v := L.index2val(idx)
+	if v.Tt != objectapi.TagThread {
+		return nil
+	}
+	ls, ok := v.Val.(*stateapi.LuaState)
+	if !ok {
+		return nil
+	}
+	return &State{Internal: ls}
+}
+
+// Status returns the status of the coroutine L.
+func (L *State) Status() int {
+	return L.ls().Status
+}
 
 // ---------------------------------------------------------------------------
 // Userdata API (stubs)
