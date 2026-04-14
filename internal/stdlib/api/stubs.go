@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	luaapi "github.com/akzj/go-lua/internal/api/api"
+	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
 
 func OpenIO(L *luaapi.State) int {
@@ -45,6 +46,7 @@ func OpenDebug(L *luaapi.State) int {
 		"traceback":    debugTraceback,
 		"getinfo":      debugGetinfo,
 		"getupvalue":   debugGetupvalue,
+		"setupvalue":   debugSetupvalue,
 		"sethook":      debugSethook,
 	})
 	return 1
@@ -255,15 +257,30 @@ func debugGetinfo(L *luaapi.State) int {
 
 // debug.getupvalue(f, up) — returns name and value of upvalue
 func debugGetupvalue(L *luaapi.State) int {
+	L.CheckType(1, objectapi.TypeFunction)
 	n := int(L.CheckInteger(2))
 	name := L.GetUpvalue(1, n)
 	if name == "" {
-		L.PushNil()
-		return 1
+		return 0 // no results when upvalue doesn't exist (matches C Lua)
 	}
 	L.PushString(name) // push name
 	L.Insert(-2)       // move name before value (GetUpvalue already pushed value)
 	return 2
+}
+
+// debug.setupvalue(f, up, value) — sets upvalue and returns its name
+func debugSetupvalue(L *luaapi.State) int {
+	L.CheckAny(3)
+	L.CheckType(1, objectapi.TypeFunction)
+	n := int(L.CheckInteger(2))
+	// SetUpvalue pops the value from the top of the stack
+	L.PushValue(3) // push the value to top for SetUpvalue to consume
+	name := L.SetUpvalue(1, n)
+	if name == "" {
+		return 0 // no results when upvalue doesn't exist
+	}
+	L.PushString(name)
+	return 1
 }
 
 // debug.sethook([thread,] hook, mask [, count]) — stub (no-op)
