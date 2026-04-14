@@ -464,8 +464,10 @@ func luaB_load(L *luaapi.State) int {
 func loadAux(L *luaapi.State, status, env int) int {
 	if status == luaapi.StatusOK {
 		if env != 0 {
-			L.PushValue(env)    // push env table
-			L.SetUpvalue(-2, 1) // set _ENV upvalue
+			L.PushValue(env) // push env table
+			if L.SetUpvalue(-2, 1) == "" {
+				L.Pop(1) // remove 'env' if not used (no upvalue to set)
+			}
 		}
 		return 1
 	}
