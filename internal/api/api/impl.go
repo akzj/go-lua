@@ -874,6 +874,16 @@ func (L *State) Load(code string, name string, mode string) int {
 		}
 		// Push the closure onto the stack
 		L.push(objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
+		// Set _ENV (first upvalue) to the global table.
+		// C Lua's lua_load does this after luaD_protectedparser:
+		//   if (f->nupvalues >= 1) { setobj(L, f->upvals[0]->v.p, &gt); }
+		if len(cl.UpVals) > 0 && cl.UpVals[0] != nil {
+			gt := vmapi.GetGlobalTable(ls)
+			cl.UpVals[0].Own = objectapi.TValue{
+				Tt:  objectapi.TagTable,
+				Val: gt,
+			}
+		}
 		return StatusOK
 	}
 
