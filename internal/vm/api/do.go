@@ -449,10 +449,18 @@ retry:
 // Call performs a function call. For Lua functions, calls Execute.
 // Mirrors: luaD_call / ccall in ldo.c
 func Call(L *stateapi.LuaState, funcIdx int, nResults int) {
-	// Increment C call depth
+	// Increment C call depth and check for overflow.
+	// Mirrors C Lua's luaE_incCstack + luaE_checkcstack:
+	//   == MaxCCalls: raise "C stack overflow" (error handler gets 10% buffer)
+	//   >= MaxCCalls * 11/10: ErrorErr (no handler, exhausted buffer)
 	L.NCCalls++
 	if L.CCalls() >= stateapi.MaxCCalls {
-		RunError(L, "C stack overflow")
+		if L.CCalls() == stateapi.MaxCCalls {
+			RunError(L, "C stack overflow")
+		} else if L.CCalls() >= stateapi.MaxCCalls*11/10 {
+			ErrorErr(L)
+		}
+		// Between MaxCCalls and MaxCCalls*1.1: allow (error handler buffer)
 	}
 	ci := PreCall(L, funcIdx, nResults)
 	if ci != nil {
@@ -468,7 +476,11 @@ func Call(L *stateapi.LuaState, funcIdx int, nResults int) {
 func CallNoYield(L *stateapi.LuaState, funcIdx int, nResults int) {
 	L.NCCalls += 0x00010001 // increment both C calls and non-yieldable count
 	if L.CCalls() >= stateapi.MaxCCalls {
-		RunError(L, "C stack overflow")
+		if L.CCalls() == stateapi.MaxCCalls {
+			RunError(L, "C stack overflow")
+		} else if L.CCalls() >= stateapi.MaxCCalls*11/10 {
+			ErrorErr(L)
+		}
 	}
 	ci := PreCall(L, funcIdx, nResults)
 	if ci != nil {
