@@ -295,6 +295,11 @@ func OpenPackage(L *luaapi.State) int {
 	L.PushString(string(os.PathSeparator) + "\n;\n?\n!\n-")
 	L.SetField(-2, "config")
 
+	// Set package.preload = {} (empty table for preloaded modules)
+	// C Lua: luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE)
+	L.CreateTable(0, 0)
+	L.SetField(-2, "preload")
+
 	return 1
 }
 
