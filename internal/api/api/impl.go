@@ -1446,17 +1446,17 @@ func (L *State) PushThread() bool {
 }
 
 // Resume starts or resumes a coroutine.
-// Returns (status, ok) where ok=true if status is OK or YIELD.
-// Mirrors: lua_resume in ldo.c
-func (L *State) Resume(from *State, nArgs int) (int, bool) {
+// Returns (status, nresults) matching lua_resume in ldo.c.
+// status is StatusOK (finished) or StatusYield (suspended) on success,
+// or an error status on failure.
+func (L *State) Resume(from *State, nArgs int) (int, int) {
 	ls := L.ls()
 	var fromLS *stateapi.LuaState
 	if from != nil {
 		fromLS = from.ls()
 	}
-	status, _ := vmapi.Resume(ls, fromLS, nArgs)
-	ok := status == stateapi.StatusOK || status == stateapi.StatusYield
-	return status, ok
+	status, nresults := vmapi.Resume(ls, fromLS, nArgs)
+	return status, nresults
 }
 
 // YieldK yields a coroutine with a continuation function.
