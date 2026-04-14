@@ -1283,6 +1283,7 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		// Mirrors: luaT_adjustvarargs + createvarargtab in ltm.c
 		CheckStack(L, int(p.MaxStackSize)+1)
 		t := tableapi.New(nextra, 1)
+		L.Global.GCTotalBytes += t.EstimateBytes()
 		// Set t.n = nextra
 		st := L.Global.StringTable.(*luastringapi.StringTable)
 		nKey := objectapi.MakeString(st.Intern("n"))
@@ -1598,6 +1599,7 @@ startfunc:
 			}
 			ci.SavedPC++ // skip extra arg
 			t := tableapi.New(c, b)
+			L.Global.GCTotalBytes += t.EstimateBytes()
 			L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
 
 		case opcodeapi.OP_SELF:
@@ -2360,19 +2362,43 @@ startfunc:
 
 		case opcodeapi.OP_GETVARG:
 			// OP_GETVARG: ra = vararg[rc]
+			// Mirrors C Lua's luaT_getvararg (ltm.c):
+			//   integer key → read from hidden vararg stack slots
+			//   string "n"  → return number of extra args
+			//   anything else → nil
 			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
-			idx, ok := ToInteger(rc)
-			if !ok || idx < 1 {
-				L.Stack[ra].Val = objectapi.Nil
-			} else {
+			switch rc.Tt {
+			case objectapi.TagInteger:
+				idx := rc.Val.(int64)
 				nExtra := ci.NExtraArgs
-				varBase := ci.Func + 1 - nExtra
-				i := int(idx) - 1
-				if i < nExtra {
-					L.Stack[ra].Val = L.Stack[varBase+i].Val
+				if uint64(idx-1) < uint64(nExtra) {
+					varBase := ci.Func - nExtra
+					L.Stack[ra].Val = L.Stack[varBase+int(idx)-1].Val
 				} else {
 					L.Stack[ra].Val = objectapi.Nil
 				}
+			case objectapi.TagFloat:
+				f := rc.Val.(float64)
+				if idx, ok := FloatToInteger(f); ok {
+					nExtra := ci.NExtraArgs
+					if uint64(idx-1) < uint64(nExtra) {
+						varBase := ci.Func - nExtra
+						L.Stack[ra].Val = L.Stack[varBase+int(idx)-1].Val
+					} else {
+						L.Stack[ra].Val = objectapi.Nil
+					}
+				} else {
+					L.Stack[ra].Val = objectapi.Nil
+				}
+			case objectapi.TagShortStr, objectapi.TagLongStr:
+				s := rc.Val.(*objectapi.LuaString)
+				if s.Data == "n" {
+					L.Stack[ra].Val = objectapi.MakeInteger(int64(ci.NExtraArgs))
+				} else {
+					L.Stack[ra].Val = objectapi.Nil
+				}
+			default:
+				L.Stack[ra].Val = objectapi.Nil
 			}
 
 		case opcodeapi.OP_ERRNNIL:

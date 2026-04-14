@@ -196,6 +196,11 @@ type GlobalState struct {
 
 	// API string cache (typed in luastring module)
 	StringCache any
+
+	// GCTotalBytes tracks total Lua-level object allocations (bytes).
+	// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
+	// Monotonically increasing — Go's GC handles actual freeing.
+	GCTotalBytes int64
 }
 
 // ---------------------------------------------------------------------------
