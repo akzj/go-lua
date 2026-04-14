@@ -1055,6 +1055,10 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 // when the key doesn't already exist. This is the "fast set + fallback" pattern
 // matching C Lua's luaV_fastset / luaV_finishset.
 func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val objectapi.TValue) {
+	// Check for NaN key — C Lua raises error, not panic
+	if key.IsFloat() && math.IsNaN(key.Float()) {
+		RunError(L, "table index is NaN")
+	}
 	h := tval.Val.(*tableapi.Table)
 	// Fast path: key already exists → just overwrite
 	_, found := h.Get(key)
