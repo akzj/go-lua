@@ -1377,6 +1377,36 @@ func (L *State) SetHook(f interface{}, mask, count int) {}
 func (L *State) GetHook() interface{}                    { return nil }
 func (L *State) GetHookMask() int                        { return 0 }
 func (L *State) GetHookCount() int                       { return 0 }
+
+// GetFuncProtoInfo inspects a Lua closure at stack index `idx` and returns
+// its Proto metadata. For C functions returns defaults with ok=false.
+func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDefined, lastLine, nups, nparams int, isVararg, ok bool) {
+	v := L.index2val(idx)
+	if v == nil {
+		return "[C]", "[C]", "C", 0, 0, 0, 0, false, false
+	}
+	if v.Tt == objectapi.TagLuaClosure {
+		cl := v.Val.(*closureapi.LClosure)
+		p := cl.Proto
+		if p != nil {
+			src := ""
+			if p.Source != nil {
+				src = p.Source.String()
+			}
+			w := "Lua"
+			if p.LineDefined == 0 {
+				w = "main"
+			}
+			return src, shortSrcStr(src), w, p.LineDefined, p.LastLine, len(cl.UpVals), int(p.NumParams), p.IsVararg(), true
+		}
+	}
+	return "[C]", "[C]", "C", 0, 0, 0, 0, false, false
+}
+
+// shortSrcStr creates a short source name (exported for use by stdlib).
+func shortSrcStr(source string) string {
+	return shortSrc(source)
+}
 func (L *State) GetLocal(ar *DebugInfo, n int) string    { return "" }
 func (L *State) SetLocal(ar *DebugInfo, n int) string    { return "" }
 

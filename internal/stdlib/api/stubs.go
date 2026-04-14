@@ -103,18 +103,53 @@ func debugGetinfo(L *luaapi.State) int {
 			return 1
 		}
 	} else {
-		// function argument — not yet supported, return minimal
-		L.CreateTable(0, 4)
-		L.PushString("")
-		L.SetField(-2, "name")
-		L.PushString("Lua")
-		L.SetField(-2, "what")
-		L.PushString("")
-		L.SetField(-2, "source")
-		L.PushInteger(0)
-		L.SetField(-2, "currentline")
-		L.PushString("")
-		L.SetField(-2, "namewhat")
+		// function argument — inspect the function directly
+		L.CheckAny(1)
+		what := "flnStu" // default for function arg
+		if L.GetTop() >= 2 {
+			what = L.CheckString(2)
+		}
+
+		L.CreateTable(0, 10)
+
+		src, shortSrc, whatKind, lineDefined, lastLine, nups, nparams, isVararg, _ := L.GetFuncProtoInfo(1)
+
+		if strings.Contains(what, "S") {
+			L.PushString(src)
+			L.SetField(-2, "source")
+			L.PushString(shortSrc)
+			L.SetField(-2, "short_src")
+			L.PushInteger(int64(lineDefined))
+			L.SetField(-2, "linedefined")
+			L.PushInteger(int64(lastLine))
+			L.SetField(-2, "lastlinedefined")
+			L.PushString(whatKind)
+			L.SetField(-2, "what")
+		}
+		if strings.Contains(what, "u") {
+			L.PushInteger(int64(nups))
+			L.SetField(-2, "nups")
+			L.PushInteger(int64(nparams))
+			L.SetField(-2, "nparams")
+			L.PushBoolean(isVararg)
+			L.SetField(-2, "isvararg")
+		}
+		if strings.Contains(what, "n") {
+			L.PushString("")
+			L.SetField(-2, "name")
+			L.PushString("")
+			L.SetField(-2, "namewhat")
+		}
+		if strings.Contains(what, "l") {
+			L.PushInteger(-1)
+			L.SetField(-2, "currentline")
+		}
+		if strings.Contains(what, "t") {
+			L.PushBoolean(false)
+			L.SetField(-2, "istailcall")
+			L.PushInteger(0)
+			L.SetField(-2, "extraargs")
+		}
 		return 1
 	}
 
