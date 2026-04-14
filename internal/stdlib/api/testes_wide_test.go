@@ -41,6 +41,9 @@ func TestTestesWide(t *testing.T) {
 			}()
 			L := luaapi.NewState()
 			OpenAll(L)
+			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)
+			L.PushBoolean(true)
+			L.SetGlobal("_port")
 			err := L.DoFile(path)
 			if err != nil {
 				fmt.Printf("  %-20s FAIL: %v\n", f, err)
