@@ -852,6 +852,22 @@ func (L *State) Load(code string, name string, mode string) int {
 	if name == "" {
 		name = "=(load)"
 	}
+	// Mode check: "b" = binary only, "t" = text only, "bt" = both (default)
+	if mode != "" && mode != "bt" {
+		isBinary := len(code) > 0 && code[0] == '\x1b' // LUA_SIGNATURE
+		if mode == "t" && isBinary {
+			L.push(objectapi.MakeString(&objectapi.LuaString{
+				Data: fmt.Sprintf("%s: attempt to load a binary chunk", name),
+			}))
+			return StatusErrSyntax
+		}
+		if mode == "b" && !isBinary {
+			L.push(objectapi.MakeString(&objectapi.LuaString{
+				Data: fmt.Sprintf("%s: attempt to load a text chunk", name),
+			}))
+			return StatusErrSyntax
+		}
+	}
 	return vmapi.Load(ls, reader, name)
 }
 
