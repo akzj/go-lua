@@ -685,6 +685,7 @@ func DischargeVars(fs *FuncState, e *ExpDesc) {
 		e.Info = CodeABC(fs, opcodeapi.OP_GETTABLE, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
 	case VVARGIND:
+		fs.Proto.Flag |= objectapi.PF_VATAB // signal vararg table mode
 		freeRegs(fs, int(e.Ind.Table), e.Ind.Idx)
 		e.Info = CodeABC(fs, opcodeapi.OP_GETVARG, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
