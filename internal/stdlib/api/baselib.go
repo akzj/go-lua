@@ -429,6 +429,7 @@ func luaB_load(L *luaapi.State) int {
 		L.CheckType(1, 6) // TypeFunction
 		// Call reader repeatedly, collecting strings
 		var chunks []string
+		readerErr := false
 		for {
 			L.PushValue(1) // push reader function
 			L.Call(0, 1)   // call reader()
@@ -439,6 +440,7 @@ func luaB_load(L *luaapi.State) int {
 			chunk, isStr := L.ToString(-1)
 			if !isStr {
 				L.Pop(1)
+				readerErr = true
 				break
 			}
 			if len(chunk) == 0 {
@@ -447,6 +449,10 @@ func luaB_load(L *luaapi.State) int {
 			}
 			chunks = append(chunks, chunk)
 			L.Pop(1)
+		}
+		if readerErr {
+			L.PushString(chunkname + ": reader function must return a string")
+			return loadAux(L, luaapi.StatusErrSyntax, env)
 		}
 		combined := strings.Join(chunks, "")
 		status = L.Load(combined, chunkname, mode)
