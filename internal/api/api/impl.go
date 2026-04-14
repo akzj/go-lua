@@ -1311,6 +1311,13 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			if caller == nil {
 				break
 			}
+			// Check if caller is closing TBC vars (CISTClsRet flag)
+			// If so, this frame is a __close metamethod call
+			if caller.CallStatus&stateapi.CISTClsRet != 0 {
+				ar.Name = "close"
+				ar.NameWhat = "metamethod"
+				break
+			}
 			fval := ls.Stack[caller.Func].Val
 			if fval.Tt != objectapi.TagLuaClosure {
 				break

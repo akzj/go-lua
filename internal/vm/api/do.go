@@ -724,6 +724,44 @@ func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 // To-be-closed (TBC) variable support
 // ---------------------------------------------------------------------------
 
+// getLocalName returns the name of the local variable at the given stack offset
+// from the function slot, using Proto.LocVars debug info.
+// Mirrors: luaF_getlocalname in lfunc.c + luaG_findlocal in ldebug.c
+func getLocalName(L *stateapi.LuaState, ci *stateapi.CallInfo, idx int) string {
+	if ci == nil || !ci.IsLua() {
+		return "?"
+	}
+	fn := L.Stack[ci.Func].Val
+	if fn.Tt != objectapi.TagLuaClosure {
+		return "?"
+	}
+	cl, ok := fn.Val.(*closureapi.LClosure)
+	if !ok || cl == nil || cl.Proto == nil {
+		return "?"
+	}
+	proto := cl.Proto
+	// idx is stack offset from function slot (1-based: 1=first local)
+	// Current PC for this call frame
+	pc := ci.SavedPC - 1
+	if pc < 0 {
+		pc = 0
+	}
+	// Count active locals at this PC (mirrors luaF_getlocalname)
+	localNum := idx // 1-based local number to find
+	for i := 0; i < len(proto.LocVars) && proto.LocVars[i].StartPC <= pc; i++ {
+		if pc < proto.LocVars[i].EndPC { // variable is active
+			localNum--
+			if localNum == 0 {
+				if proto.LocVars[i].Name != nil {
+					return proto.LocVars[i].Name.Data
+				}
+				return "?"
+			}
+		}
+	}
+	return "?"
+}
+
 // MarkTBC marks a stack slot as to-be-closed.
 // Mirrors: luaF_newtbcupval in lfunc.c
 func MarkTBC(L *stateapi.LuaState, level int) {
@@ -735,7 +773,13 @@ func MarkTBC(L *stateapi.LuaState, level int) {
 	// Check that __close metamethod exists (C Lua: checkclosemth)
 	tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
 	if tm.IsNil() {
-		RunError(L, "variable is not closable")
+		// Get variable name from debug info (C Lua: luaG_findlocal)
+		vname := "?"
+		if L.CI != nil {
+			idx := level - L.CI.Func // stack offset from function slot
+			vname = getLocalName(L, L.CI, idx)
+		}
+		RunError(L, "variable '"+vname+"' got a non-closable value")
 	}
 	// Delta encoding: distance from previous TBC variable
 	if L.TBCList < 0 {
@@ -815,7 +859,12 @@ func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, status int,
 		L.Stack[top+2].Val = errObj
 	}
 	L.Top = top + nargs
+	// Mark current CI as closing TBC vars so debug.traceback can
+	// identify the callee as "in metamethod 'close'"
+	oldStatus := L.CI.CallStatus
+	L.CI.CallStatus |= stateapi.CISTClsRet
 	Call(L, top, 0)
+	L.CI.CallStatus = oldStatus
 }
 
 // CloseProtected closes TBC variables in protected mode.
