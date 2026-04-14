@@ -198,6 +198,12 @@ func StringToFloat(s string) (float64, bool) {
 	// Use Go's strconv.ParseFloat which handles hex floats (0x with p exponent)
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
+		// Overflow (e.g. 1e9999) → ±Inf is valid in Lua
+		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			if math.IsInf(f, 0) {
+				return f, true
+			}
+		}
 		// Try hex float manually if Go doesn't support the exact format
 		if f2, ok := parseHexFloat(s); ok {
 			return f2, true

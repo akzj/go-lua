@@ -1521,7 +1521,14 @@ func (L *State) TolString(idx int) string {
 		L.PushString("nil")
 		return "nil"
 	default:
+		// C Lua: luaT_objtypename checks __name in metatable first
 		tn := L.TypeName(L.Type(idx))
+		if L.GetMetafield(idx, "__name") {
+			if name, ok := L.ToString(-1); ok {
+				tn = name
+			}
+			L.Pop(1)
+		}
 		s := fmt.Sprintf("%s: 0x%x", tn, reflect.ValueOf(v.Val).Pointer())
 		L.PushString(s)
 		return s

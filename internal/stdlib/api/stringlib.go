@@ -225,11 +225,43 @@ func str_format(L *luaapi.State) int {
 			if spec == "%s" {
 				sb.WriteString(s)
 			} else {
+				// C Lua: strings with embedded zeros can't be formatted with width/precision
+				if strings.ContainsRune(s, 0) {
+					L.ArgCheck(false, arg, "string contains zeros")
+				}
 				sb.WriteString(fmt.Sprintf(spec, s))
 			}
 		case 'q':
-			s := L.CheckString(arg)
-			sb.WriteString(quoteString(s))
+			// C Lua addliteral: handles string, number, nil, boolean
+			switch L.Type(arg) {
+			case objectapi.TypeString:
+				s := L.CheckString(arg)
+				sb.WriteString(quoteString(s))
+			case objectapi.TypeNumber:
+				if L.IsInteger(arg) {
+					n, _ := L.ToInteger(arg)
+					// Corner case: mininteger uses hex to avoid overflow
+					if n == math.MinInt64 {
+						sb.WriteString(fmt.Sprintf("0x%x", uint64(n)))
+					} else {
+						sb.WriteString(fmt.Sprintf("%d", n))
+					}
+				} else {
+					n, _ := L.ToNumber(arg)
+					sb.WriteString(quoteFloat(n))
+				}
+			case objectapi.TypeNil:
+				sb.WriteString("nil")
+			case objectapi.TypeBoolean:
+				b := L.ToBoolean(arg)
+				if b {
+					sb.WriteString("true")
+				} else {
+					sb.WriteString("false")
+				}
+			default:
+				L.ArgError(arg, "value has no literal form")
+			}
 		case 'p':
 			// pointer representation — mirrors luaO_pushfstring %p
 			// nil, boolean, number → "(null)"
@@ -259,6 +291,38 @@ func str_format(L *luaapi.State) int {
 	}
 	L.PushString(sb.String())
 	return 1
+}
+
+// quoteFloat formats a float for %q — matches C Lua's quotefloat.
+// Uses hex float format for precision, special strings for inf/nan.
+func quoteFloat(n float64) string {
+	if math.IsInf(n, 1) {
+		return "1e9999"
+	}
+	if math.IsInf(n, -1) {
+		return "-1e9999"
+	}
+	if math.IsNaN(n) {
+		return "(0/0)"
+	}
+	// Use Go's hex float format (matches C's %a)
+	s := fmt.Sprintf("%x", n)
+	// Go produces "0x1.921fb54442d18p+01", C produces "0x1.921fb54442d18p+1"
+	// Normalize: remove leading zeros in exponent
+	if idx := strings.Index(s, "p+"); idx >= 0 {
+		exp := s[idx+2:]
+		for len(exp) > 1 && exp[0] == '0' {
+			exp = exp[1:]
+		}
+		s = s[:idx+2] + exp
+	} else if idx := strings.Index(s, "p-"); idx >= 0 {
+		exp := s[idx+2:]
+		for len(exp) > 1 && exp[0] == '0' {
+			exp = exp[1:]
+		}
+		s = s[:idx+2] + exp
+	}
+	return s
 }
 
 func quoteString(s string) string {
