@@ -122,6 +122,7 @@ func checkTab(L *luaapi.State, arg int, needRead, needWrite bool) {
 }
 
 func tabConcat(L *luaapi.State) int {
+	L.CheckType(1, objectapi.TypeTable)
 	sep := L.OptString(2, "")
 	i := L.OptInteger(3, 1)
 	last := L.OptInteger(4, L.LenI(1))
@@ -135,6 +136,9 @@ func tabConcat(L *luaapi.State) int {
 		}
 		sb = append(sb, s)
 		L.Pop(1)
+		if i == last {
+			break
+		}
 	}
 	L.PushString(joinStrings(sb, sep))
 	return 1
