@@ -47,6 +47,7 @@ func OpenDebug(L *luaapi.State) int {
 		"getinfo":      debugGetinfo,
 		"getupvalue":   debugGetupvalue,
 		"setupvalue":   debugSetupvalue,
+		"upvaluejoin":  debugUpvaluejoin,
 		"sethook":      debugSethook,
 	})
 	return 1
@@ -281,6 +282,30 @@ func debugSetupvalue(L *luaapi.State) int {
 	}
 	L.PushString(name)
 	return 1
+}
+
+// debug.upvaluejoin(f1, n1, f2, n2) — make f1's n1-th upvalue share f2's n2-th upvalue
+func debugUpvaluejoin(L *luaapi.State) int {
+	L.CheckType(1, objectapi.TypeFunction)
+	n1 := int(L.CheckInteger(2))
+	L.CheckType(3, objectapi.TypeFunction)
+	n2 := int(L.CheckInteger(4))
+	f1 := L.GetLClosure(1)
+	f2 := L.GetLClosure(3)
+	if f1 == nil {
+		L.ArgError(1, "Lua function expected")
+	}
+	if f2 == nil {
+		L.ArgError(3, "Lua function expected")
+	}
+	if n1 < 1 || n1 > len(f1.UpVals) {
+		L.ArgError(2, "invalid upvalue index")
+	}
+	if n2 < 1 || n2 > len(f2.UpVals) {
+		L.ArgError(4, "invalid upvalue index")
+	}
+	f1.UpVals[n1-1] = f2.UpVals[n2-1]
+	return 0
 }
 
 // debug.sethook([thread,] hook, mask [, count]) — stub (no-op)
