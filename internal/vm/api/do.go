@@ -250,7 +250,14 @@ func precallC(L *stateapi.LuaState, funcIdx int, status uint32, f stateapi.CFunc
 func TryFuncTM(L *stateapi.LuaState, funcIdx int, status uint32) uint32 {
 	tm := mmapi.GetTMByObj(L.Global, L.Stack[funcIdx].Val, mmapi.TM_CALL)
 	if tm.IsNil() {
-		RunError(L, "attempt to call a "+objectapi.TypeNames[L.Stack[funcIdx].Val.Type()]+" value")
+		// Build error message with context
+		typeName := objectapi.TypeNames[L.Stack[funcIdx].Val.Type()]
+		extra := ""
+		// If the caller is closing TBC vars, identify as metamethod 'close'
+		if L.CI != nil && L.CI.CallStatus&stateapi.CISTClsRet != 0 {
+			extra = " (metamethod 'close')"
+		}
+		RunError(L, "attempt to call a "+typeName+" value"+extra)
 	}
 	// Shift stack up to make room for metamethod
 	for p := L.Top; p > funcIdx; p-- {
@@ -832,10 +839,12 @@ func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objec
 			continue
 		}
 
+		// Always look up and call the metamethod, even if it's nil.
+		// If __close was removed after marking (e.g., mt.__close = nil),
+		// the call will fail with "attempt to call a nil value".
+		// This matches C Lua's callclosemethod behavior.
 		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
-		if !tm.IsNil() {
-			callCloseMethod(L, tm, obj, status, errObj)
-		}
+		callCloseMethod(L, tm, obj, status, errObj)
 	}
 }
 
