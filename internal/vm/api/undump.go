@@ -43,6 +43,7 @@ func UndumpProto(L *stateapi.LuaState, data []byte, name string) (*closureapi.LC
 	}
 
 	cl := closureapi.NewLClosure(p, nupvals)
+	closureapi.InitUpvals(cl)
 	return cl, nil
 }
 
