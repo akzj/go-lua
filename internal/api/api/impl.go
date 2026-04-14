@@ -1605,6 +1605,9 @@ func (L *State) TolString(idx int) string {
 	if L.GetMetafield(idx, "__tostring") {
 		L.PushValue(idx)
 		L.Call(1, 1)
+		if !L.IsString(-1) {
+			L.Errorf("'__tostring' must return a string")
+		}
 		s, _ := L.ToString(-1)
 		return s
 	}
