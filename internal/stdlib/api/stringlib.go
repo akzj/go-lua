@@ -387,7 +387,12 @@ func str_format(L *luaapi.State) int {
 		switch conv {
 		case 'd', 'i':
 			n := L.CheckInteger(arg)
-			sb.WriteString(fmt.Sprintf(spec, n))
+			// Go doesn't support %i; replace trailing 'i' with 'd'
+			goSpec := spec
+			if conv == 'i' {
+				goSpec = spec[:len(spec)-1] + "d"
+			}
+			sb.WriteString(fmt.Sprintf(goSpec, n))
 		case 'u':
 			n := L.CheckInteger(arg)
 			// Replace %u with %d for Go (Lua integers are signed)
