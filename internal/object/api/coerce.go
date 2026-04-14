@@ -233,9 +233,9 @@ func parseHexFloat(s string) (float64, bool) {
 
 	var r float64
 	sigdig := 0
+	nosigdig := 0
 	hasdot := false
 	e := 0
-	empty := true
 
 	for idx < len(s) {
 		c := s[idx]
@@ -260,12 +260,12 @@ func parseHexFloat(s string) (float64, bool) {
 			goto afterDigits
 		}
 
-		empty = false
-		if sigdig < 30 { // MAXSIGDIG
+		if sigdig == 0 && d == 0 { // non-significant zero
+			nosigdig++
+		} else if sigdig++; sigdig <= 30 { // MAXSIGDIG = 30
 			r = r*16 + float64(d)
-			sigdig++
 		} else {
-			e++
+			e++ // too many significant digits; ignore but count for exponent
 		}
 		if hasdot {
 			e--
@@ -274,7 +274,7 @@ func parseHexFloat(s string) (float64, bool) {
 	}
 
 afterDigits:
-	if empty {
+	if nosigdig+sigdig == 0 {
 		return 0, false
 	}
 
