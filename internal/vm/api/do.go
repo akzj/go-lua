@@ -478,7 +478,8 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 	oldCI := L.CI
 	oldAllowHook := L.AllowHook
 	oldErrFunc := L.ErrFunc
-	oldTop := L.Top
+	// C Lua: old_top = savestack(L, c.func) — saves function position, not L->top
+	oldTop := funcIdx
 
 	L.ErrFunc = errFunc
 
@@ -492,15 +493,18 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 		L.AllowHook = oldAllowHook
 		// Close TBC vars created inside the pcall'd function.
 		// C Lua: status = luaD_closeprotected(L, old_top, status)
-		// We use a simple version: close all TBC vars >= oldTop.
-		// The error object is on the stack at L.Top-1 (set by RunProtected).
+		// Each __close call is protected — if it errors, the error
+		// replaces the previous one and closing continues.
 		if L.TBCList >= oldTop {
-			// Get the error object before closing (it may be needed by __close)
 			errObj := objectapi.Nil
 			if L.Top > oldTop {
 				errObj = L.Stack[L.Top-1].Val
 			}
-			CloseTBCWithError(L, oldTop, status, errObj)
+			status, errObj = CloseProtected(L, oldTop, status, errObj)
+			// Put the (possibly updated) error object back for SetErrorObj
+			if L.Top > oldTop {
+				L.Stack[L.Top-1].Val = errObj
+			}
 		}
 		SetErrorObj(L, status, oldTop)
 		ShrinkStack(L)
@@ -786,24 +790,56 @@ func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objec
 
 		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
 		if !tm.IsNil() {
-			top := L.Top
-			// C Lua callclosemethod: push tm, obj, and optionally err
-			nargs := 2 // tm + obj
-			if status != stateapi.StatusOK {
-				nargs = 3 // tm + obj + err
-			}
-			if top+nargs >= len(L.Stack) {
-				newStack := make([]objectapi.StackValue, len(L.Stack)*2)
-				copy(newStack, L.Stack)
-				L.Stack = newStack
-			}
-			L.Stack[top].Val = tm
-			L.Stack[top+1].Val = obj
-			if status != stateapi.StatusOK {
-				L.Stack[top+2].Val = errObj
-			}
-			L.Top = top + nargs
-			Call(L, top, 0)
+			callCloseMethod(L, tm, obj, status, errObj)
 		}
 	}
+}
+
+// callCloseMethod calls a __close metamethod: tm(obj) or tm(obj, err).
+// This is the unprotected version used by OP_CLOSE / OP_RETURN.
+func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, status int, errObj objectapi.TValue) {
+	top := L.Top
+	// C Lua callclosemethod: push tm, obj, and optionally err
+	nargs := 2 // tm + obj
+	if status != stateapi.StatusOK {
+		nargs = 3 // tm + obj + err
+	}
+	if top+nargs >= len(L.Stack) {
+		newStack := make([]objectapi.StackValue, len(L.Stack)*2)
+		copy(newStack, L.Stack)
+		L.Stack = newStack
+	}
+	L.Stack[top].Val = tm
+	L.Stack[top+1].Val = obj
+	if status != stateapi.StatusOK {
+		L.Stack[top+2].Val = errObj
+	}
+	L.Top = top + nargs
+	Call(L, top, 0)
+}
+
+// CloseProtected closes TBC variables in protected mode.
+// Used by PCall error path: if a __close method errors, the error
+// replaces the previous one and closing continues with remaining vars.
+// Mirrors: luaD_closeprotected in ldo.c
+func CloseProtected(L *stateapi.LuaState, level int, status int, errObj objectapi.TValue) (int, objectapi.TValue) {
+	oldCI := L.CI
+	oldAllowHook := L.AllowHook
+	for L.TBCList >= level {
+		newStatus := RunProtected(L, func() {
+			CloseTBCWithError(L, level, status, errObj)
+		})
+		if newStatus == stateapi.StatusOK {
+			return status, errObj // all closed successfully
+		}
+		// A __close method errored. The new error replaces the old one.
+		L.CI = oldCI
+		L.AllowHook = oldAllowHook
+		status = newStatus
+		// The new error object is on the stack at L.Top-1
+		if L.Top > 0 {
+			errObj = L.Stack[L.Top-1].Val
+		}
+	}
+	return status, errObj
 }
