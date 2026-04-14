@@ -73,6 +73,11 @@ func ErrorErr(L *stateapi.LuaState) {
 // The error object must already be on the stack at L.Top-1.
 func ErrorMsg(L *stateapi.LuaState) {
 	if L.ErrFunc != 0 {
+		// If already at C-stack limit, skip handler to prevent infinite recursion.
+		// Mirrors: luaE_checkcstack overflow threshold in C Lua.
+		if L.CCalls() >= stateapi.MaxCCalls {
+			ErrorErr(L) // StatusErrErr — error in error handling
+		}
 		errFunc := L.Stack[L.ErrFunc].Val
 		// Stack: [..., errmsg] (at Top-1)
 		// Rearrange to: [..., handler, errmsg]
