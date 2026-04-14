@@ -128,7 +128,7 @@ func tabPack(L *luaapi.State) int {
 }
 
 func tabUnpack(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeTable)
+	L.CheckAny(1)
 	i := L.OptInteger(2, 1)
 	var e int64
 	if L.IsNoneOrNil(3) {
