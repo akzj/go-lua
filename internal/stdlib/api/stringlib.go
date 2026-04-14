@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -406,6 +407,63 @@ func str_format(L *luaapi.State) int {
 		case 'f', 'F', 'e', 'E', 'g', 'G':
 			n := L.CheckNumber(arg)
 			sb.WriteString(fmt.Sprintf(spec, n))
+		case 'a', 'A':
+			n := L.CheckNumber(arg)
+			// Parse flags, width, precision from spec
+			upper := conv == 'A'
+			prec := -1 // default: full precision
+			hasPlus := strings.ContainsRune(spec, '+')
+			hasSpace := strings.ContainsRune(spec, ' ')
+			width := 0
+			hasMinus := strings.ContainsRune(spec, '-')
+
+			// Parse width from spec (between flags and '.' or conv)
+			j := 1 // skip '%'
+			for j < len(spec) && strings.ContainsRune("-+ #0", rune(spec[j])) {
+				j++
+			}
+			wStart := j
+			for j < len(spec) && spec[j] >= '0' && spec[j] <= '9' {
+				j++
+			}
+			if j > wStart {
+				for _, ch := range spec[wStart:j] {
+					width = width*10 + int(ch-'0')
+				}
+			}
+
+			// Parse precision
+			if j < len(spec) && spec[j] == '.' {
+				j++
+				prec = 0
+				for j < len(spec) && spec[j] >= '0' && spec[j] <= '9' {
+					prec = prec*10 + int(spec[j]-'0')
+					j++
+				}
+			}
+
+			hexStr := formatHexFloat(n, prec, upper)
+
+			// Apply + or space flag for non-negative numbers
+			if !math.IsNaN(n) && !math.Signbit(n) {
+				if hasPlus {
+					hexStr = "+" + hexStr
+				} else if hasSpace {
+					hexStr = " " + hexStr
+				}
+			}
+
+			// Apply width padding
+			if width > 0 && len(hexStr) < width {
+				pad := strings.Repeat(" ", width-len(hexStr))
+				if hasMinus {
+					hexStr = hexStr + pad // left-aligned
+				} else {
+					hexStr = pad + hexStr // right-aligned
+				}
+			}
+
+			sb.WriteString(hexStr)
 		case 'x', 'X':
 			n := L.CheckInteger(arg)
 			// C printf treats %x/%X as unsigned; Go's %x on negative int64 produces "-1"
@@ -492,22 +550,37 @@ func str_format(L *luaapi.State) int {
 	return 1
 }
 
-// quoteFloat formats a float for %q — matches C Lua's quotefloat.
-// Uses hex float format for precision, special strings for inf/nan.
-func quoteFloat(n float64) string {
+// formatHexFloat formats a float as hex (%a/%A) matching C Lua output.
+// Returns lowercase hex float string. Caller uppercases for %A.
+func formatHexFloat(n float64, prec int, upper bool) string {
+	// Handle special values
 	if math.IsInf(n, 1) {
-		return "1e9999"
+		if upper {
+			return "INF"
+		}
+		return "inf"
 	}
 	if math.IsInf(n, -1) {
-		return "-1e9999"
+		if upper {
+			return "-INF"
+		}
+		return "-inf"
 	}
 	if math.IsNaN(n) {
-		return "(0/0)"
+		if upper {
+			return "NAN"
+		}
+		return "nan"
 	}
-	// Use Go's hex float format (matches C's %a)
-	s := fmt.Sprintf("%x", n)
-	// Go produces "0x1.921fb54442d18p+01", C produces "0x1.921fb54442d18p+1"
-	// Normalize: remove leading zeros in exponent
+
+	var s string
+	if prec >= 0 {
+		s = strconv.FormatFloat(n, 'x', prec, 64)
+	} else {
+		s = strconv.FormatFloat(n, 'x', -1, 64)
+	}
+
+	// Normalize exponent: strip leading zeros (Go: p+01 → C: p+1)
 	if idx := strings.Index(s, "p+"); idx >= 0 {
 		exp := s[idx+2:]
 		for len(exp) > 1 && exp[0] == '0' {
@@ -521,7 +594,26 @@ func quoteFloat(n float64) string {
 		}
 		s = s[:idx+2] + exp
 	}
+
+	if upper {
+		s = strings.ToUpper(s)
+	}
 	return s
+}
+
+// quoteFloat formats a float for %q — matches C Lua's quotefloat.
+// Uses hex float format for precision, special strings for inf/nan.
+func quoteFloat(n float64) string {
+	if math.IsInf(n, 1) {
+		return "1e9999"
+	}
+	if math.IsInf(n, -1) {
+		return "-1e9999"
+	}
+	if math.IsNaN(n) {
+		return "(0/0)"
+	}
+	return formatHexFloat(n, -1, false)
 }
 
 func quoteString(s string) string {
