@@ -177,8 +177,8 @@ func OpenCoroutine(L *luaapi.State) int {
 // Since we don't have full coroutine support yet, returns nil, true
 // (meaning: main thread is running).
 func coroRunningStub(L *luaapi.State) int {
-	L.PushNil()
-	L.PushBoolean(true) // true = this is the main thread
+	ismain := L.PushThread()
+	L.PushBoolean(ismain)
 	return 2
 }
 

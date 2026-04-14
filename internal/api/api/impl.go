@@ -1351,7 +1351,11 @@ func (L *State) SetLocal(ar *DebugInfo, n int) string    { return "" }
 // ---------------------------------------------------------------------------
 
 func (L *State) NewThread() *State     { return nil }
-func (L *State) PushThread() bool      { return true }
+func (L *State) PushThread() bool {
+	ls := L.ls()
+	L.push(objectapi.TValue{Tt: objectapi.TagThread, Val: ls})
+	return ls.Global.MainThread == ls || ls.Global.MainThread == nil
+}
 func (L *State) Resume(from *State, nArgs int) (int, bool) { return 0, false }
 func (L *State) YieldK(nResults int, ctx int, k CFunction) int { return 0 }
 func (L *State) Yield(nResults int) int { return 0 }
