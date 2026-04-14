@@ -2268,12 +2268,14 @@ startfunc:
 			}
 			if opcodeapi.GetArgK(inst) != 0 {
 				// C Lua: save nres, ensure stack space, close upvals+TBC, refresh base/ra
+				// Use StatusCloseKTop so callCloseMethod does NOT reset L.Top —
+				// return values sit on the stack above the TBC variables.
 				ci.NRes = n
 				if L.Top < ci.Top {
 					L.Top = ci.Top
 				}
 				closureapi.CloseUpvals(L, base)
-				CloseTBC(L, base)
+				CloseTBCWithError(L, base, stateapi.StatusCloseKTop, objectapi.Nil)
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
 				base = ci.Func + 1

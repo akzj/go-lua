@@ -869,21 +869,19 @@ func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objec
 // This is the unprotected version used by OP_CLOSE / OP_RETURN.
 // Mirrors: prepcallclosemth + callclosemethod in lfunc.c
 func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, level int, status int, errObj objectapi.TValue) {
-	// C Lua's prepcallclosemth resets L->top to near the TBC variable's
-	// level before calling __close. This is critical after stack overflow:
-	// without this reset, L.Top would be near MaxStack, and any further
-	// calls would overflow the error stack space.
-	// For StatusOK (normal close), reset L.Top to level+1.
-	// For error close, set error object at level+1, top at level+2.
-	// Note: C Lua has CLOSEKTOP status that skips the reset (used by
-	// OP_RETURN k-bit). We detect this case by checking if L.Top is
-	// already reasonable (within the current CI's frame).
-	if status == stateapi.StatusOK && L.CI != nil && L.Top > L.CI.Top {
-		// Top is above the current CI frame — likely after stack overflow
-		// or error recovery. Reset to near the TBC variable.
+	// C Lua's prepcallclosemth has a three-way switch:
+	//   StatusOK       → reset L.Top to level+1 (call at TBC var level)
+	//   StatusCloseKTop → don't change L.Top (return values above TBC)
+	//   error status   → set error obj at level+1, L.Top = level+2
+	isError := false
+	switch status {
+	case stateapi.StatusOK:
 		L.Top = level + 1
-	} else if status != stateapi.StatusOK {
+	case stateapi.StatusCloseKTop:
+		// Don't reset L.Top — return values are above the TBC variable
+	default:
 		// Error close: set error object at level+1
+		isError = true
 		if level+2 < len(L.Stack) {
 			L.Stack[level+1].Val = errObj
 			L.Top = level + 2
@@ -891,24 +889,26 @@ func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, level int, 
 	}
 
 	top := L.Top
-	// Push tm, obj, and optionally err
-	nargs := 1 // obj only for normal close
-	if status != stateapi.StatusOK {
-		nargs = 2 // obj + err
+	// __close(obj) for normal/CLOSEKTOP, __close(obj, err) for error
+	nargs := 1
+	if isError {
+		nargs = 2
 	}
-	if top+1+nargs >= len(L.Stack) {
-		newStack := make([]objectapi.StackValue, len(L.Stack)*2)
-		copy(newStack, L.Stack)
-		L.Stack = newStack
+	needed := top + 1 + nargs
+	if needed >= len(L.Stack) {
+		// During stack overflow recovery the stack is already at errorStackSize.
+		// We cannot grow further. But prepcallclosemth already reset L.Top
+		// to near the TBC level, so there should be room. If not, we have
+		// a deeper problem — skip the close call rather than panic.
+		return
 	}
 	L.Stack[top].Val = tm
 	L.Stack[top+1].Val = obj
-	if status != stateapi.StatusOK {
+	if isError {
 		L.Stack[top+2].Val = errObj
 	}
 	L.Top = top + 1 + nargs
-	// Mark current CI as closing TBC vars so debug.traceback can
-	// identify the callee as "in metamethod 'close'"
+	// Mark current CI as closing TBC vars
 	oldStatus := L.CI.CallStatus
 	L.CI.CallStatus |= stateapi.CISTClsRet
 	Call(L, top, 0)

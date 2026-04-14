@@ -31,6 +31,12 @@ const (
 	StatusErrSyntax = 3 // LUA_ERRSYNTAX
 	StatusErrMem    = 4 // LUA_ERRMEM
 	StatusErrErr    = 5 // LUA_ERRERR
+
+	// StatusCloseKTop: special status for closing TBC variables without
+	// resetting L.Top. Used by OP_RETURN k-bit path where return values
+	// sit on the stack above the TBC variables.
+	// Matches C Lua's CLOSEKTOP = LUA_ERRERR + 1 in lfunc.h.
+	StatusCloseKTop = 6
 )
 
 // ---------------------------------------------------------------------------
