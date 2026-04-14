@@ -462,7 +462,11 @@ func luaB_load(L *luaapi.State) int {
 		readerErr := false
 		for {
 			L.PushValue(1) // push reader function
-			L.Call(0, 1)   // call reader()
+			st := L.PCall(0, 1, 0)
+			if st != luaapi.StatusOK {
+				// reader function errored — return nil, errmsg
+				return loadAux(L, st, env)
+			}
 			if L.IsNil(-1) || L.IsNone(-1) {
 				L.Pop(1)
 				break
