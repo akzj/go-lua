@@ -62,7 +62,12 @@ func math_ceil(L *luaapi.State) int {
 	if L.IsInteger(1) {
 		L.SetTop(1) // integer already
 	} else {
-		L.PushInteger(int64(math.Ceil(L.CheckNumber(1))))
+		d := math.Ceil(L.CheckNumber(1))
+		if floatFitsInt(d) {
+			L.PushInteger(int64(d))
+		} else {
+			L.PushNumber(d)
+		}
 	}
 	return 1
 }
@@ -71,9 +76,22 @@ func math_floor(L *luaapi.State) int {
 	if L.IsInteger(1) {
 		L.SetTop(1)
 	} else {
-		L.PushInteger(int64(math.Floor(L.CheckNumber(1))))
+		d := math.Floor(L.CheckNumber(1))
+		if floatFitsInt(d) {
+			L.PushInteger(int64(d))
+		} else {
+			L.PushNumber(d)
+		}
 	}
 	return 1
+}
+
+// floatFitsInt checks if a float can be exactly represented as int64.
+// Matches C Lua's lua_numbertointeger macro.
+func floatFitsInt(n float64) bool {
+	const minInt = float64(math.MinInt64)         // -2^63
+	const maxInt = -float64(math.MinInt64)         // 2^63 (as float, not representable as int64)
+	return n >= minInt && n < maxInt
 }
 
 func math_fmod(L *luaapi.State) int {
@@ -235,6 +253,21 @@ func math_rad(L *luaapi.State) int {
 	return 1
 }
 
+func math_frexp(L *luaapi.State) int {
+	x := L.CheckNumber(1)
+	frac, exp := math.Frexp(x)
+	L.PushNumber(frac)
+	L.PushInteger(int64(exp))
+	return 2
+}
+
+func math_ldexp(L *luaapi.State) int {
+	x := L.CheckNumber(1)
+	ep := L.CheckInteger(2)
+	L.PushNumber(math.Ldexp(x, int(ep)))
+	return 1
+}
+
 // math_ult implements math.ult(m, n) — unsigned integer comparison.
 func math_ult(L *luaapi.State) int {
 	m := L.CheckInteger(1)
@@ -256,6 +289,8 @@ func OpenMath(L *luaapi.State) int {
 		"exp":        math_exp,
 		"floor":      math_floor,
 		"fmod":       math_fmod,
+		"frexp":      math_frexp,
+		"ldexp":      math_ldexp,
 		"log":        math_log,
 		"max":        math_max,
 		"min":        math_min,
