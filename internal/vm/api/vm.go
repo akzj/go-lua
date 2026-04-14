@@ -1262,40 +1262,101 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		nextra = 0
 		totalargs = nfixparams
 	}
-	ci.NExtraArgs = nextra
-	// Ensure enough stack space before copying
-	CheckStack(L, int(p.MaxStackSize)+1)
-	// Copy function to top of stack (matches C buildhiddenargs)
-	L.Stack[L.Top].Val = L.Stack[ci.Func].Val
-	L.Top++
-	// Copy fixed parameters above extra args
-	for i := 1; i <= nfixparams; i++ {
-		L.Stack[L.Top].Val = L.Stack[ci.Func+i].Val
-		L.Stack[ci.Func+i].Val = objectapi.Nil // erase original (for GC)
+
+	if p.Flag&objectapi.PF_VATAB != 0 {
+		// === PF_VATAB path: create vararg table ===
+		// Mirrors: luaT_adjustvarargs + createvarargtab in ltm.c
+		CheckStack(L, int(p.MaxStackSize)+1)
+		t := tableapi.New(nextra, 1)
+		// Set t.n = nextra
+		st := L.Global.StringTable.(*luastringapi.StringTable)
+		nKey := objectapi.MakeString(st.Intern("n"))
+		t.Set(nKey, objectapi.MakeInteger(int64(nextra)))
+		// Set t[1..nextra] = extra args
+		for i := 0; i < nextra; i++ {
+			t.SetInt(int64(i+1), L.Stack[ci.Func+nfixparams+1+i].Val)
+		}
+		// Place table at the vararg parameter slot (after fixed params)
+		L.Stack[ci.Func+nfixparams+1].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
+		// Set top to after all params (fixed + vararg table)
+		L.Top = ci.Func + 1 + nfixparams + 1
+		ci.Top = ci.Func + 1 + int(p.MaxStackSize)
+		// NOTE: no stack shift, no ci.Func change, no NExtraArgs
+	} else {
+		// === PF_VAHID path: existing hidden args behavior ===
+		// Mirrors: buildhiddenargs in ltm.c
+		ci.NExtraArgs = nextra
+		CheckStack(L, int(p.MaxStackSize)+1)
+		// Copy function to top of stack
+		L.Stack[L.Top].Val = L.Stack[ci.Func].Val
 		L.Top++
+		// Copy fixed parameters above extra args
+		for i := 1; i <= nfixparams; i++ {
+			L.Stack[L.Top].Val = L.Stack[ci.Func+i].Val
+			L.Stack[ci.Func+i].Val = objectapi.Nil // erase original (for GC)
+			L.Top++
+		}
+		// ci.Func now lives after the hidden (extra) arguments
+		ci.Func += totalargs + 1
+		ci.Top = ci.Func + 1 + int(p.MaxStackSize)
 	}
-	// ci.Func now lives after the hidden (extra) arguments
-	ci.Func += totalargs + 1
-	ci.Top = ci.Func + 1 + int(p.MaxStackSize)
 }
 
 // GetVarargs copies vararg values to the stack starting at ra.
-// After AdjustVarargs, the extra (vararg) arguments are stored just below
-// ci.Func: positions ci.Func-NExtraArgs .. ci.Func-1
-func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int) {
-	nExtra := ci.NExtraArgs
-	varBase := ci.Func - nExtra
+// When vatab >= 0, reads from the vararg table at ci.Func+vatab+1.
+// When vatab < 0, reads from hidden stack args below ci.Func.
+// Mirrors: luaT_getvarargs in ltm.c
+func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vatab int) {
+	var h *tableapi.Table
+	if vatab >= 0 {
+		h = L.Stack[ci.Func+vatab+1].Val.Val.(*tableapi.Table)
+	}
+
+	// Get number of available vararg args
+	var nExtra int
+	if h == nil {
+		nExtra = ci.NExtraArgs
+	} else {
+		// Read t.n from the vararg table
+		st := L.Global.StringTable.(*luastringapi.StringTable)
+		nKey := objectapi.MakeString(st.Intern("n"))
+		nVal, ok := h.Get(nKey)
+		if ok && nVal.Tt == objectapi.TagInteger {
+			nExtra = int(nVal.Integer())
+		}
+	}
+
 	if n < 0 {
 		n = nExtra
 		CheckStack(L, n)
 		L.Top = ra + n
 	}
-	for i := 0; i < n; i++ {
-		if i < nExtra {
+
+	touse := n
+	if nExtra < touse {
+		touse = nExtra
+	}
+
+	if h == nil {
+		// Read from hidden stack args
+		varBase := ci.Func - nExtra
+		for i := 0; i < touse; i++ {
 			L.Stack[ra+i].Val = L.Stack[varBase+i].Val
-		} else {
-			L.Stack[ra+i].Val = objectapi.Nil
 		}
+	} else {
+		// Read from vararg table
+		for i := 0; i < touse; i++ {
+			val, ok := h.GetInt(int64(i + 1))
+			if ok {
+				L.Stack[ra+i].Val = val
+			} else {
+				L.Stack[ra+i].Val = objectapi.Nil
+			}
+		}
+	}
+	// Fill remaining with nil
+	for i := touse; i < n; i++ {
+		L.Stack[ra+i].Val = objectapi.Nil
 	}
 }
 
@@ -2224,7 +2285,11 @@ startfunc:
 
 		case opcodeapi.OP_VARARG:
 			n := opcodeapi.GetArgC(inst) - 1
-			GetVarargs(L, ci, ra, n)
+			vatab := -1
+			if opcodeapi.GetArgK(inst) != 0 {
+				vatab = opcodeapi.GetArgB(inst)
+			}
+			GetVarargs(L, ci, ra, n, vatab)
 
 		case opcodeapi.OP_VARARGPREP:
 			AdjustVarargs(L, ci, cl.Proto)
