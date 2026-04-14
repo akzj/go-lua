@@ -1997,6 +1997,7 @@ startfunc:
 			} else {
 				// Metamethod fallback: callOrderITM(L, v, im, false, isf, TM_LT)
 				isf := opcodeapi.GetArgC(inst) != 0
+				L.Top = ci.Top
 				cond = callOrderITM(L, v, im, false, isf, mmapi.TM_LT)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
@@ -2015,6 +2016,7 @@ startfunc:
 				cond = v.Float() <= float64(im)
 			} else {
 				isf := opcodeapi.GetArgC(inst) != 0
+				L.Top = ci.Top
 				cond = callOrderITM(L, v, im, false, isf, mmapi.TM_LE)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
@@ -2034,6 +2036,7 @@ startfunc:
 			} else {
 				// GTI: a > im ⟺ im < a, so flip=true, TM_LT
 				isf := opcodeapi.GetArgC(inst) != 0
+				L.Top = ci.Top
 				cond = callOrderITM(L, v, im, true, isf, mmapi.TM_LT)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
@@ -2053,6 +2056,7 @@ startfunc:
 			} else {
 				// GEI: a >= im ⟺ im <= a, so flip=true, TM_LE
 				isf := opcodeapi.GetArgC(inst) != 0
+				L.Top = ci.Top
 				cond = callOrderITM(L, v, im, true, isf, mmapi.TM_LE)
 			}
 			if cond != (opcodeapi.GetArgK(inst) != 0) {
