@@ -737,14 +737,23 @@ func MarkTBC(L *stateapi.LuaState, level int) {
 
 // CloseTBC calls __close on all TBC variables from L.TBCList down to (but not including) level.
 // Then resets L.TBCList to the previous TBC variable below level.
-// Mirrors: luaF_close (the TBC portion) in lfunc.c
+// status: stateapi.StatusOK for normal close, or an error status for error close.
+// errObj: the error object to pass to __close (nil for normal close).
+// Mirrors: luaF_close (the TBC portion) in lfunc.c + prepcallclosemth + callclosemethod
 func CloseTBC(L *stateapi.LuaState, level int) {
+	CloseTBCWithError(L, level, stateapi.StatusOK, objectapi.Nil)
+}
+
+// CloseTBCWithError is CloseTBC with error status and error object.
+// For normal close: status=StatusOK, errObj=Nil → __close(obj) with 1 arg
+// For error close: status!=StatusOK, errObj=error → __close(obj, err) with 2 args
+func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objectapi.TValue) {
 	for L.TBCList >= level {
 		tbc := L.TBCList
 		delta := int(L.Stack[tbc].TBCDelta)
 		L.Stack[tbc].TBCDelta = 0 // clear
 
-		// Compute previous TBC index
+		// Compute previous TBC index (pop from TBC linked list)
 		if delta <= 0 || tbc-delta+1 < 0 {
 			L.TBCList = -1 // no more
 		} else {
@@ -765,18 +774,23 @@ func CloseTBC(L *stateapi.LuaState, level int) {
 
 		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
 		if !tm.IsNil() {
-			// __close(obj, nil) — nil means normal close (not error)
 			top := L.Top
-			if top+3 >= len(L.Stack) {
-				// Grow stack if needed
+			// C Lua callclosemethod: push tm, obj, and optionally err
+			nargs := 2 // tm + obj
+			if status != stateapi.StatusOK {
+				nargs = 3 // tm + obj + err
+			}
+			if top+nargs >= len(L.Stack) {
 				newStack := make([]objectapi.StackValue, len(L.Stack)*2)
 				copy(newStack, L.Stack)
 				L.Stack = newStack
 			}
 			L.Stack[top].Val = tm
 			L.Stack[top+1].Val = obj
-			L.Stack[top+2].Val = objectapi.Nil
-			L.Top = top + 3
+			if status != stateapi.StatusOK {
+				L.Stack[top+2].Val = errObj
+			}
+			L.Top = top + nargs
 			Call(L, top, 0)
 		}
 	}
