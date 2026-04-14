@@ -2,11 +2,90 @@ package api
 
 import (
 	"math"
-	"math/rand"
+	"math/bits"
+	"time"
 
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
+
+// ---------------------------------------------------------------------------
+// xoshiro256** PRNG — exact port of C Lua 5.5 lmathlib.c (64-bit path)
+// ---------------------------------------------------------------------------
+
+// ranState holds the four 64-bit words of xoshiro256** state.
+type ranState struct {
+	s [4]uint64
+}
+
+// globalRanState is the shared PRNG state for math.random/math.randomseed.
+// In C Lua this is stored as a userdata upvalue; we use a package-level var.
+var globalRanState ranState
+
+func init() {
+	// Default seed (matches C Lua's initial randseed call with makeseed)
+	setSeed(&globalRanState, uint64(time.Now().UnixNano()), 0)
+}
+
+// nextRand implements xoshiro256** — returns the next pseudo-random uint64.
+// Exact port of C Lua's nextrand() for 64-bit Rand64.
+func nextRand(s *[4]uint64) uint64 {
+	s0 := s[0]
+	s1 := s[1]
+	s2 := s[2] ^ s0
+	s3 := s[3] ^ s1
+	res := bits.RotateLeft64(s1*5, 7) * 9
+	s[0] = s0 ^ s3
+	s[1] = s1 ^ s2
+	s[2] = s2 ^ (s1 << 17)
+	s[3] = bits.RotateLeft64(s3, 45)
+	return res
+}
+
+// i2d converts a random uint64 to a float64 in [0, 1).
+// Matches C Lua's I2d for FIGS=53 (DBL_MANT_DIG).
+const (
+	figs       = 53
+	shift64FIG = 64 - figs                            // 11
+	scaleFIG   = 0.5 / float64(uint64(1)<<(figs-1))   // 2^(-53)
+)
+
+func i2d(x uint64) float64 {
+	sx := int64(x >> shift64FIG) // take top 53 bits as signed
+	res := float64(sx) * scaleFIG
+	if sx < 0 {
+		res += 1.0 // correct two's complement
+	}
+	return res
+}
+
+// project projects a random uint64 into [0, n] using rejection sampling.
+// Exact port of C Lua's project().
+func project(ran uint64, n uint64, state *ranState) uint64 {
+	if n == 0 {
+		return 0
+	}
+	lim := n
+	// Spread '1' bits until lim becomes a Mersenne number (all 1s)
+	for sh := uint(1); (lim & (lim + 1)) != 0; sh *= 2 {
+		lim |= lim >> sh
+	}
+	for (ran & lim) > n {
+		ran = nextRand(&state.s)
+	}
+	return ran & lim
+}
+
+// setSeed initializes the PRNG state — exact port of C Lua's setseed().
+func setSeed(state *ranState, n1, n2 uint64) {
+	state.s[0] = n1
+	state.s[1] = 0xff // avoid zero state
+	state.s[2] = n2
+	state.s[3] = 0
+	for i := 0; i < 16; i++ {
+		nextRand(&state.s) // discard initial values to spread seed
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Math library
@@ -201,30 +280,55 @@ func math_type(L *luaapi.State) int {
 }
 
 func math_random(L *luaapi.State) int {
+	state := &globalRanState
+	rv := nextRand(&state.s) // next pseudo-random value
 	switch L.GetTop() {
 	case 0: // no arguments: random float in [0,1)
-		L.PushNumber(rand.Float64())
-	case 1: // upper limit
-		u := L.CheckInteger(1)
-		L.ArgCheck(1 <= u, 1, "interval is empty")
-		L.PushInteger(int64(rand.Intn(int(u))) + 1)
-	default: // lower and upper limits
-		lo := L.CheckInteger(1)
+		L.PushNumber(i2d(rv))
+		return 1
+	case 1: // only upper limit
+		low := int64(1)
+		up := L.CheckInteger(1)
+		if up == 0 { // math.random(0) → full-range random integer
+			L.PushInteger(int64(rv))
+			return 1
+		}
+		L.ArgCheck(1 <= up, 1, "interval is empty")
+		// project into [0, up-low] then shift
+		p := project(rv, uint64(up)-uint64(low), state)
+		L.PushInteger(int64(p + uint64(low)))
+		return 1
+	case 2: // lower and upper limits
+		low := L.CheckInteger(1)
 		up := L.CheckInteger(2)
-		L.ArgCheck(lo <= up, 2, "interval is empty")
-		r := up - lo + 1
-		L.PushInteger(int64(rand.Intn(int(r))) + lo)
+		L.ArgCheck(low <= up, 1, "interval is empty")
+		// Use unsigned subtraction to handle full int64 range
+		p := project(rv, uint64(up)-uint64(low), state)
+		L.PushInteger(int64(p + uint64(low)))
+		return 1
+	default:
+		L.PushString("wrong number of arguments")
+		L.Error()
+		return 0 // unreachable
 	}
-	return 1
 }
 
 func math_randomseed(L *luaapi.State) int {
+	state := &globalRanState
+	var n1, n2 uint64
 	if L.IsNoneOrNil(1) {
-		rand.Seed(0) // reset
+		// "random" seed — use time-based
+		n1 = uint64(time.Now().UnixNano())
+		n2 = nextRand(&state.s) // extra randomness from current state
 	} else {
-		rand.Seed(L.CheckInteger(1))
+		n1 = uint64(L.CheckInteger(1))
+		n2 = uint64(L.OptInteger(2, 0))
 	}
-	return 0
+	setSeed(state, n1, n2)
+	// Return the two seed values (C Lua returns 2)
+	L.PushInteger(int64(n1))
+	L.PushInteger(int64(n2))
+	return 2
 }
 
 // math_modf implements math.modf(x) — returns integral and fractional parts.
