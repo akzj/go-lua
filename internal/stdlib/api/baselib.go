@@ -414,26 +414,59 @@ func luaB_xpcall(L *luaapi.State) int {
 
 func luaB_load(L *luaapi.State) int {
 	s, ok := L.ToString(1)
+	mode := L.OptString(3, "bt")
+	env := 0
+	if !L.IsNone(4) && !L.IsNil(4) {
+		env = 4
+	}
+	var status int
 	if ok { // loading a string
 		chunkname := L.OptString(2, s)
-		// arg 3: mode (ignored — we always accept text)
-		status := L.Load(s, chunkname, "bt")
-		if status == luaapi.StatusOK {
-			// arg 4: env table — if provided, replace _ENV upvalue
-			if !L.IsNone(4) && !L.IsNil(4) {
-				L.PushValue(4)      // push env table
-				L.SetUpvalue(-2, 1) // set upvalue[1] of the closure at -2
+		status = L.Load(s, chunkname, mode)
+	} else {
+		// loading from a reader function
+		chunkname := L.OptString(2, "=(load)")
+		L.CheckType(1, 6) // TypeFunction
+		// Call reader repeatedly, collecting strings
+		var chunks []string
+		for {
+			L.PushValue(1) // push reader function
+			L.Call(0, 1)   // call reader()
+			if L.IsNil(-1) || L.IsNone(-1) {
+				L.Pop(1)
+				break
 			}
-			return 1
+			chunk, isStr := L.ToString(-1)
+			if !isStr {
+				L.Pop(1)
+				break
+			}
+			if len(chunk) == 0 {
+				L.Pop(1)
+				break
+			}
+			chunks = append(chunks, chunk)
+			L.Pop(1)
 		}
-		// error: push fail, then swap with error message
-		L.PushFail()
-		L.Insert(-2)
-		return 2
+		combined := strings.Join(chunks, "")
+		status = L.Load(combined, chunkname, mode)
 	}
-	// loading from a function not supported yet
-	L.Errorf("load from function not yet supported")
-	return 0
+	return loadAux(L, status, env)
+}
+
+// loadAux handles load/loadfile results — matches C Lua's load_aux.
+func loadAux(L *luaapi.State, status, env int) int {
+	if status == luaapi.StatusOK {
+		if env != 0 {
+			L.PushValue(env)    // push env table
+			L.SetUpvalue(-2, 1) // set _ENV upvalue
+		}
+		return 1
+	}
+	// error: push fail, then error message
+	L.PushFail()
+	L.Insert(-2) // fail before error message
+	return 2
 }
 
 func luaB_dofile(L *luaapi.State) int {
