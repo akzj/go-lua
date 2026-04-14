@@ -164,16 +164,24 @@ func math_min(L *luaapi.State) int {
 }
 
 func math_tointeger(L *luaapi.State) int {
-	if L.IsInteger(1) {
-		L.SetTop(1)
-	} else {
-		n := L.CheckNumber(1)
-		i := int64(n)
-		if float64(i) == n {
-			L.PushInteger(i)
-		} else {
+	// C Lua: lua_tointegerx — handles integers, floats that are exact ints, and strings
+	if n, ok := L.ToInteger(1); ok {
+		L.PushInteger(n)
+	} else if f, ok := L.ToNumber(1); ok {
+		// Float or string-as-float: check if it's an exact integer
+		if math.IsNaN(f) || math.IsInf(f, 0) || !floatFitsInt(f) {
 			L.PushFail()
+		} else {
+			i := int64(f)
+			if float64(i) == f {
+				L.PushInteger(i)
+			} else {
+				L.PushFail()
+			}
 		}
+	} else {
+		L.CheckAny(1) // ensure there's an argument
+		L.PushFail()
 	}
 	return 1
 }
