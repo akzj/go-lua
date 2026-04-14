@@ -701,6 +701,16 @@ func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmap
 			RunError(L, opErrorMsg(L, p1, p2, "concatenate", reg1, reg2))
 		}
 		if event >= mmapi.TM_BAND && event <= mmapi.TM_SHR || event == mmapi.TM_BNOT {
+			// If both are numbers but can't convert to int, give specific error
+			// Mirrors: luaG_tointerror in ldebug.c
+			if p1.IsNumber() && p2.IsNumber() {
+				// Find the non-integer operand for the error message
+				badReg := reg2
+				if p1.IsFloat() {
+					badReg = reg1
+				}
+				RunError(L, "number"+VarInfo(L, badReg)+" has no integer representation")
+			}
 			RunError(L, opErrorMsg(L, p1, p2, "perform bitwise operation on", reg1, reg2))
 		}
 		RunError(L, opErrorMsg(L, p1, p2, "perform arithmetic on", reg1, reg2))
