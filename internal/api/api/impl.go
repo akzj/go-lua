@@ -1352,7 +1352,21 @@ func (L *State) ToThread(idx int) *State { return nil }
 func (L *State) ToUserdata(idx int) interface{}                    { return nil }
 func (L *State) GetIUserValue(idx int, n int) objectapi.Type       { return 0 }
 func (L *State) SetIUserValue(idx int, n int) bool                 { return false }
-func (L *State) ToPointer(idx int) interface{}                     { return nil }
+func (L *State) ToPointer(idx int) string {
+	v := L.index2val(idx)
+	if v == nil || v.Val == nil {
+		return ""
+	}
+	rv := reflect.ValueOf(v.Val)
+	switch rv.Kind() {
+	case reflect.Ptr:
+		return fmt.Sprintf("0x%x", rv.Pointer())
+	case reflect.Func:
+		return fmt.Sprintf("0x%x", rv.Pointer())
+	default:
+		return ""
+	}
+}
 
 // ---------------------------------------------------------------------------
 // String reader (for Load)
