@@ -232,12 +232,12 @@ func str_format(L *luaapi.State) int {
 			sb.WriteString(quoteString(s))
 		case 'p':
 			// pointer representation — mirrors luaO_pushfstring %p
-			// nil, boolean, number, string → "(null)"
-			// table, function, userdata, thread → "0x..." hex address
+			// nil, boolean, number → "(null)"
+			// table, function, userdata, thread, string → "0x..." hex address
 			v := L.Type(arg)
 			var pstr string
 			switch v {
-			case objectapi.TypeNil, objectapi.TypeBoolean, objectapi.TypeNumber, objectapi.TypeString:
+			case objectapi.TypeNil, objectapi.TypeBoolean, objectapi.TypeNumber:
 				pstr = "(null)"
 			default:
 				ptr := L.ToPointer(arg)
@@ -272,16 +272,17 @@ func quoteString(s string) string {
 		case '"':
 			sb.WriteString("\\\"")
 		case '\n':
-			sb.WriteString("\\n")
-		case '\r':
-			sb.WriteString("\\r")
-		case '\x00':
-			sb.WriteString("\\0")
-		case '\x1a': // ^Z
-			sb.WriteString("\\26")
+			sb.WriteString("\\\n")
 		default:
-			if c < ' ' {
-				sb.WriteString(fmt.Sprintf("\\%d", c))
+			// C Lua: iscntrl(cast_uchar(c)) in C locale — 0x00-0x1F and 0x7F
+			// Bytes >= 0x80 pass through as-is (not control chars in C locale)
+			if c < ' ' || c == 0x7F {
+				// If next char is a digit, use 3-digit format to avoid ambiguity
+				if i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9' {
+					sb.WriteString(fmt.Sprintf("\\%03d", c))
+				} else {
+					sb.WriteString(fmt.Sprintf("\\%d", c))
+				}
 			} else {
 				sb.WriteByte(c)
 			}
