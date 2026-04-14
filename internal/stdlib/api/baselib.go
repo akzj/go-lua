@@ -530,9 +530,7 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushInteger(0)
 		return 1
 	case 3: // count
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		kb := float64(m.Alloc) / 1024.0
+		kb := float64(L.GCTotalBytes()) / 1024.0
 		L.PushNumber(kb)
 		return 1
 	case 4: // step

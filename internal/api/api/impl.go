@@ -688,6 +688,7 @@ func (L *State) RawSetI(idx int, n int64) {
 // CreateTable pushes a new table with pre-allocated space.
 func (L *State) CreateTable(nArr, nRec int) {
 	t := tableapi.New(nArr, nRec)
+	L.TrackAlloc(t.EstimateBytes())
 	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
 }
 
@@ -1060,6 +1061,17 @@ func (L *State) SetUpvalue(funcIdx, n int) string {
 func (L *State) GC(what GCWhat, args ...int) int {
 	// Go's GC handles this. No-op for most operations.
 	return 0
+}
+
+// GCTotalBytes returns the Lua-level allocation counter (bytes).
+// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
+func (L *State) GCTotalBytes() int64 {
+	return L.ls().Global.GCTotalBytes
+}
+
+// TrackAlloc adds n bytes to the Lua-level allocation counter.
+func (L *State) TrackAlloc(n int64) {
+	L.ls().Global.GCTotalBytes += n
 }
 
 // ---------------------------------------------------------------------------

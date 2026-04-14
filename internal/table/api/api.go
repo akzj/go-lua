@@ -159,3 +159,13 @@ func (t *Table) HashLen() int {
 	}
 	return 1 << t.LsizeNode
 }
+
+// EstimateBytes returns an approximate byte size for this table,
+// mirroring C Lua's allocation tracking for collectgarbage("count").
+// sizeof(Table)=80, sizeof(TValue)=24, sizeof(Node)=56 on 64-bit Go.
+func (t *Table) EstimateBytes() int64 {
+	const tableOverhead = 80
+	const tvalueSize = 24
+	const nodeSize = 56
+	return int64(tableOverhead) + int64(len(t.Array))*tvalueSize + int64(t.HashLen())*nodeSize
+}
