@@ -1,6 +1,8 @@
 package api
 
 import (
+	"math"
+
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
@@ -54,6 +56,7 @@ func tabRemove(L *luaapi.State) int {
 }
 
 func tabMove(L *luaapi.State) int {
+	const maxInt = int64(math.MaxInt64)
 	f := L.CheckInteger(2)
 	e := L.CheckInteger(3)
 	t := L.CheckInteger(4)
@@ -61,20 +64,19 @@ func tabMove(L *luaapi.State) int {
 	if !L.IsNoneOrNil(5) {
 		tt = 5
 	}
-	L.CheckType(1, objectapi.TypeTable)
-	if tt != 1 {
-		L.CheckType(tt, objectapi.TypeTable)
-	}
+	checkTab(L, 1, true, false)  // source needs read (__index)
+	checkTab(L, tt, false, true) // dest needs write (__newindex)
 	if e >= f { // otherwise nothing to move
-		n := e - f + 1
-		L.ArgCheck(t <= 9007199254740991-n+1, 4, "destination wrap around")
-		if t > f {
-			for i := n - 1; i >= 0; i-- {
+		L.ArgCheck(f > 0 || e < maxInt+f, 3, "too many elements to move")
+		n := e - f + 1 // number of elements to move
+		L.ArgCheck(t <= maxInt-n+1, 4, "destination wrap around")
+		if t > e || t <= f || (tt != 1 && !L.RawEqual(1, tt)) {
+			for i := int64(0); i < n; i++ {
 				L.GetI(1, f+i)
 				L.SetI(tt, t+i)
 			}
 		} else {
-			for i := int64(0); i < n; i++ {
+			for i := n - 1; i >= 0; i-- {
 				L.GetI(1, f+i)
 				L.SetI(tt, t+i)
 			}
@@ -82,6 +84,41 @@ func tabMove(L *luaapi.State) int {
 	}
 	L.PushValue(tt) // return destination table
 	return 1
+}
+
+// checkTab validates that arg is a table or has required metamethods.
+// Matches C Lua's checktab (ltablib.c).
+func checkTab(L *luaapi.State, arg int, needRead, needWrite bool) {
+	if L.Type(arg) == objectapi.TypeTable {
+		return // tables are always OK
+	}
+	// Not a table — check for metatable with required metamethods
+	if L.GetMetatable(arg) {
+		ok := true
+		n := 1 // metatable on stack
+		if needRead {
+			L.PushString("__index")
+			L.RawGet(-2)
+			if L.IsNil(-1) {
+				ok = false
+			}
+			n++
+		}
+		if ok && needWrite {
+			L.PushString("__newindex")
+			L.RawGet(-(n + 1)) // metatable is deeper now
+			if L.IsNil(-1) {
+				ok = false
+			}
+			n++
+		}
+		L.Pop(n) // pop metatable + checked fields
+		if ok {
+			return
+		}
+	}
+	// No metatable or missing metamethods — force error
+	L.CheckType(arg, objectapi.TypeTable)
 }
 
 func tabConcat(L *luaapi.State) int {
@@ -180,6 +217,7 @@ func tabCreate(L *luaapi.State) int {
 
 func tabSort(L *luaapi.State) int {
 	n := auxGetN(L, 1)
+	L.ArgCheck(n < math.MaxInt32, 1, "array too big")
 	hasComp := !L.IsNoneOrNil(2)
 	if hasComp {
 		L.CheckType(2, objectapi.TypeFunction)
