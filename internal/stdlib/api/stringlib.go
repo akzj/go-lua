@@ -384,6 +384,68 @@ func str_format(L *luaapi.State) int {
 		i++
 		spec := fmtStr[start:i]
 		arg++
+		if arg > L.GetTop() {
+			L.ArgError(arg, "no value")
+		}
+		if len(spec) > 32 {
+			L.Errorf("invalid format (too long)")
+		}
+
+		// checkformat: validates flags, width, precision per conversion
+		// Mirrors C Lua's checkformat(L, form, flags, precision)
+		checkFmt := func(validFlags string, allowPrec bool) {
+			p := 1 // skip '%'
+			// skip only valid flags
+			for p < len(spec)-1 && strings.ContainsRune(validFlags, rune(spec[p])) {
+				p++
+			}
+			// width cannot start with '0' (0 as flag must be in validFlags)
+			if p < len(spec)-1 && spec[p] != '0' {
+				// skip up to 2 width digits
+				for nd := 0; nd < 2 && p < len(spec)-1 && spec[p] >= '0' && spec[p] <= '9'; nd++ {
+					p++
+				}
+				if allowPrec && p < len(spec)-1 && spec[p] == '.' {
+					p++
+					// skip up to 2 precision digits
+					for nd := 0; nd < 2 && p < len(spec)-1 && spec[p] >= '0' && spec[p] <= '9'; nd++ {
+						p++
+					}
+				}
+			}
+			// must have consumed everything up to the conversion letter
+			if p != len(spec)-1 {
+				L.Errorf("invalid conversion '%s' to 'format'", spec)
+			}
+		}
+
+		switch conv {
+		case 'c':
+			checkFmt("-", false)
+		case 'd', 'i':
+			checkFmt("-+0 ", true)
+		case 'u':
+			checkFmt("-0", true)
+		case 'o', 'x', 'X':
+			checkFmt("-#0", true)
+		case 'a', 'A':
+			checkFmt("-+#0 ", true)
+		case 'f', 'e', 'E', 'g', 'G':
+			checkFmt("-+#0 ", true)
+		case 'p':
+			checkFmt("-", false)
+		case 'q':
+			if spec != "%q" {
+				L.Errorf("specifier '%%q' cannot have modifiers")
+			}
+		case 's':
+			// s with modifiers: checkFmt with "-" flags and precision allowed
+			if spec != "%s" {
+				checkFmt("-", true)
+			}
+		default:
+			L.Errorf("invalid conversion '%s' to 'format'", spec)
+		}
 
 		switch conv {
 		case 'd', 'i':
@@ -404,7 +466,7 @@ func str_format(L *luaapi.State) int {
 			} else {
 				sb.WriteString(fmt.Sprintf(goSpec, n))
 			}
-		case 'f', 'F', 'e', 'E', 'g', 'G':
+		case 'f', 'e', 'E', 'g', 'G':
 			n := L.CheckNumber(arg)
 			sb.WriteString(fmt.Sprintf(spec, n))
 		case 'a', 'A':
@@ -474,7 +536,9 @@ func str_format(L *luaapi.State) int {
 			sb.WriteString(fmt.Sprintf(spec, uint64(n)))
 		case 'c':
 			n := L.CheckInteger(arg)
-			sb.WriteByte(byte(n))
+			ch := string([]byte{byte(n)})
+			sSpec := spec[:len(spec)-1] + "s"
+			sb.WriteString(fmt.Sprintf(sSpec, ch))
 		case 's':
 			s := L.TolString(arg)
 			L.Pop(1) // pop string from TolString
@@ -543,7 +607,7 @@ func str_format(L *luaapi.State) int {
 			}
 			sb.WriteString(pstr)
 		default:
-			sb.WriteString(spec) // unknown, pass through
+			L.Errorf("invalid conversion '%s' to 'format'", spec)
 		}
 	}
 	L.PushString(sb.String())
