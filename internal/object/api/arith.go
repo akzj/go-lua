@@ -124,11 +124,14 @@ func ToIntegerNS(v TValue) (int64, bool) {
 		return v.Val.(int64), true
 	case TagFloat:
 		f := v.Val.(float64)
-		// Floor mode: convert with floor rounding
+		// Exact mode: only convert if float has exact integer representation
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return 0, false
 		}
-		i := int64(math.Floor(f))
+		i := int64(f)
+		if float64(i) != f {
+			return 0, false // not exactly representable as integer
+		}
 		return i, true
 	default:
 		return 0, false
