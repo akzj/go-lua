@@ -711,6 +711,17 @@ func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 // MarkTBC marks a stack slot as to-be-closed.
 // Mirrors: luaF_newtbcupval in lfunc.c
 func MarkTBC(L *stateapi.LuaState, level int) {
+	obj := L.Stack[level].Val
+	// false and nil don't need closing (C Lua: l_isfalse check)
+	if obj.IsNil() || obj.Tt == objectapi.TagFalse {
+		return
+	}
+	// Check that __close metamethod exists (C Lua: checkclosemth)
+	tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
+	if tm.IsNil() {
+		RunError(L, "variable is not closable")
+	}
+	// Delta encoding: distance from previous TBC variable
 	if L.TBCList < 0 {
 		// First TBC variable — delta is level+1 (encode as 1-based)
 		L.Stack[level].TBCDelta = uint16(level + 1)
