@@ -632,11 +632,21 @@ func (L *State) SetField(idx int, key string) {
 func (L *State) SetI(idx int, n int64) {
 	ls := L.ls()
 	t := L.index2val(idx)
+	val := ls.Stack[ls.Top-1].Val
 	if t.Tt == objectapi.TagTable {
 		tbl := t.Val.(*tableapi.Table)
-		val := ls.Stack[ls.Top-1].Val
-		tbl.SetInt(n, val)
+		// Fast path: if key already exists in table, do raw set (no metamethod).
+		// Matches C Lua's luaV_fastseti in lua_seti.
+		if _, found := tbl.GetInt(n); found {
+			tbl.SetInt(n, val)
+			ls.Top--
+			return
+		}
 	}
+	// Non-table or key not found in table: go through full metamethod chain.
+	// FinishSet handles __newindex for tables and non-tables.
+	key := objectapi.MakeInteger(n)
+	vmapi.FinishSet(ls, *t, key, val)
 	ls.Top--
 }
 
