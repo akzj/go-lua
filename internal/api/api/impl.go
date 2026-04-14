@@ -853,26 +853,36 @@ func (L *State) PCall(nArgs, nResults, msgHandler int) int {
 // Load loads a Lua chunk from a string. Pushes the compiled function.
 func (L *State) Load(code string, name string, mode string) int {
 	ls := L.ls()
-	reader := &stringReader{data: code}
 	if name == "" {
 		name = "=(load)"
 	}
-	// Mode check: "b" = binary only, "t" = text only, "bt" = both (default)
-	if mode != "" && mode != "bt" {
-		isBinary := len(code) > 0 && code[0] == '\x1b' // LUA_SIGNATURE
-		if mode == "t" && isBinary {
-			L.push(objectapi.MakeString(&objectapi.LuaString{
-				Data: fmt.Sprintf("%s: attempt to load a binary chunk", name),
-			}))
-			return StatusErrSyntax
-		}
-		if mode == "b" && !isBinary {
-			L.push(objectapi.MakeString(&objectapi.LuaString{
-				Data: fmt.Sprintf("%s: attempt to load a text chunk", name),
-			}))
-			return StatusErrSyntax
-		}
+	if mode == "" {
+		mode = "bt"
 	}
+	isBinary := len(code) > 0 && code[0] == '\x1b' // LUA_SIGNATURE
+
+	if isBinary {
+		if !strings.Contains(mode, "b") {
+			L.PushString(fmt.Sprintf("%s: attempt to load a binary chunk", name))
+			return StatusErrSyntax
+		}
+		// Binary chunk — use undump
+		cl, err := vmapi.UndumpProto(ls, []byte(code), name)
+		if err != nil {
+			L.PushString(err.Error())
+			return StatusErrSyntax
+		}
+		// Push the closure onto the stack
+		L.push(objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
+		return StatusOK
+	}
+
+	// Text chunk
+	if !strings.Contains(mode, "t") {
+		L.PushString(fmt.Sprintf("%s: attempt to load a text chunk", name))
+		return StatusErrSyntax
+	}
+	reader := &stringReader{data: code}
 	return vmapi.Load(ls, reader, name)
 }
 
