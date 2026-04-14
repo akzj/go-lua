@@ -403,10 +403,12 @@ func str_format(L *luaapi.State) int {
 			sb.WriteString(fmt.Sprintf(spec, n))
 		case 'x', 'X':
 			n := L.CheckInteger(arg)
-			sb.WriteString(fmt.Sprintf(spec, n))
+			// C printf treats %x/%X as unsigned; Go's %x on negative int64 produces "-1"
+			sb.WriteString(fmt.Sprintf(spec, uint64(n)))
 		case 'o':
 			n := L.CheckInteger(arg)
-			sb.WriteString(fmt.Sprintf(spec, n))
+			// C printf treats %o as unsigned; Go's %o on negative int64 produces "-1"
+			sb.WriteString(fmt.Sprintf(spec, uint64(n)))
 		case 'c':
 			n := L.CheckInteger(arg)
 			sb.WriteByte(byte(n))
