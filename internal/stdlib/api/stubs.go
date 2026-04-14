@@ -88,7 +88,7 @@ func debugGetinfo(L *luaapi.State) int {
 	// Parse arguments: getinfo(level [, what])
 	var ar *luaapi.DebugInfo
 	var ok bool
-	what := "flnSu" // default: all options
+	what := "flnStu" // default: all options (matches C Lua)
 
 	if L.Type(1) == 3 { // number = stack level
 		level := int(L.CheckInteger(1))
@@ -145,6 +145,10 @@ func debugGetinfo(L *luaapi.State) int {
 	L.SetField(-2, "nparams")
 	L.PushBoolean(ar.IsVararg)
 	L.SetField(-2, "isvararg")
+	L.PushBoolean(ar.IsTailCall)
+	L.SetField(-2, "istailcall")
+	L.PushInteger(int64(ar.ExtraArgs))
+	L.SetField(-2, "extraargs")
 
 	return 1
 }

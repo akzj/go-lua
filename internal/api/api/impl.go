@@ -1315,6 +1315,14 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			}
 		case 'S', 'l', 'u', 'f':
 			// Already filled by GetStack
+		case 't':
+			// Tail call and extra args info
+			if ar.ci != nil {
+				if ci, ok := ar.ci.(*stateapi.CallInfo); ok {
+					ar.IsTailCall = ci.CallStatus&stateapi.CISTTail != 0
+					ar.ExtraArgs = ci.NExtraArgs
+				}
+			}
 		}
 	}
 	return true
