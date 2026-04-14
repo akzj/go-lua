@@ -1714,6 +1714,15 @@ func (L *State) GetSubTable(idx int, fname string) bool {
 	return false
 }
 
+// GetLClosure returns the LClosure at the given stack index, or nil if not a Lua closure.
+func (L *State) GetLClosure(idx int) *closureapi.LClosure {
+	v := L.index2val(idx)
+	if v.Tt != objectapi.TagLuaClosure {
+		return nil
+	}
+	return v.Val.(*closureapi.LClosure)
+}
+
 // DebugGetProto returns the Proto of the LClosure at top of stack (for testing).
 func DebugGetProto(L *State) *objectapi.Proto {
 	ls := L.ls()
