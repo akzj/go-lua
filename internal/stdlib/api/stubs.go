@@ -12,6 +12,14 @@ import (
 
 func OpenIO(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{})
+
+	// io.stdin / io.stdout / io.stderr — stub file handles (tables)
+	// Many testes just check io.stdin ~= nil or use string.format("%p", io.stdin).
+	for _, name := range []string{"stdin", "stdout", "stderr"} {
+		L.CreateTable(0, 0) // stub file handle
+		L.SetField(-2, name)
+	}
+
 	return 1
 }
 
