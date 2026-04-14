@@ -46,6 +46,36 @@ func luaB_require(L *luaapi.State) int {
 	}
 	L.Pop(1) // pop nil, keep _LOADED on stack (index -1)
 
+	// Step 1.5: Check package.preload[name]
+	L.GetGlobal("package")
+	if L.GetField(-1, "preload") == objectapi.TypeTable {
+		if L.GetField(-1, name) == objectapi.TypeFunction {
+			// Call the preload function with module name as argument
+			L.PushString(name)
+			status := L.PCall(1, 1, 0)
+			if status != luaapi.StatusOK {
+				msg, _ := L.ToString(-1)
+				L.Pop(4) // pop error + preload + package + _LOADED
+				L.Errorf("error running preload function for '%s':\n\t%s", name, msg)
+				return 0
+			}
+			// If module returned nil/nothing, use true as the loaded value
+			if L.IsNil(-1) {
+				L.Pop(1)
+				L.PushBoolean(true)
+			}
+			// Store in _LOADED
+			L.PushValue(-1)      // dup result
+			L.SetField(-5, name) // _LOADED[name] = result (_LOADED is at index -5: result, preload, package, _LOADED)
+			L.Remove(-2)         // remove preload
+			L.Remove(-2)         // remove package
+			L.Remove(-2)         // remove _LOADED, keep result
+			return 1
+		}
+		L.Pop(1) // pop non-function value
+	}
+	L.Pop(2) // pop preload (or nil) + package
+
 	// Step 2: Search package.path for a .lua file
 	filename := searchPackagePath(L, name)
 	if filename == "" {
