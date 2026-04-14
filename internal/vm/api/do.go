@@ -487,9 +487,21 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 	})
 
 	if status != stateapi.StatusOK {
-		// Restore state
+		// Restore state (mirrors C Lua luaD_pcall order)
 		L.CI = oldCI
 		L.AllowHook = oldAllowHook
+		// Close TBC vars created inside the pcall'd function.
+		// C Lua: status = luaD_closeprotected(L, old_top, status)
+		// We use a simple version: close all TBC vars >= oldTop.
+		// The error object is on the stack at L.Top-1 (set by RunProtected).
+		if L.TBCList >= oldTop {
+			// Get the error object before closing (it may be needed by __close)
+			errObj := objectapi.Nil
+			if L.Top > oldTop {
+				errObj = L.Stack[L.Top-1].Val
+			}
+			CloseTBCWithError(L, oldTop, status, errObj)
+		}
 		SetErrorObj(L, status, oldTop)
 		ShrinkStack(L)
 	}
