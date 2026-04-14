@@ -843,13 +843,14 @@ func MarkTBC(L *stateapi.LuaState, level int) {
 // errObj: the error object to pass to __close (nil for normal close).
 // Mirrors: luaF_close (the TBC portion) in lfunc.c + prepcallclosemth + callclosemethod
 func CloseTBC(L *stateapi.LuaState, level int) {
-	CloseTBCWithError(L, level, stateapi.StatusOK, objectapi.Nil)
+	CloseTBCWithError(L, level, stateapi.StatusOK, objectapi.Nil, true)
 }
 
 // CloseTBCWithError is CloseTBC with error status and error object.
 // For normal close: status=StatusOK, errObj=Nil → __close(obj) with 1 arg
 // For error close: status!=StatusOK, errObj=error → __close(obj, err) with 2 args
-func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objectapi.TValue) {
+// yieldable controls whether __close can yield (false in CloseProtected path).
+func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objectapi.TValue, yieldable bool) {
 	for L.TBCList >= level {
 		tbc := L.TBCList
 		delta := int(L.Stack[tbc].TBCDelta)
@@ -879,14 +880,15 @@ func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objec
 		// the call will fail with "attempt to call a nil value".
 		// This matches C Lua's callclosemethod behavior.
 		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
-		callCloseMethod(L, tm, obj, tbc, status, errObj)
+		callCloseMethod(L, tm, obj, tbc, status, errObj, yieldable)
 	}
 }
 
 // callCloseMethod calls a __close metamethod: tm(obj) or tm(obj, err).
 // This is the unprotected version used by OP_CLOSE / OP_RETURN.
+// yieldable: true for normal close (OP_CLOSE/OP_RETURN), false for CloseProtected.
 // Mirrors: prepcallclosemth + callclosemethod in lfunc.c
-func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, level int, status int, errObj objectapi.TValue) {
+func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, level int, status int, errObj objectapi.TValue, yieldable bool) {
 	// C Lua's prepcallclosemth has a three-way switch:
 	//   StatusOK       → reset L.Top to level+1 (call at TBC var level)
 	//   StatusCloseKTop → don't change L.Top (return values above TBC)
@@ -929,7 +931,11 @@ func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, level int, 
 	// Mark current CI as closing TBC vars
 	oldStatus := L.CI.CallStatus
 	L.CI.CallStatus |= stateapi.CISTClsRet
-	Call(L, top, 0)
+	if yieldable {
+		Call(L, top, 0)
+	} else {
+		CallNoYield(L, top, 0)
+	}
 	L.CI.CallStatus = oldStatus
 }
 
@@ -942,7 +948,7 @@ func CloseProtected(L *stateapi.LuaState, level int, status int, errObj objectap
 	oldAllowHook := L.AllowHook
 	for L.TBCList >= level {
 		newStatus := RunProtected(L, func() {
-			CloseTBCWithError(L, level, status, errObj)
+			CloseTBCWithError(L, level, status, errObj, false)
 		})
 		if newStatus == stateapi.StatusOK {
 			return status, errObj // all closed successfully

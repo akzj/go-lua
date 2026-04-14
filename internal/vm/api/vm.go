@@ -2275,7 +2275,7 @@ startfunc:
 					L.Top = ci.Top
 				}
 				closureapi.CloseUpvals(L, base)
-				CloseTBCWithError(L, base, stateapi.StatusCloseKTop, objectapi.Nil)
+				CloseTBCWithError(L, base, stateapi.StatusCloseKTop, objectapi.Nil, true)
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
 				base = ci.Func + 1
