@@ -139,10 +139,14 @@ func tabUnpack(L *luaapi.State) int {
 	if i > e {
 		return 0 // empty range
 	}
-	n := e - i + 1
-	if n <= 0 || !L.CheckStack(int(n)) {
+	// Use unsigned subtraction to avoid signed overflow (matches C Lua's tunpack).
+	// C Lua checks n >= INT_MAX before lua_checkstack. We check against our MaxStack
+	// (1_000_000) to avoid OOM from trying to allocate a huge Go slice.
+	n := uint64(e) - uint64(i) // number of elements minus 1
+	if n >= 1_000_000 || !L.CheckStack(int(n+1)) {
 		L.Errorf("too many results to unpack")
 	}
+	n++ // now n = actual count
 	for ; i < e; i++ {
 		L.GetI(1, i)
 	}
