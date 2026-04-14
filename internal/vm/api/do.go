@@ -861,20 +861,42 @@ func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objec
 		// the call will fail with "attempt to call a nil value".
 		// This matches C Lua's callclosemethod behavior.
 		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
-		callCloseMethod(L, tm, obj, status, errObj)
+		callCloseMethod(L, tm, obj, tbc, status, errObj)
 	}
 }
 
 // callCloseMethod calls a __close metamethod: tm(obj) or tm(obj, err).
 // This is the unprotected version used by OP_CLOSE / OP_RETURN.
-func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, status int, errObj objectapi.TValue) {
-	top := L.Top
-	// C Lua callclosemethod: push tm, obj, and optionally err
-	nargs := 2 // tm + obj
-	if status != stateapi.StatusOK {
-		nargs = 3 // tm + obj + err
+// Mirrors: prepcallclosemth + callclosemethod in lfunc.c
+func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, level int, status int, errObj objectapi.TValue) {
+	// C Lua's prepcallclosemth resets L->top to near the TBC variable's
+	// level before calling __close. This is critical after stack overflow:
+	// without this reset, L.Top would be near MaxStack, and any further
+	// calls would overflow the error stack space.
+	// For StatusOK (normal close), reset L.Top to level+1.
+	// For error close, set error object at level+1, top at level+2.
+	// Note: C Lua has CLOSEKTOP status that skips the reset (used by
+	// OP_RETURN k-bit). We detect this case by checking if L.Top is
+	// already reasonable (within the current CI's frame).
+	if status == stateapi.StatusOK && L.CI != nil && L.Top > L.CI.Top {
+		// Top is above the current CI frame — likely after stack overflow
+		// or error recovery. Reset to near the TBC variable.
+		L.Top = level + 1
+	} else if status != stateapi.StatusOK {
+		// Error close: set error object at level+1
+		if level+2 < len(L.Stack) {
+			L.Stack[level+1].Val = errObj
+			L.Top = level + 2
+		}
 	}
-	if top+nargs >= len(L.Stack) {
+
+	top := L.Top
+	// Push tm, obj, and optionally err
+	nargs := 1 // obj only for normal close
+	if status != stateapi.StatusOK {
+		nargs = 2 // obj + err
+	}
+	if top+1+nargs >= len(L.Stack) {
 		newStack := make([]objectapi.StackValue, len(L.Stack)*2)
 		copy(newStack, L.Stack)
 		L.Stack = newStack
@@ -884,7 +906,7 @@ func callCloseMethod(L *stateapi.LuaState, tm, obj objectapi.TValue, status int,
 	if status != stateapi.StatusOK {
 		L.Stack[top+2].Val = errObj
 	}
-	L.Top = top + nargs
+	L.Top = top + 1 + nargs
 	// Mark current CI as closing TBC vars so debug.traceback can
 	// identify the callee as "in metamethod 'close'"
 	oldStatus := L.CI.CallStatus
