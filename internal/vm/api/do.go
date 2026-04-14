@@ -73,21 +73,24 @@ func ErrorErr(L *stateapi.LuaState) {
 // The error object must already be on the stack at L.Top-1.
 func ErrorMsg(L *stateapi.LuaState) {
 	if L.ErrFunc != 0 {
-		// If already at C-stack limit, skip handler to prevent infinite recursion.
-		// Mirrors: luaE_checkcstack overflow threshold in C Lua.
-		if L.CCalls() >= stateapi.MaxCCalls {
-			ErrorErr(L) // StatusErrErr — error in error handling
-		}
 		errFunc := L.Stack[L.ErrFunc].Val
 		// Stack: [..., errmsg] (at Top-1)
 		// Rearrange to: [..., handler, errmsg]
 		L.Stack[L.Top].Val = L.Stack[L.Top-1].Val // copy errmsg up
 		L.Stack[L.Top-1].Val = errFunc             // put handler below
 		L.Top++
+		// Save and reset NCCalls to allow the error handler to run
+		// even after deep recursion. C Lua doesn't increment nCcalls
+		// for Lua-to-Lua calls within luaV_execute, so their nCcalls
+		// stays low. Our Call() increments for every call, so we need
+		// to reset here.
+		savedNCCalls := L.NCCalls
+		L.NCCalls = 1
 		// Call handler(errmsg) → 1 result, protected
 		status := RunProtected(L, func() {
 			Call(L, L.Top-2, 1)
 		})
+		L.NCCalls = savedNCCalls
 		if status != stateapi.StatusOK {
 			// Error in error handler
 			ErrorErr(L)
@@ -129,7 +132,20 @@ func ReallocStack(L *stateapi.LuaState, newsize int) {
 func GrowStack(L *stateapi.LuaState, n int, raiseerror bool) bool {
 	size := len(L.Stack)
 	if size > stateapi.MaxStack {
-		// Already using error stack space
+		// Already beyond normal stack limit.
+		// Check if we have room in current allocation.
+		if L.Top+n+stateapi.ExtraStack <= size {
+			return true
+		}
+		// Try to grow to errorStackSize if not already there.
+		errSize := errorStackSize + stateapi.ExtraStack
+		if size < errSize {
+			ReallocStack(L, errSize)
+			if L.Top+n+stateapi.ExtraStack <= errSize {
+				return true
+			}
+		}
+		// Truly exhausted — error in error handling
 		if raiseerror {
 			ErrorErr(L)
 		}
@@ -149,7 +165,7 @@ func GrowStack(L *stateapi.LuaState, n int, raiseerror bool) bool {
 			return true
 		}
 	}
-	// Stack overflow
+	// Stack overflow — grow to error stack size for error handling room
 	ReallocStack(L, errorStackSize+stateapi.ExtraStack)
 	if raiseerror {
 		RunError(L, "stack overflow")

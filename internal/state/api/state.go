@@ -153,17 +153,32 @@ func GrowStack(L *LuaState, n int) {
 		return // already enough space
 	}
 
+	// If we're already in error stack space (size > MaxStack), we can't grow further
+	if len(L.Stack) > MaxStack+ExtraStack {
+		panic(LuaError{Status: StatusErrMem, Message: objectapi.MakeString(
+			&objectapi.LuaString{Data: "stack overflow", IsShort: true})})
+	}
+
 	// Calculate new size — at least double, but enough for needed
 	newSize := 2 * len(L.Stack)
 	if newSize < needed {
 		newSize = needed
 	}
-	if newSize > MaxStack+ExtraStack {
-		newSize = MaxStack + ExtraStack
-	}
+
+	// Cap at MaxStack (normal growth) or errorStackSize (overflow recovery)
 	if L.Top+n > MaxStack {
-		panic(LuaError{Status: StatusErrMem, Message: objectapi.MakeString(
-			&objectapi.LuaString{Data: "stack overflow", IsShort: true})})
+		// Stack overflow — grow to error stack size to allow error handling
+		errorStackSize := MaxStack + 200
+		if needed <= errorStackSize+ExtraStack {
+			newSize = errorStackSize + ExtraStack
+		} else {
+			panic(LuaError{Status: StatusErrMem, Message: objectapi.MakeString(
+				&objectapi.LuaString{Data: "stack overflow", IsShort: true})})
+		}
+	} else {
+		if newSize > MaxStack+ExtraStack {
+			newSize = MaxStack + ExtraStack
+		}
 	}
 
 	reallocStack(L, newSize)
