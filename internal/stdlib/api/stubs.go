@@ -4,6 +4,7 @@ package api
 // Each returns 1 (an empty library table) to satisfy OpenAll.
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -71,16 +72,78 @@ func debugGetmetatable(L *luaapi.State) int {
 }
 
 // debug.traceback([thread,] [message [, level]]) — returns a traceback string
-// Minimal stub: just returns the message or an empty string
+// Mirrors: luaB_traceback in ldblib.c (simplified)
 func debugTraceback(L *luaapi.State) int {
-	msg, ok := L.ToString(1)
-	if ok {
-		L.PushString(msg)
-	} else if L.IsNoneOrNil(1) {
-		L.PushString("")
+	// Parse arguments
+	arg := 1
+	// Skip thread argument if present (we don't support coroutine tracing)
+	msg, hasMsg := L.ToString(arg)
+	level := 1
+	if L.Type(arg) == 3 { // number as first arg = level
+		level = int(L.CheckInteger(arg))
+		hasMsg = false
 	} else {
-		L.PushValue(1) // return non-string as-is
+		if !hasMsg && !L.IsNoneOrNil(arg) {
+			// Non-string, non-nil message — return as-is
+			L.PushValue(arg)
+			return 1
+		}
+		if L.GetTop() >= arg+1 {
+			level = int(L.OptInteger(arg+1, 1))
+		}
 	}
+
+	// Build traceback
+	var buf strings.Builder
+	if hasMsg {
+		buf.WriteString(msg)
+		buf.WriteString("\n")
+	}
+	buf.WriteString("stack traceback:")
+
+	for level < 200 { // safety limit
+		ar, ok := L.GetStack(level)
+		if !ok {
+			break
+		}
+		L.GetInfo("Slnt", ar)
+		buf.WriteString("\n\t")
+		buf.WriteString(ar.ShortSrc)
+		if ar.CurrentLine > 0 {
+			buf.WriteString(fmt.Sprintf(":%d", ar.CurrentLine))
+		}
+		buf.WriteString(": in ")
+
+		// Determine frame description
+		if ar.What == "main" {
+			buf.WriteString("main chunk")
+		} else if ar.What == "C" {
+			buf.WriteString("?")
+		} else {
+			// Try to get function name
+			L.GetInfo("n", ar)
+			if ar.Name != "" {
+				if ar.NameWhat == "metamethod" {
+					buf.WriteString(fmt.Sprintf("metamethod '%s'", ar.Name))
+				} else {
+					buf.WriteString(fmt.Sprintf("%s '%s'", ar.NameWhat, ar.Name))
+				}
+			} else {
+				buf.WriteString("function <")
+				buf.WriteString(ar.ShortSrc)
+				if ar.LineDefined > 0 {
+					buf.WriteString(fmt.Sprintf(":%d", ar.LineDefined))
+				}
+				buf.WriteString(">")
+			}
+		}
+		level++
+	}
+	if level >= 200 {
+		buf.WriteString("\n\t...")
+	}
+
+	L.PushString(buf.String())
 	return 1
 }
 
