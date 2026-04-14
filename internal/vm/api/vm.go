@@ -2195,9 +2195,14 @@ startfunc:
 
 		case opcodeapi.OP_TFORPREP:
 			// Swap control and closing variables
+			// Before: ra=iter, ra+1=state, ra+2=control, ra+3=closing
+			// After:  ra=iter, ra+1=state, ra+2=closing(tbc), ra+3=control
 			temp := L.Stack[ra+3].Val
 			L.Stack[ra+3].Val = L.Stack[ra+2].Val
 			L.Stack[ra+2].Val = temp
+			// Mark the closing variable (now at ra+2) as to-be-closed
+			// C Lua: halfProtect(luaF_newtbcupval(L, ra + 2))
+			MarkTBC(L, ra+2)
 			ci.SavedPC += opcodeapi.GetArgBx(inst)
 			// Fall through to TFORCALL
 			inst = code[ci.SavedPC]
