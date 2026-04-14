@@ -49,22 +49,195 @@ func str_byte(L *luaapi.State) int {
 	return n
 }
 
-// MAXINTSIZE is the maximum size for pack/unpack integer formats (matches C Lua).
+// ---------------------------------------------------------------------------
+// Pack/unpack format parser — matches C Lua's getoption/getdetails/getnum/getnumlimit
+// Reference: lua-master/lstrlib.c lines 1440-1570
+// ---------------------------------------------------------------------------
+
+// maxIntSize is the maximum size for pack/unpack integer formats (matches C Lua).
 const maxIntSize = 16
 
-// readPackIntSize reads an optional integer size suffix from a pack format string.
-// Returns the size and the new index. If no digit follows, returns defaultSz.
-func readPackIntSize(fmtStr string, i int, defaultSz int) (int, int) {
-	sz := defaultSz
-	if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
-		sz = int(fmtStr[i] - '0')
-		i++
-		for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
-			sz = sz*10 + int(fmtStr[i]-'0')
-			i++
+// maxSize is the maximum total size for pack results.
+// On 64-bit: MAX_SIZE = LUA_MAXINTEGER (matches C Lua's llimits.h).
+const maxSize = math.MaxInt64
+
+// kOption classifies a pack/unpack format option.
+type kOption int
+
+const (
+	kInt       kOption = iota // signed integers
+	kUint                     // unsigned integers
+	kFloat                    // C float
+	kNumber                   // Lua number (float64)
+	kDouble                   // C double
+	kChar                     // fixed-size string (cn)
+	kString                   // strings with length count (sn)
+	kZstr                     // zero-terminated strings
+	kPadding                  // padding byte (x)
+	kPaddalign                // padding for alignment (X)
+	kNop                      // no-op (configuration or spaces)
+)
+
+// packHeader holds pack/unpack state — matches C Lua's Header struct.
+type packHeader struct {
+	L        *luaapi.State
+	islittle bool
+	maxalign int
+}
+
+// initHeader initializes a packHeader with native defaults.
+func initHeader(L *luaapi.State) packHeader {
+	return packHeader{L: L, islittle: true, maxalign: 1} // assume little-endian native
+}
+
+// getnum reads an integer numeral from fmtStr[*pos] or returns df if no digit.
+// Matches C Lua's getnum() in lstrlib.c.
+func getnum(fmtStr string, pos *int, df int) int {
+	if *pos >= len(fmtStr) || fmtStr[*pos] < '0' || fmtStr[*pos] > '9' {
+		return df
+	}
+	a := 0
+	for *pos < len(fmtStr) && fmtStr[*pos] >= '0' && fmtStr[*pos] <= '9' && a <= (maxSize-9)/10 {
+		a = a*10 + int(fmtStr[*pos]-'0')
+		*pos++
+	}
+	return a
+}
+
+// getnumlimit reads an integer numeral and errors if outside [1, maxIntSize].
+// Matches C Lua's getnumlimit() in lstrlib.c.
+func getnumlimit(h *packHeader, fmtStr string, pos *int, df int) int {
+	sz := getnum(fmtStr, pos, df)
+	if sz < 1 || sz > maxIntSize { // must be in [1, maxIntSize]
+		h.L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
+	}
+	return sz
+}
+
+// getoption reads and classifies the next format option.
+// Returns the option kind and fills *size with the option's data size.
+// Advances *pos past the option character and any following digits.
+// Matches C Lua's getoption() in lstrlib.c.
+func getoption(h *packHeader, fmtStr string, pos *int, size *int) kOption {
+	if *pos >= len(fmtStr) {
+		// shouldn't happen — caller checks
+		return kNop
+	}
+	opt := fmtStr[*pos]
+	*pos++
+	*size = 0 // default
+	switch opt {
+	case 'b':
+		*size = 1
+		return kInt
+	case 'B':
+		*size = 1
+		return kUint
+	case 'h':
+		*size = 2
+		return kInt
+	case 'H':
+		*size = 2
+		return kUint
+	case 'l':
+		*size = 8
+		return kInt // sizeof(long) on 64-bit
+	case 'L':
+		*size = 8
+		return kUint
+	case 'j':
+		*size = 8
+		return kInt // sizeof(lua_Integer)
+	case 'J':
+		*size = 8
+		return kUint
+	case 'T':
+		*size = 8
+		return kUint // sizeof(size_t)
+	case 'f':
+		*size = 4
+		return kFloat
+	case 'n':
+		*size = 8
+		return kNumber
+	case 'd':
+		*size = 8
+		return kDouble
+	case 'i':
+		*size = getnumlimit(h, fmtStr, pos, 4)
+		return kInt
+	case 'I':
+		*size = getnumlimit(h, fmtStr, pos, 4)
+		return kUint
+	case 's':
+		*size = getnumlimit(h, fmtStr, pos, 8)
+		return kString
+	case 'c':
+		*size = getnum(fmtStr, pos, -1)
+		if *size == -1 {
+			h.L.Errorf("missing size for format option 'c'")
+		}
+		return kChar
+	case 'z':
+		return kZstr
+	case 'x':
+		*size = 1
+		return kPadding
+	case 'X':
+		return kPaddalign
+	case ' ':
+		// skip
+	case '<':
+		h.islittle = true
+	case '>':
+		h.islittle = false
+	case '=':
+		h.islittle = true // native = little-endian on our platform
+	case '!':
+		h.maxalign = getnumlimit(h, fmtStr, pos, 8) // default maxalign = 8 (offsetof(struct cD, u) on 64-bit)
+	default:
+		h.L.Errorf("invalid format option '%c'", opt)
+	}
+	return kNop
+}
+
+// ispow2 checks if n is a power of 2.
+func ispow2(n int) bool {
+	return n > 0 && (n&(n-1)) == 0
+}
+
+// getdetails reads, classifies, and computes alignment for the next option.
+// Returns the option kind, fills *psize with data size, *ntoalign with alignment padding.
+// Matches C Lua's getdetails() in lstrlib.c.
+func getdetails(h *packHeader, totalsize int, fmtStr string, pos *int, psize *int, ntoalign *int) kOption {
+	opt := getoption(h, fmtStr, pos, psize)
+	align := *psize // usually, alignment follows size
+	if opt == kPaddalign {
+		// 'X' gets alignment from following option
+		if *pos >= len(fmtStr) {
+			h.L.ArgError(1, "invalid next option for option 'X'")
+		}
+		nextOpt := getoption(h, fmtStr, pos, &align)
+		if nextOpt == kChar || align == 0 {
+			h.L.ArgError(1, "invalid next option for option 'X'")
 		}
 	}
-	return sz, i
+	if align <= 1 || opt == kChar { // need no alignment?
+		*ntoalign = 0
+	} else {
+		if align > h.maxalign { // enforce maximum alignment
+			align = h.maxalign
+		}
+		if !ispow2(align) {
+			*ntoalign = 0
+			h.L.ArgError(1, "format asks for alignment not power of 2")
+		} else {
+			// szmoda = totalsize % align
+			szmoda := totalsize & (align - 1)
+			*ntoalign = (align - szmoda) & (align - 1)
+		}
+	}
+	return opt
 }
 
 func str_char(L *luaapi.State) int {
@@ -998,189 +1171,98 @@ func gsubReplace(repl string, ms *matchState, si, ei int) string {
 	return sb.String()
 }
 
-// packOptSize returns the byte size for a single pack format character.
-// Matches C Lua's getdetails() in lstrlib.c.
-// On 64-bit: lua_Integer=int64(8), lua_Number=float64(8), size_t=8, int=4, short=2, long=8.
-func packOptSize(fmt byte) int {
-	switch fmt {
-	case 'b', 'B':
-		return 1
-	case 'h', 'H':
-		return 2
-	case 'l', 'L':
-		return 8 // sizeof(long) on 64-bit
-	case 'j', 'J':
-		return 8 // sizeof(lua_Integer)
-	case 'T':
-		return 8 // sizeof(size_t)
-	case 'f':
-		return 4 // sizeof(float)
-	case 'n':
-		return 8 // sizeof(lua_Number)
-	case 'd':
-		return 8 // sizeof(double)
-	default:
-		return 0 // unknown
-	}
-}
+// (packOptSize removed — replaced by getoption/getdetails infrastructure above)
 
 // str_packsize implements string.packsize(fmt).
+// Matches C Lua's str_packsize in lstrlib.c.
 func str_packsize(L *luaapi.State) int {
 	fmtStr := L.CheckString(1)
-	total := 0
-	i := 0
-	for i < len(fmtStr) {
-		c := fmtStr[i]
-		i++
-		switch {
-		case c == '<' || c == '>' || c == '=' || c == '!':
-			// endianness/alignment markers — skip
-			continue
-		case c >= '0' && c <= '9':
-			// skip digits (alignment specifier after !)
-			continue
-		case c == ' ':
-			continue
-		case c == 'x':
-			total++ // one padding byte
-		case c == 'X':
-			// empty alignment item — skip
-			continue
-		case c == 'i', c == 'I':
-			// i[n] / I[n] — optional size follows
-			sz := 4 // default = sizeof(int)
-			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
-				sz = int(fmtStr[i] - '0')
-				i++
-				for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
-					sz = sz*10 + int(fmtStr[i]-'0')
-					i++
-				}
-			}
-			if sz < 1 || sz > maxIntSize {
-				L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
-			}
-			total += sz
-		case c == 's':
-			L.ArgError(1, "variable-length format")
-			return 0
-		case c == 'z':
-			L.ArgError(1, "variable-length format")
-			return 0
-		default:
-			sz := packOptSize(c)
-			if sz == 0 {
-				L.ArgError(1, fmt.Sprintf("invalid format option '%c'", c))
-				return 0
-			}
-			total += sz
-		}
+	h := initHeader(L)
+	totalsize := 0
+	pos := 0
+	for pos < len(fmtStr) {
+		var size, ntoalign int
+		opt := getdetails(&h, totalsize, fmtStr, &pos, &size, &ntoalign)
+		L.ArgCheck(opt != kString && opt != kZstr, 1, "variable-length format")
+		size += ntoalign
+		L.ArgCheck(totalsize <= maxSize-size, 1, "format result too large")
+		totalsize += size
 	}
-	L.PushInteger(int64(total))
+	L.PushInteger(int64(totalsize))
 	return 1
 }
 
 // str_pack implements string.pack(fmt, v1, v2, ...).
+// Matches C Lua's str_pack in lstrlib.c.
 func str_pack(L *luaapi.State) int {
 	fmtStr := L.CheckString(1)
+	h := initHeader(L)
 	var buf []byte
-	arg := 2
-	i := 0
-	isLittle := true // default: native (assume little-endian)
-	for i < len(fmtStr) {
-		c := fmtStr[i]
-		i++
-		switch {
-		case c == '<':
-			isLittle = true
-			continue
-		case c == '>':
-			isLittle = false
-			continue
-		case c == '=', c == '!':
-			continue
-		case c >= '0' && c <= '9', c == ' ':
-			continue
-		case c == 'x':
+	arg := 1 // current argument to pack (will be incremented before use)
+	totalsize := 0
+	pos := 0
+	for pos < len(fmtStr) {
+		var size, ntoalign int
+		opt := getdetails(&h, totalsize, fmtStr, &pos, &size, &ntoalign)
+		L.ArgCheck(size+ntoalign <= maxSize-totalsize, arg, "result too long")
+		totalsize += ntoalign + size
+		// Fill alignment padding
+		for ntoalign > 0 {
 			buf = append(buf, 0)
-		case c == 'b':
+			ntoalign--
+		}
+		arg++
+		switch opt {
+		case kInt: // signed integers
 			v := L.CheckInteger(arg)
-			arg++
-			buf = append(buf, byte(int8(v)))
-		case c == 'B':
-			v := L.CheckInteger(arg)
-			arg++
-			buf = append(buf, byte(v))
-		case c == 'i', c == 'I':
-			signed := c == 'i'
-			sz, newI := readPackIntSize(fmtStr, i, 4)
-			i = newI
-			if sz < 1 || sz > maxIntSize {
-				L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
+			if size < 8 { // need overflow check?
+				lim := int64(1) << (uint(size)*8 - 1)
+				L.ArgCheck(-lim <= v && v < lim, arg, "integer overflow")
 			}
+			buf = appendInt(buf, uint64(v), size, h.islittle)
+		case kUint: // unsigned integers
 			v := L.CheckInteger(arg)
-			arg++
-			// Check overflow for unsigned packing
-			if !signed {
-				if v < 0 {
-					L.ArgError(arg-1, "unsigned overflow")
-				}
-				if sz < 8 {
-					umax := int64(uint64(1)<<(uint(sz)*8)) - 1
-					if v > umax {
-						L.ArgError(arg-1, "unsigned overflow")
-					}
-				}
-			} else {
-				// Check signed overflow for small sizes
-				if sz < 8 {
-					smax := int64(uint64(1)<<(uint(sz)*8-1)) - 1
-					smin := -(smax + 1)
-					if v < smin || v > smax {
-						L.ArgError(arg-1, "integer overflow")
-					}
-				}
+			if size < 8 {
+				L.ArgCheck(uint64(v) < (uint64(1) << (uint(size) * 8)), arg, "unsigned overflow")
+			} else if size == 8 {
+				// 8-byte unsigned: allow all bit patterns (C Lua does too)
 			}
-			buf = appendInt(buf, uint64(v), sz, isLittle)
-		case c == 'h', c == 'H':
-			v := L.CheckInteger(arg)
-			arg++
-			buf = appendInt(buf, uint64(v), 2, isLittle)
-		case c == 'l', c == 'L':
-			v := L.CheckInteger(arg)
-			arg++
-			buf = appendInt(buf, uint64(v), 8, isLittle)
-		case c == 'j', c == 'J':
-			v := L.CheckInteger(arg)
-			arg++
-			buf = appendInt(buf, uint64(v), 8, isLittle)
-		case c == 'f':
+			buf = appendInt(buf, uint64(v), size, h.islittle)
+		case kFloat: // C float
 			v := float32(L.CheckNumber(arg))
-			arg++
 			bits := math.Float32bits(v)
-			buf = appendInt(buf, uint64(bits), 4, isLittle)
-		case c == 'd', c == 'n':
+			buf = appendInt(buf, uint64(bits), 4, h.islittle)
+		case kNumber, kDouble: // Lua number / C double
 			v := L.CheckNumber(arg)
-			arg++
 			bits := math.Float64bits(v)
-			buf = appendInt(buf, bits, 8, isLittle)
-		case c == 's':
-			sz := 8 // default s size
-			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
-				sz = int(fmtStr[i] - '0')
-				i++
-			}
+			buf = appendInt(buf, bits, 8, h.islittle)
+		case kChar: // fixed-size string (cn)
 			s := L.CheckString(arg)
-			arg++
-			buf = appendInt(buf, uint64(len(s)), sz, isLittle)
+			L.ArgCheck(len(s) <= size, arg, "string longer than given size")
 			buf = append(buf, s...)
-		case c == 'z':
+			// Pad with zeros if shorter
+			for i := len(s); i < size; i++ {
+				buf = append(buf, 0)
+			}
+		case kString: // strings with length count (sn)
 			s := L.CheckString(arg)
-			arg++
+			L.ArgCheck(size >= 8 || uint64(len(s)) < (uint64(1)<<(uint(size)*8)),
+				arg, "string length does not fit in given size")
+			buf = appendInt(buf, uint64(len(s)), size, h.islittle)
+			buf = append(buf, s...)
+			totalsize += len(s)
+		case kZstr: // zero-terminated string
+			s := L.CheckString(arg)
+			// Check that string doesn't contain embedded zeros
+			L.ArgCheck(strings.IndexByte(s, 0) == -1, arg, "string contains zeros")
 			buf = append(buf, s...)
 			buf = append(buf, 0)
-		default:
-			// skip unknown
+			totalsize += len(s) + 1
+		case kPadding:
+			buf = append(buf, 0)
+			arg-- // undo increment (no argument consumed)
+		case kPaddalign, kNop:
+			arg-- // undo increment (no argument consumed)
 		}
 	}
 	L.PushString(string(buf))
@@ -1188,121 +1270,69 @@ func str_pack(L *luaapi.State) int {
 }
 
 // str_unpack implements string.unpack(fmt, s [, pos]).
+// Matches C Lua's str_unpack in lstrlib.c.
 func str_unpack(L *luaapi.State) int {
 	fmtStr := L.CheckString(1)
 	data := L.CheckString(2)
-	pos := int(L.OptInteger(3, 1)) - 1 // Lua 1-based to 0-based
+	ld := len(data)
+	pos := posRelat(L.OptInteger(3, 1), ld) - 1 // posRelat returns 1-based, convert to 0-based
 	if pos < 0 {
 		pos = 0
 	}
-
-	isLittle := true
-	i := 0
-	nret := 0
-	for i < len(fmtStr) {
-		c := fmtStr[i]
-		i++
-		switch {
-		case c == '<':
-			isLittle = true
-			continue
-		case c == '>':
-			isLittle = false
-			continue
-		case c == '=', c == '!':
-			continue
-		case c >= '0' && c <= '9', c == ' ':
-			continue
-		case c == 'x':
-			pos++
-		case c == 'b':
-			if pos >= len(data) {
-				L.ArgError(2, "data string too short")
-			}
-			L.PushInteger(int64(int8(data[pos])))
-			pos++
-			nret++
-		case c == 'B':
-			if pos >= len(data) {
-				L.ArgError(2, "data string too short")
-			}
-			L.PushInteger(int64(data[pos]))
-			pos++
-			nret++
-		case c == 'i', c == 'I':
-			signed := c == 'i'
-			sz, newI := readPackIntSize(fmtStr, i, 4)
-			i = newI
-			if sz < 1 || sz > maxIntSize {
-				L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
-			}
-			v := readInt(data, pos, sz, isLittle, signed)
-			// Check overflow for sizes > 8 bytes
-			if sz > 8 && !checkIntOverflow(data, pos, sz, isLittle, signed) {
-				L.ArgError(2, fmt.Sprintf("%d-byte integer does not fit into Lua Integer", sz))
-			}
-			// For unsigned integers of exactly 8 bytes, check if value fits in int64
-			if !signed && sz == 8 && v < 0 {
-				L.ArgError(2, fmt.Sprintf("%d-byte integer does not fit into Lua Integer", sz))
+	L.ArgCheck(pos <= ld, 3, "initial position out of string")
+	h := initHeader(L)
+	n := 0 // number of results
+	fmtPos := 0
+	for fmtPos < len(fmtStr) {
+		var size, ntoalign int
+		opt := getdetails(&h, pos, fmtStr, &fmtPos, &size, &ntoalign)
+		L.ArgCheck(ntoalign+size <= ld-pos, 2, "data string too short")
+		pos += ntoalign // skip alignment
+		n++
+		switch opt {
+		case kInt:
+			v := readInt(data, pos, size, h.islittle, true)
+			if size > 8 && !checkIntOverflow(data, pos, size, h.islittle, true) {
+				L.ArgError(2, fmt.Sprintf("%d-byte integer does not fit into Lua Integer", size))
 			}
 			L.PushInteger(v)
-			pos += sz
-			nret++
-		case c == 'h':
-			v := readInt(data, pos, 2, isLittle, true)
+		case kUint:
+			v := readInt(data, pos, size, h.islittle, false)
+			if size > 8 && !checkIntOverflow(data, pos, size, h.islittle, false) {
+				L.ArgError(2, fmt.Sprintf("%d-byte integer does not fit into Lua Integer", size))
+			}
 			L.PushInteger(v)
-			pos += 2
-			nret++
-		case c == 'H':
-			v := readInt(data, pos, 2, isLittle, false)
-			L.PushInteger(v)
-			pos += 2
-			nret++
-		case c == 'l', c == 'j':
-			v := readInt(data, pos, 8, isLittle, true)
-			L.PushInteger(v)
-			pos += 8
-			nret++
-		case c == 'L', c == 'J':
-			v := readInt(data, pos, 8, isLittle, false)
-			L.PushInteger(v)
-			pos += 8
-			nret++
-		case c == 'f':
-			bits := uint32(readUint(data, pos, 4, isLittle))
+		case kFloat:
+			bits := uint32(readUint(data, pos, 4, h.islittle))
 			L.PushNumber(float64(math.Float32frombits(bits)))
-			pos += 4
-			nret++
-		case c == 'd', c == 'n':
-			bits := readUint(data, pos, 8, isLittle)
+		case kNumber, kDouble:
+			bits := readUint(data, pos, 8, h.islittle)
 			L.PushNumber(math.Float64frombits(bits))
-			pos += 8
-			nret++
-		case c == 's':
-			sz := 8
-			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
-				sz = int(fmtStr[i] - '0')
-				i++
-			}
-			slen := int(readUint(data, pos, sz, isLittle))
-			pos += sz
-			L.PushString(data[pos : pos+slen])
-			pos += slen
-			nret++
-		case c == 'z':
+		case kChar:
+			L.PushString(data[pos : pos+size])
+		case kString:
+			slen := int(readUint(data, pos, size, h.islittle))
+			L.ArgCheck(slen <= ld-pos-size, 2, "data string too short")
+			L.PushString(data[pos+size : pos+size+slen])
+			pos += slen // skip string content
+		case kZstr:
 			end := pos
-			for end < len(data) && data[end] != 0 {
+			for end < ld && data[end] != 0 {
 				end++
 			}
+			L.ArgCheck(end < ld, 2, "unfinished string for format 'z'")
 			L.PushString(data[pos:end])
+			pos = end + 1 - size // adjust: size=0 for kZstr, but pos += size below
+			// Actually kZstr has size=0, so pos = end+1 after pos += size
 			pos = end + 1
-			nret++
-		default:
-			// skip
+			size = 0 // ensure pos += size doesn't double-count
+		case kPaddalign, kPadding, kNop:
+			n-- // undo increment (no result pushed)
 		}
+		pos += size
 	}
 	L.PushInteger(int64(pos + 1)) // return final position (1-based)
-	return nret + 1
+	return n + 1
 }
 
 func appendInt(buf []byte, v uint64, size int, little bool) []byte {
