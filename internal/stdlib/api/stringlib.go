@@ -231,18 +231,28 @@ func str_format(L *luaapi.State) int {
 			s := L.CheckString(arg)
 			sb.WriteString(quoteString(s))
 		case 'p':
-			// pointer representation
-			// nil, boolean, number → "(null)"
-			// string, table, function, userdata → pointer-like string
+			// pointer representation — mirrors luaO_pushfstring %p
+			// nil, boolean, number, string → "(null)"
+			// table, function, userdata, thread → "0x..." hex address
 			v := L.Type(arg)
+			var pstr string
 			switch v {
-			case objectapi.TypeNil, objectapi.TypeBoolean, objectapi.TypeNumber:
-				sb.WriteString("(null)")
+			case objectapi.TypeNil, objectapi.TypeBoolean, objectapi.TypeNumber, objectapi.TypeString:
+				pstr = "(null)"
 			default:
-				s := L.TolString(arg)
-				L.Pop(1)
-				sb.WriteString(s)
+				ptr := L.ToPointer(arg)
+				if ptr == "" {
+					pstr = "(null)"
+				} else {
+					pstr = ptr
+				}
 			}
+			// Apply width/padding from format spec
+			if spec != "%p" {
+				fmtS := strings.Replace(spec, "p", "s", 1)
+				pstr = fmt.Sprintf(fmtS, pstr)
+			}
+			sb.WriteString(pstr)
 		default:
 			sb.WriteString(spec) // unknown, pass through
 		}
