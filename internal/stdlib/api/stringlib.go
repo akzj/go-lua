@@ -48,6 +48,24 @@ func str_byte(L *luaapi.State) int {
 	return n
 }
 
+// MAXINTSIZE is the maximum size for pack/unpack integer formats (matches C Lua).
+const maxIntSize = 16
+
+// readPackIntSize reads an optional integer size suffix from a pack format string.
+// Returns the size and the new index. If no digit follows, returns defaultSz.
+func readPackIntSize(fmtStr string, i int, defaultSz int) (int, int) {
+	sz := defaultSz
+	if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
+		sz = int(fmtStr[i] - '0')
+		i++
+		for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
+			sz = sz*10 + int(fmtStr[i]-'0')
+			i++
+		}
+	}
+	return sz, i
+}
+
 func str_char(L *luaapi.State) int {
 	n := L.GetTop()
 	buf := make([]byte, n)
@@ -1038,6 +1056,9 @@ func str_packsize(L *luaapi.State) int {
 					i++
 				}
 			}
+			if sz < 1 || sz > maxIntSize {
+				L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
+			}
 			total += sz
 		case c == 's':
 			L.ArgError(1, "variable-length format")
@@ -1090,17 +1111,35 @@ func str_pack(L *luaapi.State) int {
 			arg++
 			buf = append(buf, byte(v))
 		case c == 'i', c == 'I':
-			sz := 4
-			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
-				sz = int(fmtStr[i] - '0')
-				i++
-				for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
-					sz = sz*10 + int(fmtStr[i]-'0')
-					i++
-				}
+			signed := c == 'i'
+			sz, newI := readPackIntSize(fmtStr, i, 4)
+			i = newI
+			if sz < 1 || sz > maxIntSize {
+				L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
 			}
 			v := L.CheckInteger(arg)
 			arg++
+			// Check overflow for unsigned packing
+			if !signed {
+				if v < 0 {
+					L.ArgError(arg-1, "unsigned overflow")
+				}
+				if sz < 8 {
+					umax := int64(uint64(1)<<(uint(sz)*8)) - 1
+					if v > umax {
+						L.ArgError(arg-1, "unsigned overflow")
+					}
+				}
+			} else {
+				// Check signed overflow for small sizes
+				if sz < 8 {
+					smax := int64(uint64(1)<<(uint(sz)*8-1)) - 1
+					smin := -(smax + 1)
+					if v < smin || v > smax {
+						L.ArgError(arg-1, "integer overflow")
+					}
+				}
+			}
 			buf = appendInt(buf, uint64(v), sz, isLittle)
 		case c == 'h', c == 'H':
 			v := L.CheckInteger(arg)
@@ -1190,17 +1229,21 @@ func str_unpack(L *luaapi.State) int {
 			pos++
 			nret++
 		case c == 'i', c == 'I':
-			sz := 4
 			signed := c == 'i'
-			if i < len(fmtStr) && fmtStr[i] >= '1' && fmtStr[i] <= '9' {
-				sz = int(fmtStr[i] - '0')
-				i++
-				for i < len(fmtStr) && fmtStr[i] >= '0' && fmtStr[i] <= '9' {
-					sz = sz*10 + int(fmtStr[i]-'0')
-					i++
-				}
+			sz, newI := readPackIntSize(fmtStr, i, 4)
+			i = newI
+			if sz < 1 || sz > maxIntSize {
+				L.ArgError(1, fmt.Sprintf("integral size (%d) out of limits [1,%d]", sz, maxIntSize))
 			}
 			v := readInt(data, pos, sz, isLittle, signed)
+			// Check overflow for sizes > 8 bytes
+			if sz > 8 && !checkIntOverflow(data, pos, sz, isLittle, signed) {
+				L.ArgError(2, fmt.Sprintf("%d-byte integer does not fit into Lua Integer", sz))
+			}
+			// For unsigned integers of exactly 8 bytes, check if value fits in int64
+			if !signed && sz == 8 && v < 0 {
+				L.ArgError(2, fmt.Sprintf("%d-byte integer does not fit into Lua Integer", sz))
+			}
 			L.PushInteger(v)
 			pos += sz
 			nret++
@@ -1263,14 +1306,28 @@ func str_unpack(L *luaapi.State) int {
 
 func appendInt(buf []byte, v uint64, size int, little bool) []byte {
 	b := make([]byte, size)
+	// Sign extension byte: if the value is negative (bit 63 set), extend with 0xff
+	var ext byte
+	if int64(v) < 0 {
+		ext = 0xff
+	}
 	if little {
 		for i := 0; i < size; i++ {
-			b[i] = byte(v >> (uint(i) * 8))
+			if i < 8 {
+				b[i] = byte(v >> (uint(i) * 8))
+			} else {
+				b[i] = ext
+			}
 		}
 	} else {
-		for i := size - 1; i >= 0; i-- {
-			b[i] = byte(v)
-			v >>= 8
+		// Big-endian: high bytes first
+		for i := 0; i < size; i++ {
+			byteIdx := size - 1 - i // byte position from LSB
+			if byteIdx < 8 {
+				b[i] = byte(v >> (uint(byteIdx) * 8))
+			} else {
+				b[i] = ext
+			}
 		}
 	}
 	return append(buf, b...)
@@ -1278,16 +1335,64 @@ func appendInt(buf []byte, v uint64, size int, little bool) []byte {
 
 func readUint(data string, pos, size int, little bool) uint64 {
 	var v uint64
+	// Only read up to 8 bytes into uint64; extra bytes are sign extension
+	readSize := size
+	if readSize > 8 {
+		readSize = 8
+	}
 	if little {
-		for i := size - 1; i >= 0; i-- {
+		for i := readSize - 1; i >= 0; i-- {
 			v = (v << 8) | uint64(data[pos+i])
 		}
 	} else {
-		for i := 0; i < size; i++ {
-			v = (v << 8) | uint64(data[pos+i])
+		// Big-endian: skip leading (size-readSize) bytes, read last readSize
+		offset := size - readSize
+		for i := 0; i < readSize; i++ {
+			v = (v << 8) | uint64(data[pos+offset+i])
 		}
 	}
 	return v
+}
+
+// checkIntOverflow checks that extra bytes (beyond 8) are valid sign extension.
+// For signed: extra bytes must match the sign of the 8-byte value.
+// For unsigned: extra bytes must be 0x00.
+// Returns true if the value fits, false if overflow.
+func checkIntOverflow(data string, pos, size int, little, signed bool) bool {
+	if size <= 8 {
+		return true // no extra bytes
+	}
+	// Determine what the extra bytes should be
+	var expected byte
+	if signed {
+		// Check sign bit of the 8-byte value
+		var signByte byte
+		if little {
+			signByte = data[pos+7] // MSB of the 8-byte value in little-endian
+		} else {
+			signByte = data[pos+size-8] // MSB of the 8-byte value in big-endian
+		}
+		if signByte&0x80 != 0 {
+			expected = 0xff
+		}
+	}
+	// Check extra bytes
+	if little {
+		// Extra bytes are at positions [8, size)
+		for i := 8; i < size; i++ {
+			if data[pos+i] != expected {
+				return false
+			}
+		}
+	} else {
+		// Extra bytes are at positions [0, size-8)
+		for i := 0; i < size-8; i++ {
+			if data[pos+i] != expected {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func readInt(data string, pos, size int, little, signed bool) int64 {
