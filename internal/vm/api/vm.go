@@ -1323,18 +1323,26 @@ func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vata
 		h = L.Stack[ci.Func+vatab+1].Val.Val.(*tableapi.Table)
 	}
 
-	// Get number of available vararg args
+	// Get number of available vararg args — mirrors getnumargs() in ltm.c
 	var nExtra int
 	if h == nil {
 		nExtra = ci.NExtraArgs
 	} else {
-		// Read t.n from the vararg table
+		// Read t.n from the vararg table and validate
 		st := L.Global.StringTable.(*luastringapi.StringTable)
 		nKey := objectapi.MakeString(st.Intern("n"))
 		nVal, ok := h.Get(nKey)
-		if ok && nVal.Tt == objectapi.TagInteger {
-			nExtra = int(nVal.Integer())
+		if !ok || nVal.Tt != objectapi.TagInteger {
+			RunError(L, "vararg table has no proper 'n'")
 		}
+		iv := nVal.Integer()
+		// C Lua: l_castS2U(ivalue(&res)) > cast_uint(INT_MAX/2)
+		// Negative values become huge unsigned → error
+		const maxN = int64(0x7fffffff / 2) // INT_MAX/2
+		if uint64(iv) > uint64(maxN) {
+			RunError(L, "vararg table has no proper 'n'")
+		}
+		nExtra = int(iv)
 	}
 
 	if n < 0 {
