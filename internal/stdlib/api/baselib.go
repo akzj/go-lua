@@ -446,7 +446,7 @@ func luaB_load(L *luaapi.State) int {
 	s, ok := L.ToString(1)
 	mode := L.OptString(3, "bt")
 	env := 0
-	if !L.IsNone(4) && !L.IsNil(4) {
+	if !L.IsNone(4) {
 		env = 4
 	}
 	var status int
