@@ -2262,7 +2262,17 @@ startfunc:
 				n = L.Top - ra
 			}
 			if opcodeapi.GetArgK(inst) != 0 {
+				// C Lua: save nres, ensure stack space, close upvals+TBC, refresh base/ra
+				ci.NRes = n
+				if L.Top < ci.Top {
+					L.Top = ci.Top
+				}
 				closureapi.CloseUpvals(L, base)
+				CloseTBC(L, base)
+				// After close, stack may have been reallocated by __close calls.
+				// Refresh base and ra from ci (which uses offsets, not pointers).
+				base = ci.Func + 1
+				ra = base + opcodeapi.GetArgA(inst)
 			}
 			if nparams1 != 0 {
 				ci.Func -= ci.NExtraArgs + nparams1
