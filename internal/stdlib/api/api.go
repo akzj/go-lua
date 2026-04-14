@@ -26,7 +26,7 @@ func StandardLibraries() []Library {
 	return []Library{
 		{"_G", OpenBase},
 		{"package", OpenPackage},
-		{"coroutine", OpenCoroutine},
+		{"coroutine", OpenCoroutineLib},
 		{"debug", OpenDebug},
 		{"io", OpenIO},
 		{"math", OpenMath},

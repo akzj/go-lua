@@ -276,32 +276,6 @@ func OpenUTF8(L *luaapi.State) int {
 	return 1
 }
 
-func OpenCoroutine(L *luaapi.State) int {
-	L.NewLib(map[string]luaapi.CFunction{
-		"wrap":    coroWrapStub,
-		"running": coroRunningStub,
-	})
-	return 1
-}
-
-// coroRunningStub implements coroutine.running().
-// Returns the running coroutine plus a boolean.
-// Since we don't have full coroutine support yet, returns nil, true
-// (meaning: main thread is running).
-func coroRunningStub(L *luaapi.State) int {
-	ismain := L.PushThread()
-	L.PushBoolean(ismain)
-	return 2
-}
-
-// coroWrapStub is a minimal coroutine.wrap that just returns the function.
-// This works for simple iterator patterns that don't actually yield.
-func coroWrapStub(L *luaapi.State) int {
-	L.CheckType(1, 6) // TypeFunction = 6
-	L.PushValue(1)
-	return 1
-}
-
 func OpenPackage(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{
 		"searchpath": pkgSearchPath,

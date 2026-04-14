@@ -29,6 +29,7 @@ type UpVal struct {
 	StackIdx int              // stack index when open, -1 when closed
 	Own      objectapi.TValue // storage for closed value
 	Next     *UpVal           // next in open list (lower stack level)
+	Stack    *[]objectapi.StackValue // pointer to owning thread's stack (for cross-thread access)
 }
 
 // IsOpen returns true if the upvalue still points to a stack slot.
@@ -41,22 +42,32 @@ func (uv *UpVal) IsOpen() bool {
 func (uv *UpVal) Close(val objectapi.TValue) {
 	uv.Own = val
 	uv.StackIdx = -1
+	uv.Stack = nil // no longer needed
 }
 
 // Get returns the current value of the upvalue.
-// For open upvalues, the caller must provide the stack; for closed, uses Own.
+// For open upvalues, uses the stored stack reference (falls back to provided stack).
+// For closed upvalues, uses Own.
 func (uv *UpVal) Get(stack []objectapi.StackValue) objectapi.TValue {
 	if uv.StackIdx >= 0 {
+		if uv.Stack != nil {
+			return (*uv.Stack)[uv.StackIdx].Val
+		}
 		return stack[uv.StackIdx].Val
 	}
 	return uv.Own
 }
 
 // Set sets the value of the upvalue.
-// For open upvalues, writes to the stack; for closed, writes to Own.
+// For open upvalues, uses the stored stack reference (falls back to provided stack).
+// For closed upvalues, writes to Own.
 func (uv *UpVal) Set(stack []objectapi.StackValue, val objectapi.TValue) {
 	if uv.StackIdx >= 0 {
-		stack[uv.StackIdx].Val = val
+		if uv.Stack != nil {
+			(*uv.Stack)[uv.StackIdx].Val = val
+		} else {
+			stack[uv.StackIdx].Val = val
+		}
 	} else {
 		uv.Own = val
 	}

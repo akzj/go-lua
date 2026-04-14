@@ -37,7 +37,8 @@ func FindUpval(L *stateapi.LuaState, level int) *UpVal {
 	uv := &UpVal{
 		StackIdx: level,
 		Own:      objectapi.Nil,
-		Next:     p, // link to rest of list (lower levels)
+		Next:     p,     // link to rest of list (lower levels)
+		Stack:    &L.Stack, // reference to owning thread's stack for cross-thread access
 	}
 
 	// Insert into the list
