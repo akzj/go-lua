@@ -97,18 +97,14 @@ func ErrorMsg(L *stateapi.LuaState) {
 		L.Stack[L.Top].Val = L.Stack[L.Top-1].Val // copy errmsg up
 		L.Stack[L.Top-1].Val = errFunc             // put handler below
 		L.Top++
-		// Save and reset NCCalls to allow the error handler to run
-		// even after deep recursion. C Lua doesn't increment nCcalls
-		// for Lua-to-Lua calls within luaV_execute, so their nCcalls
-		// stays low. Our Call() increments for every call, so we need
-		// to reset here.
-		savedNCCalls := L.NCCalls
-		L.NCCalls = 1
-		// Call handler(errmsg) → 1 result, protected
+		// Do NOT reset NCCalls here. C Lua's luaG_errormsg does not
+		// reset nCcalls — the error handler inherits the current
+		// (high) nCcalls value, so if it tries to recurse deeply,
+		// it will hit the C stack overflow limit quickly.
+		// RunProtected will save/restore NCCalls on error.
 		status := RunProtected(L, func() {
-			Call(L, L.Top-2, 1)
+			CallNoYield(L, L.Top-2, 1)
 		})
-		L.NCCalls = savedNCCalls
 		if status != stateapi.StatusOK {
 			// Error in error handler
 			ErrorErr(L)
