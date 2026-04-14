@@ -812,7 +812,15 @@ func getLocalName(L *stateapi.LuaState, ci *stateapi.CallInfo, idx int) string {
 	return "?"
 }
 
+// maxTBCDelta is the maximum delta between TBC list entries.
+// Matches C Lua's MAXDELTA (USHRT_MAX = 65535).
+// When the gap between consecutive TBC variables exceeds this,
+// dummy nodes (delta=0) are inserted every maxTBCDelta slots.
+const maxTBCDelta = 65535
+
 // MarkTBC marks a stack slot as to-be-closed.
+// For large gaps between TBC variables, inserts dummy nodes every maxTBCDelta
+// slots so the uint16 delta never overflows.
 // Mirrors: luaF_newtbcupval in lfunc.c
 func MarkTBC(L *stateapi.LuaState, level int) {
 	obj := L.Stack[level].Val
@@ -831,18 +839,52 @@ func MarkTBC(L *stateapi.LuaState, level int) {
 		}
 		RunError(L, "variable '"+vname+"' got a non-closable value")
 	}
-	// Delta encoding: distance from previous TBC variable
-	if L.TBCList < 0 {
-		// First TBC variable — delta is level+1 (encode as 1-based)
+	// Insert dummy nodes for large gaps, matching C Lua's luaF_newtbcupval.
+	// C Lua: while (cast_uint(level - L->tbclist.p) > MAXDELTA) {
+	//          L->tbclist.p += MAXDELTA; L->tbclist.p->tbclist.delta = 0; }
+	// We use TBCList=-1 to mean "no previous TBC". For the first TBC,
+	// treat the previous position as -1 (virtual base).
+	prev := L.TBCList // -1 if no previous TBC
+	if prev < 0 {
+		prev = -1
+	}
+	for level-prev > maxTBCDelta {
+		prev += maxTBCDelta
+		L.Stack[prev].TBCDelta = 0 // dummy node: delta=0
+	}
+	// Now the gap from prev to level fits in uint16
+	if prev < 0 {
+		// First TBC variable (no dummies were needed either)
 		L.Stack[level].TBCDelta = uint16(level + 1)
 	} else {
-		delta := level - L.TBCList
-		if delta <= 0 {
-			delta = 1 // safety
-		}
-		L.Stack[level].TBCDelta = uint16(delta)
+		L.Stack[level].TBCDelta = uint16(level - prev)
 	}
 	L.TBCList = level
+}
+
+// popTBCList removes the top element from the TBC list, including any
+// dummy nodes below it. Returns the new TBC list head.
+// Mirrors: poptbclist in lfunc.c
+func popTBCList(L *stateapi.LuaState) {
+	tbc := L.TBCList
+	delta := int(L.Stack[tbc].TBCDelta)
+	L.Stack[tbc].TBCDelta = 0 // clear
+
+	if delta <= 0 {
+		// delta should be > 0 for real nodes (assert in C Lua)
+		L.TBCList = -1
+		return
+	}
+	tbc -= delta
+	// Skip dummy nodes (delta == 0) going backwards by maxTBCDelta each
+	for tbc >= 0 && L.Stack[tbc].TBCDelta == 0 {
+		tbc -= maxTBCDelta
+	}
+	if tbc < 0 {
+		L.TBCList = -1
+	} else {
+		L.TBCList = tbc
+	}
 }
 
 // CloseTBC calls __close on all TBC variables from L.TBCList down to (but not including) level.
@@ -861,21 +903,9 @@ func CloseTBC(L *stateapi.LuaState, level int) {
 func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objectapi.TValue, yieldable bool) {
 	for L.TBCList >= level {
 		tbc := L.TBCList
-		delta := int(L.Stack[tbc].TBCDelta)
-		L.Stack[tbc].TBCDelta = 0 // clear
-
-		// Compute previous TBC index (pop from TBC linked list)
-		if delta <= 0 || tbc-delta+1 < 0 {
-			L.TBCList = -1 // no more
-		} else {
-			prev := tbc - delta
-			if delta == tbc+1 {
-				// This was the first TBC (delta encoded as level+1)
-				L.TBCList = -1
-			} else {
-				L.TBCList = prev
-			}
-		}
+		// Pop from TBC list first (removes real node + any dummy chain below it).
+		// This matches C Lua's luaF_close: poptbclist(L) before prepcallclosemth.
+		popTBCList(L)
 
 		// Call __close metamethod if the value is not nil and not false
 		obj := L.Stack[tbc].Val
@@ -883,10 +913,6 @@ func CloseTBCWithError(L *stateapi.LuaState, level int, status int, errObj objec
 			continue
 		}
 
-		// Always look up and call the metamethod, even if it's nil.
-		// If __close was removed after marking (e.g., mt.__close = nil),
-		// the call will fail with "attempt to call a nil value".
-		// This matches C Lua's callclosemethod behavior.
 		tm := mmapi.GetTMByObj(L.Global, obj, mmapi.TM_CLOSE)
 		callCloseMethod(L, tm, obj, tbc, status, errObj, yieldable)
 	}
