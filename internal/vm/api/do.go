@@ -48,12 +48,18 @@ func Throw(L *stateapi.LuaState, status int) {
 // SetErrorObj sets the error object on the stack at oldtop.
 // Mirrors: luaD_seterrorobj in ldo.c
 func SetErrorObj(L *stateapi.LuaState, errcode int, oldtop int) {
+	// Bounds check: if oldtop is beyond the stack, we can't set the error.
+	// This can happen during cascading errors in __close after stack overflow.
+	if oldtop >= len(L.Stack) {
+		Throw(L, stateapi.StatusErrErr)
+		return
+	}
 	if errcode == stateapi.StatusErrMem {
 		// Memory error — use pre-registered message
 		L.Stack[oldtop].Val = objectapi.MakeString(L.Global.MemErrMsg)
 	} else {
 		// Move error object from top-1 to oldtop
-		if L.Top > 0 {
+		if L.Top > 0 && L.Top-1 < len(L.Stack) {
 			L.Stack[oldtop].Val = L.Stack[L.Top-1].Val
 		}
 	}
@@ -63,6 +69,12 @@ func SetErrorObj(L *stateapi.LuaState, errcode int, oldtop int) {
 // ErrorErr raises an error during error handling (error in error handler).
 // Mirrors: luaD_errerr in ldo.c
 func ErrorErr(L *stateapi.LuaState) {
+	// Bounds check: if L.Top is at or beyond the stack limit,
+	// we can't push the error message. Just throw directly.
+	if L.Top >= len(L.Stack) {
+		Throw(L, stateapi.StatusErrErr)
+		return
+	}
 	L.Stack[L.Top].Val = makeInternedString(L, "error in error handling")
 	L.Top++
 	Throw(L, stateapi.StatusErrErr)
@@ -74,6 +86,12 @@ func ErrorErr(L *stateapi.LuaState) {
 func ErrorMsg(L *stateapi.LuaState) {
 	if L.ErrFunc != 0 {
 		errFunc := L.Stack[L.ErrFunc].Val
+		// Bounds check: need L.Top to be a valid index for writing
+		if L.Top >= len(L.Stack) {
+			// No room to rearrange stack for handler call — error in error handling
+			ErrorErr(L)
+			return
+		}
 		// Stack: [..., errmsg] (at Top-1)
 		// Rearrange to: [..., handler, errmsg]
 		L.Stack[L.Top].Val = L.Stack[L.Top-1].Val // copy errmsg up
