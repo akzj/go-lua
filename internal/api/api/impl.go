@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"unsafe"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
@@ -562,7 +563,10 @@ func (L *State) GetField(idx int, key string) objectapi.Type {
 }
 
 // GetI pushes t[n] where t is at idx.
+// Mirrors lua_geti: handles __index metamethods for non-table types
+// and for table keys that are not found.
 func (L *State) GetI(idx int, n int64) objectapi.Type {
+	ls := L.ls()
 	t := L.index2val(idx)
 	if t.Tt == objectapi.TagTable {
 		tbl := t.Val.(*tableapi.Table)
@@ -571,9 +575,18 @@ func (L *State) GetI(idx int, n int64) objectapi.Type {
 			L.push(val)
 			return val.Type()
 		}
+		// Table key not found — fall through to metamethod
 	}
-	L.push(objectapi.Nil)
-	return objectapi.TypeNil
+	// Non-table or key not found: use FinishGet for __index metamethod chain.
+	// FinishGet writes result to Stack[ra].
+	ra := ls.Top
+	stateapi.EnsureStack(ls, 1)
+	ls.Stack[ra].Val = objectapi.Nil // default
+	vmapi.FinishGet(ls, *t, objectapi.MakeInteger(n), ra)
+	// FinishGet already wrote result to Stack[ra]. Just advance Top.
+	result := ls.Stack[ra].Val
+	ls.Top = ra + 1
+	return result.Type()
 }
 
 // GetGlobal pushes the value of global variable name.
@@ -734,16 +747,17 @@ func (L *State) Next(idx int) bool {
 }
 
 // Len pushes the length of the value at idx.
+// Mirrors lua_len: calls luaV_objlen which handles __len metamethods.
 func (L *State) Len(idx int) {
+	ls := L.ls()
 	v := L.index2val(idx)
-	switch v.Tt {
-	case objectapi.TagTable:
-		L.push(objectapi.MakeInteger(v.Val.(*tableapi.Table).RawLen()))
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		L.push(objectapi.MakeInteger(int64(len(v.Val.(*objectapi.LuaString).Data))))
-	default:
-		L.push(objectapi.MakeInteger(0))
-	}
+	// Use ObjLen which handles metamethods for all types (including tables).
+	// ObjLen writes result to Stack[ra].
+	ra := ls.Top
+	stateapi.EnsureStack(ls, 1)
+	vmapi.ObjLen(ls, ra, *v)
+	// ObjLen already wrote result to Stack[ra]. Just advance Top.
+	ls.Top = ra + 1
 }
 
 // RawEqual compares two values without metamethods.
@@ -1362,7 +1376,15 @@ func (L *State) ToPointer(idx int) string {
 	case reflect.Ptr:
 		return fmt.Sprintf("0x%x", rv.Pointer())
 	case reflect.Func:
-		return fmt.Sprintf("0x%x", rv.Pointer())
+		// reflect.Pointer() returns code entry point — same for all closures
+		// of the same template. Use interface data word for unique pointer.
+		type eface struct {
+			_type uintptr
+			data  uintptr
+		}
+		iface := v.Val
+		ef := (*eface)(unsafe.Pointer(&iface))
+		return fmt.Sprintf("0x%x", ef.data)
 	default:
 		return ""
 	}
