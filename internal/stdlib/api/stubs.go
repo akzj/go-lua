@@ -13,10 +13,12 @@ import (
 func OpenIO(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{})
 
-	// io.stdin / io.stdout / io.stderr — stub file handles (tables)
-	// Many testes just check io.stdin ~= nil or use string.format("%p", io.stdin).
+	// io.stdin / io.stdout / io.stderr — stub file handles.
+	// Use light userdata so rawlen() correctly errors (not tables).
+	// Each gets a unique pointer value for string.format("%p") identity.
+	type ioStub struct{ name string }
 	for _, name := range []string{"stdin", "stdout", "stderr"} {
-		L.CreateTable(0, 0) // stub file handle
+		L.PushLightUserdata(&ioStub{name})
 		L.SetField(-2, name)
 	}
 
