@@ -87,7 +87,7 @@ func debugGetinfo(L *luaapi.State) int {
 		if L.GetTop() >= 2 {
 			what = L.CheckString(2)
 		}
-		ar, ok = L.GetStack(level + 1) // +1 to skip getinfo itself
+		ar, ok = L.GetStack(level) // level passed directly (like C Lua)
 		if !ok {
 			L.PushNil()
 			return 1
