@@ -132,8 +132,9 @@ func ReallocStack(L *stateapi.LuaState, newsize int) {
 func GrowStack(L *stateapi.LuaState, n int, raiseerror bool) bool {
 	size := len(L.Stack)
 	if size > stateapi.MaxStack {
-		// Already beyond normal stack limit.
-		// Check if we have room in current allocation.
+		// Already beyond normal stack limit (in error stack space).
+		// If there's room in current allocation, allow it — this lets
+		// the error handler run within the error stack headroom.
 		if L.Top+n+stateapi.ExtraStack <= size {
 			return true
 		}
@@ -141,13 +142,13 @@ func GrowStack(L *stateapi.LuaState, n int, raiseerror bool) bool {
 		errSize := errorStackSize + stateapi.ExtraStack
 		if size < errSize {
 			ReallocStack(L, errSize)
-			if L.Top+n+stateapi.ExtraStack <= errSize {
-				return true
-			}
 		}
-		// Truly exhausted — error in error handling
+		// Raise "stack overflow" — do NOT return true here.
+		// C Lua (ldo.c:384-386): realloc to ERRORSTACKSIZE, then raise error.
+		// Returning true would let recursion continue consuming error space,
+		// leaving nothing for the error handler.
 		if raiseerror {
-			ErrorErr(L)
+			RunError(L, "stack overflow")
 		}
 		return false
 	}
