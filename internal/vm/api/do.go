@@ -951,9 +951,18 @@ func CloseProtected(L *stateapi.LuaState, level int, status int, errObj objectap
 		L.CI = oldCI
 		L.AllowHook = oldAllowHook
 		status = newStatus
-		// The new error object is on the stack at L.Top-1
-		if L.Top > 0 {
+		// The new error object is on the stack at L.Top-1.
+		// But L.Top may be in a bad state after the error.
+		// Safely extract the error object with bounds checking.
+		if L.Top > 0 && L.Top-1 < len(L.Stack) {
 			errObj = L.Stack[L.Top-1].Val
+		}
+		// Reset L.Top to near level to prevent it from climbing
+		// during cascading errors. C Lua's closepaux → luaF_close →
+		// prepcallclosemth resets L.Top on each iteration.
+		// We do the same here to keep L.Top bounded.
+		if level+2 < len(L.Stack) {
+			L.Top = level + 2
 		}
 	}
 	return status, errObj
