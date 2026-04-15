@@ -543,6 +543,16 @@ func debugSethook(L *luaapi.State) int {
 	L1.HookCount = count
 	L1.AllowHook = true
 
+	// When activating line hooks on the CURRENT thread (not a coroutine),
+	// initialize OldPC to the calling Lua frame's current PC so that
+	// TraceExec doesn't see a stale OldPC=0 and fire a spurious line hook.
+	if mask&4 != 0 && L1 == callerLS { // MaskLine = 4; same thread
+		// The caller's CI is the sethook C frame; its prev is the Lua caller
+		if callerLS.CI != nil && callerLS.CI.Prev != nil && callerLS.CI.Prev.IsLua() {
+			L1.OldPC = callerLS.CI.Prev.SavedPC
+		}
+	}
+
 	return 0
 }
 
