@@ -367,7 +367,8 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	// Look up hook function from registry["__debug_hook__"]
 	reg := L.Global.Registry.Val.(*tableapi.Table)
-	hookKey := &objectapi.LuaString{Data: "__debug_hook__", IsShort: true}
+	st := L.Global.StringTable.(*luastringapi.StringTable)
+	hookKey := st.Intern("__debug_hook__")
 	hookVal, found := reg.GetStr(hookKey)
 	if !found || hookVal.Tt == objectapi.TagNil {
 		return
@@ -392,7 +393,6 @@ func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	L.Top++
 
 	// Push event name "return"
-	st := L.Global.StringTable.(*luastringapi.StringTable)
 	L.Stack[L.Top].Val = objectapi.MakeString(st.Intern("return"))
 	L.Top++
 
