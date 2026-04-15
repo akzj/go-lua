@@ -405,6 +405,10 @@ func OpenPackage(L *luaapi.State) int {
 	L.PushString("./?.lua;./?/init.lua")
 	L.SetField(-2, "path")
 
+	// Set package.cpath — default C library search path
+	L.PushString("./?.so")
+	L.SetField(-2, "cpath")
+
 	// Set package.loaded = registry["_LOADED"]
 	L.GetField(luaapi.RegistryIndex, "_LOADED")
 	L.SetField(-2, "loaded")
