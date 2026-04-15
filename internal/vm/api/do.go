@@ -84,6 +84,13 @@ func ErrorErr(L *stateapi.LuaState) {
 // Mirrors: luaG_errormsg in ldebug.c
 // The error object must already be on the stack at L.Top-1.
 func ErrorMsg(L *stateapi.LuaState) {
+	// If error object is nil, replace with "<no error object>" string.
+	// Mirrors: ldebug.c:849-852
+	if L.Top > 0 && L.Top-1 < len(L.Stack) {
+		if L.Stack[L.Top-1].Val.Tt.IsStrictNil() {
+			L.Stack[L.Top-1].Val = makeInternedString(L, "<no error object>")
+		}
+	}
 	if L.ErrFunc != 0 {
 		errFunc := L.Stack[L.ErrFunc].Val
 		// Bounds check: need L.Top to be a valid index for writing
