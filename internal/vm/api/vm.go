@@ -2450,9 +2450,20 @@ startfunc:
 			}
 
 		case opcodeapi.OP_ERRNNIL:
-			// Error if value is not nil
+			// Error if value is not nil — used for global redefinition check
 			if !L.Stack[ra].Val.IsNil() {
-				RunError(L, "value is not nil")
+				bx := opcodeapi.GetArgBx(inst)
+				if bx > 0 {
+					// bx-1 is the constant index for the variable name
+					name := k[bx-1]
+					if name.IsString() {
+						RunError(L, "global '"+name.StringVal().String()+"' already defined")
+					} else {
+						RunError(L, "global already defined")
+					}
+				} else {
+					RunError(L, "global already defined")
+				}
 			}
 
 		case opcodeapi.OP_EXTRAARG:
