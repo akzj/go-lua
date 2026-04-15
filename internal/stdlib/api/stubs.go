@@ -48,6 +48,7 @@ func OpenDebug(L *luaapi.State) int {
 		"getupvalue":   debugGetupvalue,
 		"setupvalue":   debugSetupvalue,
 		"upvaluejoin":  debugUpvaluejoin,
+		"upvalueid":    debugUpvalueid,
 		"sethook":      debugSethook,
 	})
 	return 1
@@ -306,6 +307,30 @@ func debugUpvaluejoin(L *luaapi.State) int {
 	}
 	f1.UpVals[n1-1] = f2.UpVals[n2-1]
 	return 0
+}
+
+// debug.upvalueid(f, n) — returns a unique identifier for the n-th upvalue
+// Mirrors: db_upvalueid in ldblib.c
+func debugUpvalueid(L *luaapi.State) int {
+	L.CheckType(1, objectapi.TypeFunction)
+	n := int(L.CheckInteger(2))
+	f := L.GetLClosure(1)
+	if f == nil {
+		// C closures: use address of the upvalue TValue slot
+		// For now, just push fail
+		L.PushBoolean(false)
+		return 1
+	}
+	if n < 1 || n > len(f.UpVals) {
+		L.ArgError(2, "invalid upvalue index")
+	}
+	uv := f.UpVals[n-1]
+	if uv == nil {
+		L.PushBoolean(false)
+		return 1
+	}
+	L.PushLightUserdata(uv) // unique pointer identity
+	return 1
 }
 
 // debug.sethook([thread,] hook, mask [, count])
