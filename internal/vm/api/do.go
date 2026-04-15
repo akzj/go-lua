@@ -1223,9 +1223,39 @@ func CloseProtected(L *stateapi.LuaState, level int, status int, errObj objectap
 	oldCI := L.CI
 	oldAllowHook := L.AllowHook
 	for L.TBCList >= level {
-		newStatus := RunProtected(L, func() {
-			CloseTBCWithError(L, level, status, errObj, false)
-		})
+		// runProtectedCatchBaseLevel wraps RunProtected and also catches
+		// LuaBaseLevel panics that RunProtected re-panics. In C Lua,
+		// luaD_throwbaselevel longjmps to the BASE rawrunprotected, but
+		// Go's panic/recover always catches at the nearest recover.
+		// RunProtected re-panics LuaBaseLevel so it can reach Resume's
+		// outer wrapper for the self-close-from-within case. But when
+		// CloseProtected is called from an EXTERNAL close (e.g., main
+		// thread closing a coroutine whose __close re-closes itself),
+		// the LuaBaseLevel must not escape. We catch it here and convert
+		// to a status code, which is what C Lua's rawrunprotected does.
+		var newStatus int
+		var baseLevelCaught bool
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					if bl, ok := r.(stateapi.LuaBaseLevel); ok {
+						baseLevelCaught = true
+						newStatus = bl.Status
+					} else {
+						panic(r)
+					}
+				}
+			}()
+			newStatus = RunProtected(L, func() {
+				CloseTBCWithError(L, level, status, errObj, false)
+			})
+		}()
+		if baseLevelCaught {
+			// The __close handler triggered a self-close (re-close).
+			// The nested CloseThread already reset the coroutine and
+			// closed all TBC vars. Return the status directly.
+			return newStatus, errObj
+		}
 		if newStatus == stateapi.StatusOK {
 			return status, errObj // all closed successfully
 		}
