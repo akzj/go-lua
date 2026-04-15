@@ -7,6 +7,7 @@ package api
 import (
 	"math"
 	"math/bits"
+	"reflect"
 
 	obj "github.com/akzj/go-lua/internal/object/api"
 )
@@ -146,6 +147,10 @@ func equalKey(k1 obj.TValue, n2 *Node, deadOk bool) bool {
 	if k1.Tt != n2.KeyTT {
 		if deadOk && keyIsDead(n2) {
 			// Dead key: compare by value identity for collectable types
+			// Go func values are not comparable; use reflect for those.
+			if k1.Tt == obj.TagLightCFunc {
+				return reflect.ValueOf(k1.Val).Pointer() == reflect.ValueOf(n2.KeyVal).Pointer()
+			}
 			return k1.Val == n2.KeyVal
 		}
 		if n2.KeyTT == obj.TagShortStr && k1.Tt == obj.TagLongStr {
@@ -169,7 +174,11 @@ func equalKey(k1 obj.TValue, n2 *Node, deadOk bool) bool {
 		s2 := n2.KeyVal.(*obj.LuaString)
 		return s1.Data == s2.Data
 	default:
-		return k1.Val == n2.KeyVal // identity for GC objects
+		// Go func values are not comparable with ==; use reflect for those.
+		if n2.KeyTT == obj.TagLightCFunc {
+			return reflect.ValueOf(k1.Val).Pointer() == reflect.ValueOf(n2.KeyVal).Pointer()
+		}
+		return k1.Val == n2.KeyVal // identity for GC objects (pointers)
 	}
 }
 
