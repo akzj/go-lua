@@ -537,39 +537,78 @@ func (L *State) getTableVal(idx int) *tableapi.Table {
 }
 
 // GetTable pushes t[k] where t is at idx and k is at top. Pops k.
+// apiGetWithIndex performs a table get with __index metamethod chain walking.
+// Mirrors C Lua's luaV_gettable but without VM stack manipulation.
+// Walks up to 20 levels of __index chain (table or function).
+func apiGetWithIndex(L *State, t objectapi.TValue, key objectapi.TValue) objectapi.TValue {
+	const maxLoop = 20
+	for loop := 0; loop < maxLoop; loop++ {
+		if t.IsTable() {
+			tbl := t.Val.(*tableapi.Table)
+			val, found := tbl.Get(key)
+			if found && !val.IsNil() {
+				return val
+			}
+			// Key not found — check for __index metamethod
+			mt := tbl.GetMetatable()
+			if mt == nil {
+				return objectapi.Nil
+			}
+			indexStr := L.internStr("__index")
+			tm, tmFound := mt.GetStr(indexStr)
+			if !tmFound || tm.IsNil() {
+				return objectapi.Nil
+			}
+			if tm.IsTable() {
+				// __index is a table — recurse into it
+				t = tm
+				continue
+			}
+			if tm.IsFunction() {
+				// __index is a function — call it with (table, key)
+				ls := L.ls()
+				oldTop := ls.Top
+				stateapi.EnsureStack(ls, 4)
+				ls.Stack[ls.Top].Val = tm
+				ls.Top++
+				ls.Stack[ls.Top].Val = t
+				ls.Top++
+				ls.Stack[ls.Top].Val = key
+				ls.Top++
+				vmapi.Call(ls, ls.Top-3, 1)
+				result := ls.Stack[ls.Top-1].Val
+				ls.Top = oldTop
+				return result
+			}
+			// __index is not table or function — error
+			return objectapi.Nil
+		}
+		// Non-table value — check for type metatable __index
+		// (userdata, etc.) For now, return nil
+		return objectapi.Nil
+	}
+	// Too many __index levels
+	return objectapi.Nil
+}
+
 func (L *State) GetTable(idx int) objectapi.Type {
 	ls := L.ls()
 	t := L.index2val(idx)
 	key := ls.Stack[ls.Top-1].Val
 	ls.Top--
 
-	if t.Tt == objectapi.TagTable {
-		tbl := t.Val.(*tableapi.Table)
-		val, found := tbl.Get(key)
-		if found && !val.IsNil() {
-			L.push(val)
-			return val.Type()
-		}
-	}
-	// For simplicity, push nil if not found (skip metamethods for now)
-	L.push(objectapi.Nil)
-	return objectapi.TypeNil
+	val := apiGetWithIndex(L, *t, key)
+	L.push(val)
+	return val.Type()
 }
 
 // GetField pushes t[key] where t is at idx.
 func (L *State) GetField(idx int, key string) objectapi.Type {
 	t := L.index2val(idx)
-	if t.Tt == objectapi.TagTable {
-		tbl := t.Val.(*tableapi.Table)
-		ks := L.internStr(key)
-		val, found := tbl.GetStr(ks)
-		if found && !val.IsNil() {
-			L.push(val)
-			return val.Type()
-		}
-	}
-	L.push(objectapi.Nil)
-	return objectapi.TypeNil
+	ks := L.internStr(key)
+	val := apiGetWithIndex(L, *t, objectapi.MakeString(ks))
+	L.push(val)
+	return val.Type()
 }
 
 // GetI pushes t[n] where t is at idx.
