@@ -8,10 +8,49 @@ package api
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
+
+// chunkid formats a source name for error messages.
+// Mirrors luaO_chunkid in lobject.c. LUA_IDSIZE = 60.
+func chunkid(source string) string {
+	const idsize = 60
+	if len(source) == 0 {
+		return `[string ""]`
+	}
+	if source[0] == '=' {
+		rest := source[1:]
+		if len(rest)+1 <= idsize {
+			return rest
+		}
+		return rest[:idsize-1]
+	}
+	if source[0] == '@' {
+		rest := source[1:]
+		if len(rest)+1 <= idsize {
+			return rest
+		}
+		return "..." + rest[len(rest)-(idsize-1-3):]
+	}
+	// String source: format as [string "source"] or [string "source..."]
+	// PRE=[string " (9), POST="] (2), RETS=... (3), +1 for NUL
+	const maxContent = idsize - 9 - 3 - 2 - 1 // = 45
+	nl := strings.IndexByte(source, '\n')
+	srclen := len(source)
+	if srclen <= maxContent && nl < 0 {
+		return fmt.Sprintf(`[string "%s"]`, source)
+	}
+	if nl >= 0 && nl < srclen {
+		srclen = nl
+	}
+	if srclen > maxContent {
+		srclen = maxContent
+	}
+	return fmt.Sprintf(`[string "%s..."]`, source[:srclen])
+}
 
 // EOZ signals end of input (-1, matching C's EOZ).
 const EOZ = -1
@@ -189,7 +228,7 @@ func LexError(ls *LexState, msg string, token TokenType) {
 		}
 	}
 
-	fullMsg := fmt.Sprintf("%s:%d: %s", ls.Source, ls.Line, msg)
+	fullMsg := fmt.Sprintf("%s:%d: %s", chunkid(ls.Source), ls.Line, msg)
 	if tokStr != "" {
 		fullMsg = fmt.Sprintf("%s near %s", fullMsg, tokStr)
 	}
