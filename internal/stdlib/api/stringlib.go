@@ -733,13 +733,14 @@ const (
 	capPosition   = -2
 )
 
-func classEnd(pat string, p int) int {
+func classEnd(ms *matchState, p int) int {
+	pat := ms.pat
 	c := pat[p]
 	p++
 	switch c {
 	case '%':
 		if p >= len(pat) {
-			return p
+			ms.L.Errorf("malformed pattern (ends with '%%')")
 		}
 		return p + 1
 	case '[':
@@ -750,16 +751,18 @@ func classEnd(pat string, p int) int {
 		if p < len(pat) && pat[p] == ']' {
 			p++
 		}
-		// skip until closing ]
+		// skip until closing ] — matches C Lua's do...while loop
 		for {
 			if p >= len(pat) {
-				return p
+				ms.L.Errorf("malformed pattern (missing ']')")
 			}
 			c = pat[p]
 			p++
 			if c == '%' && p < len(pat) {
-				p++ // skip escaped char
-			} else if c == ']' {
+				p++ // skip escaped char (e.g. '%]')
+				continue
+			}
+			if c == ']' {
 				return p
 			}
 		}
@@ -912,7 +915,7 @@ func (ms *matchState) match(si, pi int) int {
 			if pi+1 < len(ms.pat) && ms.pat[pi+1] == 'f' {
 				// frontier pattern
 				pi += 2
-				ep := classEnd(ms.pat, pi)
+				ep := classEnd(ms, pi)
 				var prev byte
 				if si > 0 {
 					prev = ms.src[si-1]
@@ -955,7 +958,7 @@ func (ms *matchState) match(si, pi int) int {
 			goto dflt
 		}
 	dflt:
-		ep := classEnd(ms.pat, pi)
+		ep := classEnd(ms, pi)
 		// Check for repetition
 		if ep < len(ms.pat) {
 			switch ms.pat[ep] {
@@ -1084,7 +1087,7 @@ func (ms *matchState) matchClose(si, pi int) int {
 		level--
 	}
 	if level < 0 {
-		return -1
+		ms.L.Errorf("invalid pattern capture")
 	}
 	ms.capture[level].len = si - ms.capture[level].init
 	res := ms.match(si, pi)
