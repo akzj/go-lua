@@ -308,8 +308,56 @@ func debugUpvaluejoin(L *luaapi.State) int {
 	return 0
 }
 
-// debug.sethook([thread,] hook, mask [, count]) — stub (no-op)
+// debug.sethook([thread,] hook, mask [, count])
+// Mirrors C Lua's db_sethook in ldblib.c
 func debugSethook(L *luaapi.State) int {
+	arg := 1
+	// TODO: thread argument support (for now, always use current thread)
+
+	if L.IsNoneOrNil(arg) {
+		// Turn off hooks: debug.sethook() or debug.sethook(nil)
+		L.ClearHookFields()
+		// Remove hook function from registry
+		L.PushString("__debug_hook__")
+		L.PushNil()
+		L.SetTable(luaapi.RegistryIndex)
+		return 0
+	}
+
+	// debug.sethook(func, mask [, count])
+	L.CheckType(arg, 6) // LUA_TFUNCTION
+	smask := L.CheckString(arg + 1)
+	count := 0
+	if L.IsNumber(arg + 2) {
+		v, _ := L.ToInteger(arg + 2)
+		count = int(v)
+	}
+
+	// Parse mask string: 'c'=call, 'r'=return, 'l'=line
+	mask := 0
+	for _, c := range smask {
+		switch c {
+		case 'c':
+			mask |= 1 // MaskCall
+		case 'r':
+			mask |= 2 // MaskRet
+		case 'l':
+			mask |= 4 // MaskLine
+		}
+	}
+	if count > 0 {
+		mask |= 8 // MaskCount
+	}
+
+	// Store hook function in registry["__debug_hook__"]
+	L.PushString("__debug_hook__")
+	L.PushValue(arg) // push the hook function
+	L.SetTable(luaapi.RegistryIndex)
+
+	// Set hook mask and enable hooks
+	L.SetHookFields(mask, count)
+	L.SetHookMarker()
+
 	return 0
 }
 
