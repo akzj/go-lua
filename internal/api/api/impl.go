@@ -181,7 +181,16 @@ func (L *State) AbsIndex(idx int) int {
 // CheckStack ensures at least n free stack slots.
 func (L *State) CheckStack(n int) bool {
 	ls := L.ls()
+	// Mirrors: lua_checkstack in lapi.c:109-123
+	// Return false if the requested size would exceed MaxStack.
+	if ls.Top+n > stateapi.MaxStack {
+		return false
+	}
 	stateapi.EnsureStack(ls, n)
+	// Adjust frame top if needed (mirrors C Lua's ci->top adjustment)
+	if ls.CI != nil && ls.CI.Top < ls.Top+n {
+		ls.CI.Top = ls.Top + n
+	}
 	return true
 }
 
