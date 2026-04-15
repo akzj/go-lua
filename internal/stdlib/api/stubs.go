@@ -165,6 +165,16 @@ func debugGetinfo(L *luaapi.State) int {
 		if L.GetTop() >= 2 {
 			what = L.CheckString(2)
 		}
+		// Validate: '>' is invalid when using stack level
+		if strings.Contains(what, ">") {
+			L.ArgError(2, "invalid option '>'")
+		}
+		// Validate option characters
+		for _, c := range what {
+			if !strings.ContainsRune("flnSrtupLa", c) {
+				L.ArgError(2, "invalid option")
+			}
+		}
 		ar, ok = L.GetStack(level) // level passed directly (like C Lua)
 		if !ok {
 			L.PushNil()
@@ -173,9 +183,19 @@ func debugGetinfo(L *luaapi.State) int {
 	} else {
 		// function argument — inspect the function directly
 		L.CheckAny(1)
-		what := "flnStu" // default for function arg
+		what = "flnStu" // default for function arg
 		if L.GetTop() >= 2 {
 			what = L.CheckString(2)
+		}
+		// Validate: '>' is invalid in user-supplied options
+		if strings.Contains(what, ">") {
+			L.ArgError(2, "invalid option '>'")
+		}
+		// Validate option characters
+		for _, c := range what {
+			if !strings.ContainsRune("flnSrtupLa", c) {
+				L.ArgError(2, "invalid option")
+			}
 		}
 
 		L.CreateTable(0, 10)
