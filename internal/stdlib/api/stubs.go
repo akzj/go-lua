@@ -50,6 +50,7 @@ func OpenDebug(L *luaapi.State) int {
 		"upvaluejoin":  debugUpvaluejoin,
 		"upvalueid":    debugUpvalueid,
 		"sethook":      debugSethook,
+		"gethook":      debugGethook,
 	})
 	return 1
 }
@@ -335,6 +336,35 @@ func debugUpvalueid(L *luaapi.State) int {
 
 // debug.sethook([thread,] hook, mask [, count])
 // Mirrors C Lua's db_sethook in ldblib.c
+// debug.gethook([thread]) — returns hook function, mask string, count
+// Mirrors: db_gethook in ldblib.c
+func debugGethook(L *luaapi.State) int {
+	// TODO: thread argument support (for now, always use current thread)
+	mask := L.HookMask()
+	// Get hook function from registry
+	L.PushString("__debug_hook__")
+	L.GetTable(luaapi.RegistryIndex)
+	if L.IsNil(-1) {
+		L.Pop(1)
+		L.PushBoolean(false) // luaL_pushfail
+		return 1
+	}
+	// Build mask string
+	var buf []byte
+	if mask&1 != 0 { // MaskCall
+		buf = append(buf, 'c')
+	}
+	if mask&2 != 0 { // MaskRet
+		buf = append(buf, 'r')
+	}
+	if mask&4 != 0 { // MaskLine
+		buf = append(buf, 'l')
+	}
+	L.PushString(string(buf))
+	L.PushInteger(int64(L.HookCount()))
+	return 3
+}
+
 func debugSethook(L *luaapi.State) int {
 	arg := 1
 	// TODO: thread argument support (for now, always use current thread)
