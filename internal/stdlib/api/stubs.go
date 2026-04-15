@@ -445,14 +445,7 @@ func debugSethook(L *luaapi.State) int {
 	return 0
 }
 
-func OpenUTF8(L *luaapi.State) int {
-	L.NewLib(map[string]luaapi.CFunction{})
-	// utf8.charpattern — pattern matching a single UTF-8 character
-	// Mirrors: UTF8PATT in lutf8lib.c: "[\0-\x7F\xC2-\xFD][\x80-\xBF]*"
-	L.PushString("[\x00-\x7F\xC2-\xFD][\x80-\xBF]*")
-	L.SetField(-2, "charpattern")
-	return 1
-}
+// OpenUTF8 moved to utf8lib.go
 
 func OpenPackage(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{
