@@ -78,10 +78,32 @@ func luaB_require(L *luaapi.State) int {
 	L.Pop(2) // pop preload (or nil) + package
 
 	// Step 2: Search package.path for a .lua file
-	filename := searchPackagePath(L, name)
+	pathStr := getPackageField(L, "path")
+	filename, pathTried := searchPath(name, pathStr)
 	if filename == "" {
+		// Also search package.cpath
+		cpathStr := getPackageField(L, "cpath")
+		_, cpathTried := searchPath(name, cpathStr)
+
+		// Build full error message like C Lua
+		var msg strings.Builder
+		msg.WriteString("module '")
+		msg.WriteString(name)
+		msg.WriteString("' not found:\n\tno field package.preload['")
+		msg.WriteString(name)
+		msg.WriteString("']")
+		for _, t := range pathTried {
+			msg.WriteString("\n\tno file '")
+			msg.WriteString(t)
+			msg.WriteByte('\'')
+		}
+		for _, t := range cpathTried {
+			msg.WriteString("\n\tno file '")
+			msg.WriteString(t)
+			msg.WriteByte('\'')
+		}
 		L.Pop(1) // pop _LOADED
-		L.Errorf("module '%s' not found", name)
+		L.Errorf("%s", msg.String())
 		return 0
 	}
 
@@ -129,29 +151,15 @@ func luaB_require(L *luaapi.State) int {
 // searchPackagePath searches package.path for a file matching the module name.
 // Replaces '?' in each template with name (with '.' replaced by OS separator).
 // Returns the first readable file path, or "" if not found.
-func searchPackagePath(L *luaapi.State, name string) string {
-	// Get package.path from the global "package" table
-	L.GetGlobal("package")
-	if L.IsNil(-1) {
-		L.Pop(1)
-		return ""
+// searchPath searches pathStr (semicolon-separated templates) for name.
+// Returns (found_file, tried_list). If found, tried_list is nil.
+func searchPath(name, pathStr string) (string, []string) {
+	if pathStr == "" {
+		return "", nil
 	}
-	L.GetField(-1, "path")
-	path, ok := L.ToString(-1)
-	L.Pop(2) // pop path string and package table
-	if !ok {
-		L.Errorf("'package.path' must be a string")
-		return ""
-	}
-	if path == "" {
-		return ""
-	}
-
-	// Replace '.' in module name with '/' (directory separator)
 	fname := strings.ReplaceAll(name, ".", string(os.PathSeparator))
-
-	// Split path by ';' and try each template
-	templates := strings.Split(path, ";")
+	templates := strings.Split(pathStr, ";")
+	var tried []string
 	for _, tmpl := range templates {
 		tmpl = strings.TrimSpace(tmpl)
 		if tmpl == "" {
@@ -159,10 +167,34 @@ func searchPackagePath(L *luaapi.State, name string) string {
 		}
 		candidate := strings.ReplaceAll(tmpl, "?", fname)
 		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+			return candidate, nil
 		}
+		tried = append(tried, candidate)
 	}
-	return ""
+	return "", tried
+}
+
+// getPackageField reads package.<field> and returns the string value.
+func getPackageField(L *luaapi.State, field string) string {
+	L.GetGlobal("package")
+	if L.IsNil(-1) {
+		L.Pop(1)
+		return ""
+	}
+	L.GetField(-1, field)
+	val, ok := L.ToString(-1)
+	L.Pop(2)
+	if !ok {
+		L.Errorf("'package.%s' must be a string", field)
+		return ""
+	}
+	return val
+}
+
+func searchPackagePath(L *luaapi.State, name string) string {
+	path := getPackageField(L, "path")
+	found, _ := searchPath(name, path)
+	return found
 }
 
 func luaB_warn(L *luaapi.State) int {
