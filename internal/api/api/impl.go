@@ -753,7 +753,10 @@ func (L *State) Next(idx int) bool {
 	tbl := t.Val.(*tableapi.Table)
 	key := ls.Stack[ls.Top-1].Val
 	ls.Top--
-	nextKey, nextVal, ok := tbl.Next(key)
+	nextKey, nextVal, ok, err := tbl.Next(key)
+	if err != nil {
+		vmapi.RunError(ls, err.Error())
+	}
 	if ok {
 		L.push(nextKey)
 		L.push(nextVal)
@@ -1279,6 +1282,9 @@ func (L *State) Unref(idx int, ref int) {}
 // GetStack fills a DebugInfo for the given call level.
 func (L *State) GetStack(level int) (*DebugInfo, bool) {
 	ls := L.ls()
+	if level < 0 {
+		return nil, false
+	}
 	ci := ls.CI
 	for i := 0; i < level && ci != nil; i++ {
 		ci = ci.Prev
