@@ -585,7 +585,13 @@ func Exp2Const(fs *FuncState, e *ExpDesc, v *objectapi.TValue) bool {
 		*v = objectapi.Nil
 		return true
 	case VKSTR:
-		*v = objectapi.MakeString(&objectapi.LuaString{Data: e.StrVal, IsShort: len(e.StrVal) <= 40})
+		// Use StringCache for dedup if available (via FuncState)
+		ls := fs.StringCache[e.StrVal]
+		if ls == nil {
+			ls = &objectapi.LuaString{Data: e.StrVal, IsShort: len(e.StrVal) <= 40}
+			fs.StringCache[e.StrVal] = ls
+		}
+		*v = objectapi.MakeString(ls)
 		return true
 	case VCONST:
 		cv := const2val(fs, e)

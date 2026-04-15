@@ -1104,7 +1104,13 @@ func GetGlobalTable(L *stateapi.LuaState) *tableapi.Table {
 
 func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 	st := L.Global.StringTable.(*luastringapi.StringTable)
+	// longCache deduplicates long strings within this proto tree,
+	// since st.Intern only deduplicates short strings.
+	longCache := make(map[string]*objectapi.LuaString)
+	internProtoStringsRec(st, p, longCache)
+}
 
+func internProtoStringsRec(st *luastringapi.StringTable, p *objectapi.Proto, longCache map[string]*objectapi.LuaString) {
 	// Intern source name
 	if p.Source != nil {
 		p.Source = st.Intern(p.Source.Data)
@@ -1114,10 +1120,17 @@ func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 	for i := range p.Constants {
 		k := &p.Constants[i]
 		switch k.Tt {
-		case objectapi.TagShortStr, objectapi.TagLongStr:
+		case objectapi.TagShortStr:
 			old := k.Val.(*objectapi.LuaString)
 			interned := st.Intern(old.Data)
 			*k = objectapi.MakeString(interned)
+		case objectapi.TagLongStr:
+			old := k.Val.(*objectapi.LuaString)
+			if cached, ok := longCache[old.Data]; ok {
+				*k = objectapi.MakeString(cached)
+			} else {
+				longCache[old.Data] = old
+			}
 		}
 	}
 
@@ -1137,7 +1150,7 @@ func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 
 	// Recurse into nested protos
 	for _, child := range p.Protos {
-		internProtoStrings(L, child)
+		internProtoStringsRec(st, child, longCache)
 	}
 }
 
