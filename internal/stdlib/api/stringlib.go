@@ -915,6 +915,9 @@ func (ms *matchState) match(si, pi int) int {
 			if pi+1 < len(ms.pat) && ms.pat[pi+1] == 'f' {
 				// frontier pattern
 				pi += 2
+				if pi >= len(ms.pat) || ms.pat[pi] != '[' {
+					ms.L.Errorf("missing '[' after '%%f' in pattern")
+				}
 				ep := classEnd(ms, pi)
 				var prev byte
 				if si > 0 {
