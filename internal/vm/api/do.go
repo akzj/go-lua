@@ -372,12 +372,9 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 // retHook fires the return hook if set.
 // Mirrors: rethook in ldo.c
 func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
-	// Look up hook function from registry["__debug_hook__"]
-	reg := L.Global.Registry.Val.(*tableapi.Table)
-	st := L.Global.StringTable.(*luastringapi.StringTable)
-	hookKey := st.Intern("__debug_hook__")
-	hookVal, found := reg.GetStr(hookKey)
-	if !found || hookVal.Tt == objectapi.TagNil {
+	// Get hook function from L.Hook (per-thread TValue)
+	hookVal, ok := L.Hook.(objectapi.TValue)
+	if !ok || hookVal.Tt == objectapi.TagNil || hookVal.Val == nil {
 		return
 	}
 
@@ -394,6 +391,8 @@ func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 
 	// Ensure stack space for hook call: hook_func + "return" arg + nil
 	CheckStack(L, 4)
+
+	st := L.Global.StringTable.(*luastringapi.StringTable)
 
 	// Push hook function
 	L.Stack[L.Top].Val = hookVal
