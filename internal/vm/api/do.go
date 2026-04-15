@@ -795,6 +795,17 @@ func Resume(L *stateapi.LuaState, from *stateapi.LuaState, nArgs int) (int, int)
 	var nresults int
 	if status == stateapi.StatusYield {
 		nresults = L.CI.NYield
+	} else if status != stateapi.StatusOK {
+		// Unrecoverable error — push error message like C Lua's seterrorobj.
+		// Mirrors: lua_resume error path in ldo.c:997-1001
+		// Copy error from top-1 to top, increment top.
+		// This ensures the error object survives xmove + closethread later.
+		if L.Top > 0 && L.Top < len(L.Stack) {
+			L.Stack[L.Top].Val = L.Stack[L.Top-1].Val
+			L.Top++
+		}
+		L.CI.Top = L.Top
+		nresults = L.Top - (L.CI.Func + 1)
 	} else {
 		nresults = L.Top - (L.CI.Func + 1)
 	}
