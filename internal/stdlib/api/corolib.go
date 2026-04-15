@@ -162,6 +162,40 @@ func coroWrapAux(L *luaapi.State) int {
 	return 0 // unreachable
 }
 
+// Coroutine status constants (mirrors COS_* in lcorolib.c)
+const (
+	cosRun  = 0 // running
+	cosDead = 1 // dead
+	cosYld  = 2 // suspended (yielded)
+	cosNorm = 3 // normal (resumed another coroutine)
+)
+
+var cosStatName = [4]string{"running", "dead", "suspended", "normal"}
+
+// auxStatus mirrors C Lua's auxstatus: determines the status of coroutine co
+// relative to the calling thread L.
+func auxStatus(L *luaapi.State, co *luaapi.State) int {
+	if L.Internal == co.Internal {
+		return cosRun
+	}
+	status := co.Status()
+	switch status {
+	case stateapi.StatusYield:
+		return cosYld
+	case stateapi.StatusOK:
+		// Check if it has frames above base CI (= normal, i.e. it resumed another coroutine)
+		if co.HasCallFrames() {
+			return cosNorm
+		}
+		if co.GetTop() == 0 {
+			return cosDead
+		}
+		return cosYld // initial state (not started yet)
+	default:
+		return cosDead // error status = dead
+	}
+}
+
 // coroStatus returns the status of a coroutine as a string.
 // coroutine.status(co) → "running" | "suspended" | "normal" | "dead"
 func coroStatus(L *luaapi.State) int {
@@ -170,27 +204,7 @@ func coroStatus(L *luaapi.State) int {
 		L.ArgError(1, "coroutine expected")
 		return 0
 	}
-
-	if L.Internal == co.Internal {
-		L.PushString("running")
-		return 1
-	}
-
-	status := co.Status()
-	switch status {
-	case stateapi.StatusYield:
-		L.PushString("suspended")
-	case stateapi.StatusOK:
-		// OK means either not started (suspended) or finished (dead)
-		if co.GetTop() == 0 {
-			L.PushString("dead")
-		} else {
-			L.PushString("suspended")
-		}
-	default:
-		// Error status = dead
-		L.PushString("dead")
-	}
+	L.PushString(cosStatName[auxStatus(L, co)])
 	return 1
 }
 
@@ -217,6 +231,9 @@ func coroIsYieldable(L *luaapi.State) int {
 
 // coroClose closes a suspended coroutine, running its to-be-closed variables.
 // coroutine.close(co) → true | false, errMsg
+// coroClose closes a suspended coroutine, running its to-be-closed variables.
+// coroutine.close(co) → true | false, errMsg
+// Mirrors: luaB_close in lcorolib.c
 func coroClose(L *luaapi.State) int {
 	co := L.ToThread(1)
 	if co == nil {
@@ -224,36 +241,34 @@ func coroClose(L *luaapi.State) int {
 		return 0
 	}
 
-	status := co.Status()
-	if status != stateapi.StatusYield && (status != stateapi.StatusOK || co.GetTop() != 0) {
-		// Can only close a suspended (yielded) coroutine or a dead one
-		// A "just created" coroutine (StatusOK with function on stack) can also be closed
-		if status == stateapi.StatusOK && co.GetTop() > 0 {
-			// Just created but not started — close its TBC vars
-			// For now, mark as dead
-			// TODO: proper TBC close for not-yet-started coroutines
-		} else if status != stateapi.StatusOK {
-			L.PushBoolean(false)
-			L.PushString("cannot close a " + coroStatusStr(status, co.GetTop()) + " coroutine")
-			return 2
+	st := auxStatus(L, co)
+	switch st {
+	case cosDead, cosYld:
+		// Can close dead or suspended coroutines
+		// TODO: call lua_closethread for proper TBC close
+		L.PushBoolean(true)
+		return 1
+	case cosNorm:
+		L.PushString("cannot close a normal coroutine")
+		L.Error()
+		return 0
+	case cosRun:
+		// Check if it's the main thread
+		L.RawGetI(luaapi.RegistryIndex, int64(stateapi.RegistryIndexMainThread))
+		mainThread := L.ToThread(-1)
+		L.Pop(1)
+		if mainThread != nil && mainThread.Internal == co.Internal {
+			L.PushString("cannot close main thread")
+			L.Error()
+			return 0
 		}
-	}
-
-	L.PushBoolean(true)
-	return 1
-}
-
-// coroStatusStr returns the status string for error messages.
-func coroStatusStr(status int, top int) string {
-	switch status {
-	case stateapi.StatusYield:
-		return "suspended"
-	case stateapi.StatusOK:
-		if top == 0 {
-			return "dead"
-		}
-		return "suspended"
+		// Running non-main coroutine — close itself
+		// TODO: call lua_closethread
+		L.PushBoolean(true)
+		return 1
 	default:
-		return "dead"
+		L.PushBoolean(false)
+		L.PushString("cannot close coroutine")
+		return 2
 	}
 }

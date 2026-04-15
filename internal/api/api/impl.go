@@ -1456,6 +1456,13 @@ func (L *State) HookActive() bool {
 	return L.ls().HookMask != 0
 }
 
+// HasCallFrames returns true if the thread has call frames above the base CI.
+// Mirrors: lua_getstack(L, 0, &ar) in C Lua — returns true when ci != &L->base_ci.
+func (L *State) HasCallFrames() bool {
+	ls := L.ls()
+	return ls.CI != nil && ls.CI != &ls.BaseCI
+}
+
 // GetFuncProtoInfo inspects a Lua closure at stack index `idx` and returns
 // its Proto metadata. For C functions returns defaults with ok=false.
 func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDefined, lastLine, nups, nparams int, isVararg, ok bool) {
