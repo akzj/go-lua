@@ -154,6 +154,54 @@ func debugTraceback(L *luaapi.State) int {
 	return 1
 }
 
+// pushActiveLines pushes a table {[line]=true} for all active lines in a Lua
+// function's prototype, or pushes nil for C functions. Mirrors collectvalidlines
+// in ldebug.c.
+func pushActiveLines(L *luaapi.State, idx int) {
+	cl := L.GetLClosure(idx)
+	if cl == nil {
+		L.PushNil()
+		return
+	}
+	p := cl.Proto
+	L.CreateTable(0, len(p.LineInfo))
+	if len(p.LineInfo) > 0 {
+		currentLine := p.LineDefined
+		startI := 0
+		// For vararg functions, skip first instruction (OP_VARARGPREP)
+		if p.IsVararg() {
+			// nextline for instruction 0
+			delta := p.LineInfo[0]
+			if delta == -128 { // absLineInfo sentinel
+				for _, ai := range p.AbsLineInfo {
+					if ai.PC == 0 {
+						currentLine = ai.Line
+						break
+					}
+				}
+			} else {
+				currentLine += int(delta)
+			}
+			startI = 1
+		}
+		for i := startI; i < len(p.LineInfo); i++ {
+			delta := p.LineInfo[i]
+			if delta == -128 { // absLineInfo sentinel
+				for _, ai := range p.AbsLineInfo {
+					if ai.PC == i {
+						currentLine = ai.Line
+						break
+					}
+				}
+			} else {
+				currentLine += int(delta)
+			}
+			L.PushBoolean(true)
+			L.RawSetI(-2, int64(currentLine))
+		}
+	}
+}
+
 // debug.getinfo([thread,] f [, what]) — returns debug info table
 // Mirrors: db_getinfo in ldblib.c
 func debugGetinfo(L *luaapi.State) int {
