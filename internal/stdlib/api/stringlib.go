@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"unicode"
 
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
@@ -784,7 +783,8 @@ func matchClass(c byte, cl byte) bool {
 	case 'l':
 		res = c >= 'a' && c <= 'z'
 	case 'p':
-		res = unicode.IsPunct(rune(c))
+		// C ispunct: printable non-alnum non-space (ASCII 0x21-0x7E minus alnum)
+		res = c > 0x20 && c < 0x7f && !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
 	case 's':
 		res = c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
 	case 'u':
