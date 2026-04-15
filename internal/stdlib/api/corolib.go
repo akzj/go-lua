@@ -245,9 +245,17 @@ func coroClose(L *luaapi.State) int {
 	switch st {
 	case cosDead, cosYld:
 		// Can close dead or suspended coroutines
-		// TODO: call lua_closethread for proper TBC close
-		L.PushBoolean(true)
-		return 1
+		// Mirrors: luaB_close → lua_closethread in lcorolib.c:176
+		coState := co.Internal.(*stateapi.LuaState)
+		callerState := L.Internal.(*stateapi.LuaState)
+		status := vmapi.CloseThread(coState, callerState)
+		if status == stateapi.StatusOK {
+			L.PushBoolean(true)
+			return 1
+		}
+		L.PushBoolean(false)
+		co.XMove(L, 1) // move error message from co to caller
+		return 2
 	case cosNorm:
 		L.PushString("cannot close a normal coroutine")
 		L.Error()
