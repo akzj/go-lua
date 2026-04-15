@@ -378,6 +378,12 @@ func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	savedAllowHook := L.AllowHook
 	L.AllowHook = false // cannot call hooks inside a hook
 
+	// Restore state even if hook call panics.
+	defer func() {
+		L.AllowHook = savedAllowHook
+		L.Top = savedTop
+	}()
+
 	// Ensure stack space for hook call: hook_func + "return" arg + nil
 	CheckStack(L, 4)
 
@@ -392,10 +398,6 @@ func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 
 	// Call hook("return") — 1 arg, 0 results
 	Call(L, L.Top-2, 0)
-
-	// Restore state
-	L.AllowHook = savedAllowHook
-	L.Top = savedTop
 }
 
 // moveResults moves nres results to res, adjusting for wanted count.
