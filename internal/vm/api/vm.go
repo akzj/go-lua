@@ -2500,6 +2500,16 @@ startfunc:
 			return // end this frame
 		}
 		ci = L.CI
+		// Correct 'oldpc' for the caller's frame after a return.
+		// The callee overwrites L.OldPC with its own PCs during execution.
+		// Set it to the caller's current SavedPC so the line hook won't
+		// fire a spurious event for the same line as the CALL instruction.
+		// Only done here (not in PosCall) because coroutine yield/resume
+		// needs OldPC left alone to fire the correct line event on resume.
+		// Mirrors: rethook in ldo.c (L->oldpc = pcRel(ci->u.l.savedpc, ...))
+		if ci.IsLua() {
+			L.OldPC = ci.SavedPC
+		}
 		goto startfunc
 	}
 }
