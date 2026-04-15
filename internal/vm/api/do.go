@@ -862,16 +862,28 @@ func Load(L *stateapi.LuaState, reader lexapi.LexReader, source string) int {
 // Coroutine support (basic stubs)
 // ---------------------------------------------------------------------------
 
+// resumeError removes nArgs from the coroutine stack, pushes an error message,
+// and returns StatusErrRun. Mirrors: resume_error in ldo.c:907-915.
+func resumeError(L *stateapi.LuaState, msg string, nArgs int) (int, int) {
+	L.Top -= nArgs // remove args from the stack
+	st := L.Global.StringTable.(*luastringapi.StringTable)
+	stateapi.PushValue(L, objectapi.MakeString(st.Intern(msg)))
+	return stateapi.StatusErrRun, 1
+}
+
 // Resume resumes a coroutine.
 // Mirrors: lua_resume in ldo.c (simplified)
 func Resume(L *stateapi.LuaState, from *stateapi.LuaState, nArgs int) (int, int) {
 	if L.Status == stateapi.StatusOK {
 		// Starting a new coroutine
 		if L.CI != &L.BaseCI {
-			return stateapi.StatusErrRun, 0
+			return resumeError(L, "cannot resume non-suspended coroutine", nArgs)
+		} else if L.Top-(L.CI.Func+1) == nArgs {
+			// No function on stack (only args) — dead coroutine
+			return resumeError(L, "cannot resume dead coroutine", nArgs)
 		}
 	} else if L.Status != stateapi.StatusYield {
-		return stateapi.StatusErrRun, 0
+		return resumeError(L, "cannot resume dead coroutine", nArgs)
 	}
 
 	if from != nil {
