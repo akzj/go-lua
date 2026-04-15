@@ -1829,3 +1829,21 @@ func DebugGetProto(L *State) *objectapi.Proto {
 	cl := fval.Val.(*closureapi.LClosure)
 	return cl.Proto
 }
+
+// PushFuncFromDebug pushes the function associated with a DebugInfo onto the stack.
+// Returns true if successful, false if the CI is nil or invalid.
+func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
+	if ar == nil || ar.ci == nil {
+		return false
+	}
+	ci, ok := ar.ci.(*stateapi.CallInfo)
+	if !ok {
+		return false
+	}
+	ls := L.ls()
+	if ci.Func < 0 || ci.Func >= len(ls.Stack) {
+		return false
+	}
+	L.push(ls.Stack[ci.Func].Val)
+	return true
+}

@@ -294,6 +294,10 @@ func debugGetinfo(L *luaapi.State) int {
 			L.PushValue(1) // push the function itself
 			L.SetField(-2, "func")
 		}
+		if strings.Contains(what, "L") {
+			pushActiveLines(L, 1) // push activelines table (or nil for C func)
+			L.SetField(-2, "activelines")
+		}
 		return 1
 	}
 
@@ -330,6 +334,27 @@ func debugGetinfo(L *luaapi.State) int {
 	L.SetField(-2, "istailcall")
 	L.PushInteger(int64(ar.ExtraArgs))
 	L.SetField(-2, "extraargs")
+
+	// Handle "f" (push function) and "L" (activelines) for stack-level path
+	if strings.Contains(what, "f") || strings.Contains(what, "L") {
+		if L.PushFuncFromDebug(ar) {
+			funcIdx := L.GetTop() // function is now on top
+			if strings.Contains(what, "f") {
+				L.PushValue(funcIdx)
+				L.SetField(-3, "func") // table is at funcIdx-1, but after push it's -3
+			}
+			if strings.Contains(what, "L") {
+				pushActiveLines(L, funcIdx)
+				L.SetField(-3, "activelines")
+			}
+			L.Pop(1) // pop the function
+		} else {
+			if strings.Contains(what, "L") {
+				L.PushNil()
+				L.SetField(-2, "activelines")
+			}
+		}
+	}
 
 	return 1
 }
