@@ -574,26 +574,30 @@ func finishPCallK(L *stateapi.LuaState, ci *stateapi.CallInfo) int {
 		// No error — was interrupted by a yield
 		status = stateapi.StatusYield
 	} else {
-		// Error during close after yield — complete the pcall error path
-		// Restore allowhook from the saved OAH bit
+		// Error during close after yield — complete the pcall error path.
+		// Restore allowhook from the saved OAH bit.
 		if ci.CallStatus&stateapi.CISTOAH != 0 {
 			L.AllowHook = true
 		} else {
 			L.AllowHook = false
 		}
-		// Close any remaining TBC vars in protected mode
+		// Close any remaining TBC vars with yieldable=true.
+		// If a __close yields, the yield propagates up; on resume we'll
+		// re-enter finishPCallK and continue closing.
+		// Mirrors: luaF_close(L, func, status, 1) in finishpcallk (ldo.c:822)
 		funcIdx := ci.Func
-		if L.TBCList >= funcIdx {
-			errObj := objectapi.Nil
-			if L.Top > funcIdx {
-				errObj = L.Stack[L.Top-1].Val
-			}
-			var newErr objectapi.TValue
-			status, newErr = CloseProtected(L, funcIdx, status, errObj)
-			if L.Top > funcIdx {
-				L.Stack[L.Top-1].Val = newErr
-			}
+		errObj := objectapi.Nil
+		if L.Top > funcIdx {
+			errObj = L.Stack[L.Top-1].Val
 		}
+		// Save error object at funcIdx so it survives across yields
+		L.Stack[funcIdx].Val = errObj
+		L.Top = funcIdx + 1
+		CloseTBCWithError(L, funcIdx, status, errObj, true) // yieldable!
+		// Recover error object from funcIdx (in case close changed L.Top)
+		errObj = L.Stack[funcIdx].Val
+		// Put error back at top for SetErrorObj
+		L.Stack[L.Top-1].Val = errObj
 		SetErrorObj(L, status, funcIdx)
 		ShrinkStack(L)
 		ci.Ctx = stateapi.StatusOK // clear for next iteration
@@ -772,7 +776,12 @@ func Resume(L *stateapi.LuaState, from *stateapi.LuaState, nArgs int) (int, int)
 	status = precover(L, status)
 
 	L.Status = status
-	nresults := L.Top - (L.CI.Func + 1)
+	var nresults int
+	if status == stateapi.StatusYield {
+		nresults = L.CI.NYield
+	} else {
+		nresults = L.Top - (L.CI.Func + 1)
+	}
 	return status, nresults
 }
 
@@ -837,11 +846,22 @@ func unroll(L *stateapi.LuaState) {
 					n := ci.K(L, status, ci.Ctx)
 					PosCall(L, ci, n)
 				} else {
-					// No continuation — just finish the call.
-					// For pcall: results are already on the stack.
-					// Adjust results to MultiRet equivalent.
-					nres := L.Top - (ci.Func + 1)
-					PosCall(L, ci, nres)
+					if isErrorStatus(status) {
+						// finishPCallK put error at ci.Func, L.Top = ci.Func+1.
+						// For pcall semantics: need (false, error_msg).
+						// Place at top of stack for moveResults.
+						errMsg := L.Stack[ci.Func].Val
+						top := L.Top
+						CheckStack(L, 2)
+						L.Stack[top].Val = objectapi.False
+						L.Stack[top+1].Val = errMsg
+						L.Top = top + 2
+						PosCall(L, ci, 2)
+					} else {
+						// Normal yield completion — results already on stack.
+						nres := L.Top - (ci.Func + 1)
+						PosCall(L, ci, nres)
+					}
 				}
 			}
 		} else {
