@@ -1427,6 +1427,12 @@ startfunc:
 	base := ci.Func + 1
 
 	for {
+		// Hook dispatch: fire line/count hooks if active
+		// Mirrors: vmfetch trap check in lvm.c
+		if L.HookMask&(stateapi.MaskLine|stateapi.MaskCount) != 0 && L.AllowHook {
+			TraceExec(L, ci)
+		}
+
 		inst := code[ci.SavedPC]
 		ci.SavedPC++
 		op := opcodeapi.GetOpCode(inst)

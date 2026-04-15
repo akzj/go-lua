@@ -276,6 +276,10 @@ func precallC(L *stateapi.LuaState, funcIdx int, status uint32, f stateapi.CFunc
 	// Ensure minimum stack size
 	CheckStack(L, luaMinStack)
 	ci := prepCallInfo(L, funcIdx, status|stateapi.CISTC, L.Top+luaMinStack)
+	// Fire call hook if active
+	if L.HookMask&stateapi.MaskCall != 0 {
+		CallHook(L, ci)
+	}
 	// Execute the C function
 	n := f(L)
 	PosCall(L, ci, n)
@@ -331,6 +335,10 @@ retry:
 			L.Stack[L.Top].Val = objectapi.Nil
 			L.Top++
 		}
+		// Fire call hook if active
+		if L.HookMask != 0 {
+			CallHook(L, ci)
+		}
 		return ci
 
 	case objectapi.TagCClosure:
@@ -369,27 +377,40 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	L.CI = ci.Prev
 }
 
-// retHook fires the return hook if set.
-// Mirrors: rethook in ldo.c
-func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
-	// Get hook function from L.Hook (per-thread TValue)
+// hookDispatch is the common hook dispatcher.
+// Calls the hook function with (event [, line]) arguments.
+// Mirrors: luaD_hook in ldo.c
+// event: "call", "return", "line", "count", "tail call"
+// line: line number for line hooks, -1 otherwise
+func hookDispatch(L *stateapi.LuaState, event string, line int) {
 	hookVal, ok := L.Hook.(objectapi.TValue)
 	if !ok || hookVal.Tt == objectapi.TagNil || hookVal.Val == nil {
 		return
 	}
+	if !L.AllowHook {
+		return
+	}
 
-	// Save state
+	ci := L.CI
 	savedTop := L.Top
+	savedCITop := ci.Top
 	savedAllowHook := L.AllowHook
 	L.AllowHook = false // cannot call hooks inside a hook
 
-	// Restore state even if hook call panics.
+	// Protect entire activation register (mirrors luaD_hook in ldo.c)
+	// For Lua functions, L.Top may be below ci.Top. Push hook args above ci.Top
+	// to avoid overwriting registers.
+	if ci.IsLua() && L.Top < ci.Top {
+		L.Top = ci.Top
+	}
+
 	defer func() {
 		L.AllowHook = savedAllowHook
+		ci.Top = savedCITop
 		L.Top = savedTop
 	}()
 
-	// Ensure stack space for hook call: hook_func + "return" arg + nil
+	// Ensure stack space: hook_func + event_name + optional_line_arg
 	CheckStack(L, 4)
 
 	st := L.Global.StringTable.(*luastringapi.StringTable)
@@ -398,12 +419,102 @@ func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	L.Stack[L.Top].Val = hookVal
 	L.Top++
 
-	// Push event name "return"
-	L.Stack[L.Top].Val = objectapi.MakeString(st.Intern("return"))
+	// Push event name
+	L.Stack[L.Top].Val = objectapi.MakeString(st.Intern(event))
 	L.Top++
 
-	// Call hook("return") — 1 arg, 0 results
-	Call(L, L.Top-2, 0)
+	// For line hooks, push line number as second arg
+	nargs := 1
+	if line >= 0 {
+		L.Stack[L.Top].Val = objectapi.MakeInteger(int64(line))
+		L.Top++
+		nargs = 2
+	}
+
+	Call(L, L.Top-nargs-1, 0)
+}
+
+// retHook fires the return hook if set.
+// Mirrors: rethook in ldo.c
+func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
+	hookDispatch(L, "return", -1)
+}
+
+// CallHook fires the call hook for a new function call.
+// Mirrors: luaD_hookcall in ldo.c
+func CallHook(L *stateapi.LuaState, ci *stateapi.CallInfo) {
+	L.OldPC = 0 // set 'oldpc' for new function
+	if L.HookMask&stateapi.MaskCall == 0 {
+		return
+	}
+	event := "call"
+	if ci.CallStatus&stateapi.CISTTail != 0 {
+		event = "tail call"
+	}
+	if ci.IsLua() {
+		ci.SavedPC++ // hooks assume 'pc' is already incremented
+		hookDispatch(L, event, -1)
+		ci.SavedPC-- // correct 'pc'
+	} else {
+		hookDispatch(L, event, -1)
+	}
+}
+
+// TraceExec handles line and count hooks during VM execution.
+// Returns true if trap should stay active.
+// Mirrors: luaG_traceexec in ldebug.c
+func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
+	mask := L.HookMask
+	if mask&(stateapi.MaskLine|stateapi.MaskCount) == 0 {
+		return false // no line/count hooks, turn off trap
+	}
+
+	cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	if !ok || cl.Proto == nil {
+		return false
+	}
+	p := cl.Proto
+
+	// Count hook
+	countHook := false
+	if mask&stateapi.MaskCount != 0 {
+		L.HookCount--
+		if L.HookCount == 0 {
+			L.HookCount = L.BaseHookCount // reset
+			countHook = true
+		}
+	}
+	if !countHook && mask&stateapi.MaskLine == 0 {
+		return true // no line hook and count != 0
+	}
+
+	if countHook {
+		hookDispatch(L, "count", -1)
+	}
+
+	if mask&stateapi.MaskLine != 0 {
+		npci := ci.SavedPC // PC of instruction about to execute
+		if npci < 0 {
+			npci = 0
+		}
+		if npci >= len(p.Code) {
+			npci = len(p.Code) - 1
+		}
+		oldpc := L.OldPC
+		if oldpc >= len(p.Code) {
+			oldpc = 0
+		}
+		// Fire line hook on jump back (loop) or when entering new line
+		if npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
+			newline := GetFuncLine(p, npci)
+			if newline >= 0 {
+				hookDispatch(L, "line", newline)
+			}
+		}
+		L.OldPC = npci
+	}
+
+	return true // keep trap active
 }
 
 // moveResults moves nres results to res, adjusting for wanted count.
