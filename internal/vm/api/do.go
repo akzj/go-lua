@@ -830,26 +830,17 @@ func unroll(L *stateapi.LuaState) {
 		if !ci.IsLua() {
 			// C function — finish its call.
 			// Mirrors: finishCcall in ldo.c
-			if ci.CallStatus&stateapi.CISTClsRet != 0 {
-				// Was closing TBC variable — just redo PosCall.
-				// The __close method finished; continue with the
-				// return that was in progress.
-				PosCall(L, ci, ci.NRes)
-			} else {
-				// Check for yieldable pcall (CIST_YPCALL)
-				status := stateapi.StatusYield
-				if ci.CallStatus&stateapi.CISTYPCall != 0 {
-					status = finishPCallK(L, ci)
-				}
-				// Call continuation if present
+			// Check CISTYPCall first — higher priority than CISTClsRet.
+			// When both are set (pcall error close yielded), finishPCallK
+			// must run to place the pcall error result.
+			if ci.CallStatus&stateapi.CISTYPCall != 0 {
+				ci.CallStatus &^= stateapi.CISTClsRet // clear close flag
+				status := finishPCallK(L, ci)
 				if ci.K != nil {
 					n := ci.K(L, status, ci.Ctx)
 					PosCall(L, ci, n)
 				} else {
 					if isErrorStatus(status) {
-						// finishPCallK put error at ci.Func, L.Top = ci.Func+1.
-						// For pcall semantics: need (false, error_msg).
-						// Place at top of stack for moveResults.
 						errMsg := L.Stack[ci.Func].Val
 						top := L.Top
 						CheckStack(L, 2)
@@ -858,10 +849,22 @@ func unroll(L *stateapi.LuaState) {
 						L.Top = top + 2
 						PosCall(L, ci, 2)
 					} else {
-						// Normal yield completion — results already on stack.
 						nres := L.Top - (ci.Func + 1)
 						PosCall(L, ci, nres)
 					}
+				}
+			} else if ci.CallStatus&stateapi.CISTClsRet != 0 {
+				// Normal return close (no pcall) — just redo PosCall.
+				PosCall(L, ci, ci.NRes)
+			} else {
+				// Normal C function resume (no pcall, no close).
+				status := stateapi.StatusYield
+				if ci.K != nil {
+					n := ci.K(L, status, ci.Ctx)
+					PosCall(L, ci, n)
+				} else {
+					nres := L.Top - (ci.Func + 1)
+					PosCall(L, ci, nres)
 				}
 			}
 		} else {
