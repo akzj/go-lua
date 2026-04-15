@@ -12,6 +12,7 @@ import (
 // This is for coverage mapping — individual failures are logged as skips.
 func TestTestesWide(t *testing.T) {
 	files := []string{
+		// Already passing (10)
 		"strings.lua",
 		"math.lua",
 		"sort.lua",
@@ -22,6 +23,23 @@ func TestTestesWide(t *testing.T) {
 		"locals.lua",
 		"bitwise.lua",
 		"tpack.lua",
+		// New — to triage
+		"closure.lua",
+		"code.lua",
+		"coroutine.lua",
+		"errors.lua",
+		"goto.lua",
+		"literals.lua",
+		"nextvar.lua",
+		"pm.lua",
+		"utf8.lua",
+		"db.lua",
+		"attrib.lua",
+		"gc.lua",
+		"gengc.lua",
+		"files.lua",
+		"cstack.lua",
+		"api.lua",
 	}
 
 	for _, f := range files {
