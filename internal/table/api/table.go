@@ -255,7 +255,7 @@ func (t *Table) hashSearchBoundary(asize int64) int64 {
 		if j > math.MaxInt64/2 {
 			return j
 		}
-		j = j * 2
+		j = j*2 + 1
 	}
 	for j-i > 1 {
 		m := i + (j-i)/2
