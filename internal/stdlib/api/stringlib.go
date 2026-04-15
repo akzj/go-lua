@@ -1107,18 +1107,35 @@ func (ms *matchState) pushCapture(L *luaapi.State, si, ei int) int {
 		return 1
 	}
 	for i := 0; i < nlevels; i++ {
-		if ms.capture[i].len == capPosition {
-			L.PushInteger(int64(ms.capture[i].init + 1)) // 1-based
-		} else {
-			start := ms.capture[i].init
-			end := start + ms.capture[i].len
-			if end > len(ms.src) {
-				end = len(ms.src)
-			}
-			L.PushString(ms.src[start:end])
-		}
+		ms.pushOneCapture(L, i, si, ei)
 	}
 	return nlevels
+}
+
+// pushOneCapture pushes capture at index i (0-based).
+// Mirrors C Lua's push_onecapture.
+func (ms *matchState) pushOneCapture(L *luaapi.State, i int, si, ei int) {
+	if i >= ms.level {
+		if i != 0 {
+			ms.L.Errorf("invalid capture index %%%d", i+1)
+		}
+		// No captures: capture 0 = whole match
+		L.PushString(ms.src[si:ei])
+		return
+	}
+	cap := ms.capture[i]
+	if cap.len == capUnfinished {
+		ms.L.Errorf("unfinished capture")
+	} else if cap.len == capPosition {
+		L.PushInteger(int64(cap.init + 1)) // 1-based
+	} else {
+		start := cap.init
+		end := start + cap.len
+		if end > len(ms.src) {
+			end = len(ms.src)
+		}
+		L.PushString(ms.src[start:end])
+	}
 }
 
 func str_find(L *luaapi.State) int {
@@ -1278,7 +1295,7 @@ func str_gsub(L *luaapi.State) int {
 				repl := L.CheckString(3)
 				sb.WriteString(gsubReplace(L, repl, ms, si, res))
 			case objectapi.TypeTable:
-				ms.pushCapture(L, si, res)
+				ms.pushOneCapture(L, 0, si, res) // first capture is the index
 				L.GetTable(3)
 				addReplacement(L, &sb, s, si, res)
 			case objectapi.TypeFunction:
