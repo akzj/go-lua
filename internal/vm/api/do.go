@@ -569,23 +569,22 @@ func RunProtected(L *stateapi.LuaState, f func()) (status int) {
 // Mirrors: finishpcallk in ldo.c
 // Returns the status to pass to the continuation function.
 func finishPCallK(L *stateapi.LuaState, ci *stateapi.CallInfo) int {
-	status := ci.Ctx // retrieve saved error status (0 = no error, just yield)
+	status := ci.GetRecst() // retrieve saved error status from bits 12-14
 	if status == stateapi.StatusOK {
 		// No error — was interrupted by a yield
 		status = stateapi.StatusYield
 	} else {
-		// Error during close after yield — complete the pcall error path.
+		// Error path: close TBC vars YIELDABLY.
 		// Restore allowhook from the saved OAH bit.
+		// Mirrors: finishpcallk in ldo.c:812-830
 		if ci.CallStatus&stateapi.CISTOAH != 0 {
 			L.AllowHook = true
 		} else {
 			L.AllowHook = false
 		}
-		// Close any remaining TBC vars with yieldable=true.
-		// If a __close yields, the yield propagates up; on resume we'll
-		// re-enter finishPCallK and continue closing.
-		// Mirrors: luaF_close(L, func, status, 1) in finishpcallk (ldo.c:822)
-		funcIdx := ci.Func
+		// Use FuncIdx (saved func position), not ci.Func.
+		// Mirrors: restorestack(L, ci->u2.funcidx) in C Lua
+		funcIdx := ci.FuncIdx
 		errObj := objectapi.Nil
 		if L.Top > funcIdx {
 			errObj = L.Stack[L.Top-1].Val
@@ -600,7 +599,7 @@ func finishPCallK(L *stateapi.LuaState, ci *stateapi.CallInfo) int {
 		L.Stack[L.Top-1].Val = errObj
 		SetErrorObj(L, status, funcIdx)
 		ShrinkStack(L)
-		ci.Ctx = stateapi.StatusOK // clear for next iteration
+		ci.SetRecst(stateapi.StatusOK) // clear for next iteration
 	}
 	ci.CallStatus &^= stateapi.CISTYPCall
 	L.ErrFunc = ci.OldErrFunc
@@ -616,20 +615,31 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 
 	L.ErrFunc = errFunc
 
+	// PATH B: Yieldable with continuation — use plain Call (unprotected).
+	// Errors propagate to Resume's RunProtected → precover → finishPCallK.
+	// Mirrors: lua_pcallk PATH B in lapi.c:1099-1108
+	if L.Yieldable() && oldCI.K != nil {
+		oldCI.CallStatus |= stateapi.CISTYPCall
+		oldCI.FuncIdx = funcIdx     // save func position for error recovery
+		oldCI.OldErrFunc = oldErrFunc
+		Call(L, funcIdx, nResults)   // PLAIN call — errors propagate!
+		// If we reach here, no error occurred
+		oldCI.CallStatus &^= stateapi.CISTYPCall
+		L.ErrFunc = oldErrFunc
+		return stateapi.StatusOK
+	}
+
+	// PATH A: Non-yieldable — use RunProtected (catches errors locally).
+	// Mirrors: lua_pcallk PATH A → luaD_pcall in ldo.c
 	status := RunProtected(L, func() {
 		Call(L, funcIdx, nResults)
 	})
 
 	if status == stateapi.StatusYield {
-		// Yield inside pcall — save pcall state on the pcall's own CI
-		// and re-panic so the yield propagates to Resume's RunProtected.
-		// oldCI is the pcall's C-function CI (captured before Call).
-		// On resume, unroll's finishCcall path will check CISTYPCall.
-		// Mirrors: C Lua lua_pcallk sets CIST_YPCALL before luaD_pcall.
+		// Yield inside non-continuation pcall — propagate
 		oldCI.CallStatus |= stateapi.CISTYPCall
 		oldCI.OldErrFunc = oldErrFunc
 		L.ErrFunc = oldErrFunc
-		// Re-panic with yield to propagate to Resume
 		panic(stateapi.LuaYield{})
 	}
 
@@ -639,15 +649,12 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 		L.AllowHook = oldAllowHook
 		// Close TBC vars created inside the pcall'd function.
 		// C Lua: status = luaD_closeprotected(L, old_top, status)
-		// Each __close call is protected — if it errors, the error
-		// replaces the previous one and closing continues.
 		if L.TBCList >= oldTop {
 			errObj := objectapi.Nil
 			if L.Top > oldTop {
 				errObj = L.Stack[L.Top-1].Val
 			}
 			status, errObj = CloseProtected(L, oldTop, status, errObj)
-			// Put the (possibly updated) error object back for SetErrorObj
 			if L.Top > oldTop {
 				L.Stack[L.Top-1].Val = errObj
 			}
@@ -809,8 +816,10 @@ func precover(L *stateapi.LuaState, status int) int {
 			break // no recovery point — unrecoverable error
 		}
 		L.CI = ci // go down to recovery function
-		// Save error status for finishPCallK to retrieve
-		ci.Ctx = status // reuse Ctx to store the error status
+		// Save error status for finishPCallK to retrieve.
+		// Uses bits 12-14 of CallStatus (not ci.Ctx, which is continuation context).
+		// Mirrors: setcistrecst(ci, status) in C Lua precover (ldo.c:960)
+		ci.SetRecst(status)
 		status = RunProtected(L, func() {
 			unroll(L)
 		})

@@ -9,6 +9,7 @@ import (
 
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
+	stateapi "github.com/akzj/go-lua/internal/state/api"
 )
 
 // ---------------------------------------------------------------------------
@@ -407,17 +408,35 @@ func luaB_ipairs(L *luaapi.State) int {
 	return 3
 }
 
+// finishPcallCont is the continuation for pcall after yield/error recovery.
+// Mirrors: finishpcall in lbaselib.c:471
+// KFunction signature: func(L *stateapi.LuaState, status int, ctx int) int
+func finishPcallCont(L *stateapi.LuaState, status int, ctx int) int {
+	if status != stateapi.StatusOK && status != stateapi.StatusYield {
+		// Error path: push false, then the error message
+		// The error object is already at L.Top-1 (placed by SetErrorObj in finishPCallK)
+		L.Stack[L.Top].Val = objectapi.False
+		L.Top++
+		// Swap: move false before error message
+		// Stack: ... errMsg false → ... false errMsg
+		L.Stack[L.Top-1].Val, L.Stack[L.Top-2].Val = L.Stack[L.Top-2].Val, L.Stack[L.Top-1].Val
+		return 2
+	}
+	// Success: stack has [true, result1, result2, ...]
+	return L.Top - (L.CI.Func + 1)
+}
+
 func luaB_pcall(L *luaapi.State) int {
 	L.CheckAny(1)
 	L.PushBoolean(true) // first result if no errors
 	L.Insert(1)         // put it in place
+	// Set continuation BEFORE calling PCall — this enables PATH B (yieldable).
+	// Mirrors: luaB_pcall in lbaselib.c sets finishpcall as continuation.
+	ls := L.Internal.(*stateapi.LuaState)
+	ls.CI.K = finishPcallCont
+	ls.CI.Ctx = 0
 	status := L.PCall(L.GetTop()-2, luaapi.MultiRet, 0)
-	if status != luaapi.StatusOK {
-		L.PushBoolean(false)
-		L.Insert(-2) // put false before error message
-		return 2
-	}
-	return L.GetTop()
+	return finishPcallCont(ls, status, 0)
 }
 
 func luaB_xpcall(L *luaapi.State) int {
