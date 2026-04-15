@@ -793,6 +793,8 @@ func matchClass(c byte, cl byte) bool {
 		res = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 	case 'x':
 		res = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+	case 'z':
+		res = c == 0
 	default:
 		return c == cl
 	}
