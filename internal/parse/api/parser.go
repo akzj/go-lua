@@ -1835,7 +1835,8 @@ func statement(ls *lexapi.LexState) {
 func Parse(source string, reader lexapi.LexReader) *objectapi.Proto {
 	ls := lexapi.NewLexState(reader, source)
 	lexapi.SetInput(ls) // prime the lexer with first character
-	lexapi.SkipShebang(ls) // skip Unix shebang line if present
+	// Note: shebang skipping is handled by the file loader (DoFile),
+	// NOT here. load() from strings must not skip '#' lines.
 	ls.EnvName = "_ENV"
 	ls.BreakName = "break"
 	var dyd Dyndata
