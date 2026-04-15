@@ -1262,47 +1262,37 @@ func str_gsub(L *luaapi.State) int {
 	var sb strings.Builder
 	n := 0
 	si := 0
+	lastmatch := -1 // end of last match (Lua 5.3.3+ empty match semantics)
 	for n < maxn {
 		ms := &matchState{src: s, pat: pat}
 		ms.level = 0
 		res := ms.match(si, 0)
-		if res < 0 {
-			if anchor || si > len(s) {
-				break
+		if res >= 0 && res != lastmatch { // match, not same end as last
+			n++
+			switch replType {
+			case objectapi.TypeString:
+				repl := L.CheckString(3)
+				sb.WriteString(gsubReplace(repl, ms, si, res))
+			case objectapi.TypeTable:
+				ms.pushCapture(L, si, res)
+				L.GetTable(3)
+				addReplacement(L, &sb, s, si, res)
+			case objectapi.TypeFunction:
+				nCap := ms.pushCapture(L, si, res)
+				L.PushValue(3)
+				L.Insert(-(nCap + 1))
+				L.Call(nCap, 1)
+				addReplacement(L, &sb, s, si, res)
+			default:
+				L.ArgError(3, "string/function/table expected")
 			}
-			if si < len(s) {
-				sb.WriteByte(s[si])
-			}
-			si++
-			continue
-		}
-		n++
-		// Get replacement
-		switch replType {
-		case objectapi.TypeString:
-			repl := L.CheckString(3)
-			sb.WriteString(gsubReplace(repl, ms, si, res))
-		case objectapi.TypeTable:
-			// Use first capture (or whole match) as key
-			ms.pushCapture(L, si, res)
-			L.GetTable(3) // table[capture]
-			addReplacement(L, &sb, s, si, res)
-		case objectapi.TypeFunction:
-			nCap := ms.pushCapture(L, si, res)
-			L.PushValue(3) // push function
-			L.Insert(-(nCap + 1))
-			L.Call(nCap, 1)
-			addReplacement(L, &sb, s, si, res)
-		default:
-			L.ArgError(3, "string/function/table expected")
-		}
-		if res == si {
-			if si < len(s) {
-				sb.WriteByte(s[si])
-			}
+			si = res
+			lastmatch = res
+		} else if si < len(s) {
+			sb.WriteByte(s[si])
 			si++
 		} else {
-			si = res
+			break
 		}
 		if anchor {
 			break
