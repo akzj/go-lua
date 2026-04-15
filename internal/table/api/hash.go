@@ -81,8 +81,36 @@ func mainPosition(t *Table, key obj.TValue) int {
 }
 
 // mainPositionFromNode returns the main position for a node's key.
+// Dead keys (TagDeadKey) preserve their original KeyVal, so we reconstruct
+// the original tag from the Go type of KeyVal to hash correctly.
 func mainPositionFromNode(t *Table, nd *Node) int {
-	return mainPosition(t, nodeKey(nd))
+	key := nodeKey(nd)
+	if key.Tt == obj.TagDeadKey {
+		// Reconstruct original tag from the preserved KeyVal
+		switch v := nd.KeyVal.(type) {
+		case int64:
+			key.Tt = obj.TagInteger
+		case float64:
+			key.Tt = obj.TagFloat
+		case *obj.LuaString:
+			if v.IsShort {
+				key.Tt = obj.TagShortStr
+			} else {
+				key.Tt = obj.TagLongStr
+			}
+		case bool:
+			if v {
+				key.Tt = obj.TagTrue
+			} else {
+				key.Tt = obj.TagFalse
+			}
+		default:
+			// Other collectable types — use pointer identity hash
+			hmask := (1 << t.LsizeNode) - 1
+			return int(uintptr(0)) & hmask
+		}
+	}
+	return mainPosition(t, key)
 }
 
 // ---------------------------------------------------------------------------
