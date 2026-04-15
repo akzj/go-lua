@@ -8,47 +8,10 @@ package api
 
 import (
 	"fmt"
-	"strings"
 	"unicode/utf8"
 
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
-
-// Chunkid formats a source name for error messages.
-// Mirrors luaO_chunkid in lobject.c. LUA_IDSIZE = 60.
-// Exported so runtime error paths can use it too.
-func Chunkid(source string) string {
-	const idsize = 60
-	if len(source) == 0 {
-		return `[string ""]`
-	}
-	if source[0] == '=' {
-		if len(source) <= idsize {
-			return source[1:]
-		}
-		return source[1:idsize]
-	}
-	if source[0] == '@' {
-		if len(source) <= idsize {
-			return source[1:]
-		}
-		return "..." + source[len(source)-(idsize-4):]
-	}
-	// String source: [string "content"] or [string "content..."]
-	const maxContent = 45
-	nl := strings.IndexByte(source, '\n')
-	srclen := len(source)
-	if srclen <= maxContent && nl < 0 {
-		return `[string "` + source + `"]`
-	}
-	if nl >= 0 && nl < srclen {
-		srclen = nl
-	}
-	if srclen > maxContent {
-		srclen = maxContent
-	}
-	return `[string "` + source[:srclen] + `..."]`
-}
 
 // EOZ signals end of input (-1, matching C's EOZ).
 const EOZ = -1
@@ -226,7 +189,7 @@ func LexError(ls *LexState, msg string, token TokenType) {
 		}
 	}
 
-	fullMsg := fmt.Sprintf("%s:%d: %s", Chunkid(ls.Source), ls.Line, msg)
+	fullMsg := fmt.Sprintf("%s:%d: %s", ls.Source, ls.Line, msg)
 	if tokStr != "" {
 		fullMsg = fmt.Sprintf("%s near %s", fullMsg, tokStr)
 	}
