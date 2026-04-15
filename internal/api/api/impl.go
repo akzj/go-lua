@@ -1446,6 +1446,11 @@ func (L *State) HookMask() int {
 	return L.ls().HookMask
 }
 
+// HookCount returns the base hook count (for count hooks).
+func (L *State) HookCount() int {
+	return L.ls().BaseHookCount
+}
+
 // HookActive returns true if any hooks are set.
 func (L *State) HookActive() bool {
 	return L.ls().HookMask != 0
