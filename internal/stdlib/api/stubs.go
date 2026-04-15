@@ -10,6 +10,8 @@ import (
 
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
+	stateapi "github.com/akzj/go-lua/internal/state/api"
+	vmapi "github.com/akzj/go-lua/internal/vm/api"
 )
 
 func OpenIO(L *luaapi.State) int {
@@ -365,16 +367,32 @@ func debugUpvalueid(L *luaapi.State) int {
 // debug.gethook([thread]) — returns hook function, mask string, count
 // Mirrors: db_gethook in ldblib.c
 func debugGethook(L *luaapi.State) int {
-	// TODO: thread argument support (for now, always use current thread)
-	mask := L.HookMask()
-	// Get hook function from registry
-	L.PushString("__debug_hook__")
-	L.GetTable(luaapi.RegistryIndex)
-	if L.IsNil(-1) {
-		L.Pop(1)
-		L.PushBoolean(false) // luaL_pushfail
+	// getthread: check if arg 1 is a thread
+	arg := 0
+	var L1 *stateapi.LuaState
+	if L.Type(1) == objectapi.TypeThread {
+		t := L.ToThread(1)
+		L1 = t.Internal.(*stateapi.LuaState)
+		arg = 1
+	} else {
+		L1 = L.Internal.(*stateapi.LuaState)
+		arg = 0
+	}
+	_ = arg // arg not used for gethook (no further args)
+
+	mask := L1.HookMask
+	// Get hook function from target thread's Hook field
+	hookVal, ok := L1.Hook.(objectapi.TValue)
+	if !ok || hookVal.Val == nil || hookVal.Tt == objectapi.TagNil {
+		L.PushBoolean(false) // luaL_pushfail — no hook
 		return 1
 	}
+	// Push hook function onto calling thread's stack (safely)
+	ls := L.Internal.(*stateapi.LuaState)
+	vmapi.CheckStack(ls, 1)
+	ls.Stack[ls.Top].Val = hookVal
+	ls.Top++
+
 	// Build mask string
 	var buf []byte
 	if mask&1 != 0 { // MaskCall
@@ -387,33 +405,39 @@ func debugGethook(L *luaapi.State) int {
 		buf = append(buf, 'l')
 	}
 	L.PushString(string(buf))
-	L.PushInteger(int64(L.HookCount()))
+	L.PushInteger(int64(L1.BaseHookCount))
 	return 3
 }
 
 func debugSethook(L *luaapi.State) int {
-	arg := 1
-	// TODO: thread argument support (for now, always use current thread)
+	// getthread: check if arg 1 is a thread
+	arg := 0
+	var L1 *stateapi.LuaState
+	if L.Type(1) == objectapi.TypeThread {
+		t := L.ToThread(1)
+		L1 = t.Internal.(*stateapi.LuaState)
+		arg = 1
+	} else {
+		L1 = L.Internal.(*stateapi.LuaState)
+		arg = 0
+	}
 
-	if L.IsNoneOrNil(arg) {
-		// Turn off hooks: debug.sethook() or debug.sethook(nil)
-		// IMPORTANT: clear registry hook first, then disable mask.
-		// In close/return hook contexts, ClearHookFields first can allow
-		// pending returns to run with HookMask==0 before registry is cleared,
-		// causing flaky hook visibility.
-		L.PushString("__debug_hook__")
-		L.PushNil()
-		L.SetTable(luaapi.RegistryIndex)
-		L.ClearHookFields()
+	if L.IsNoneOrNil(arg + 1) {
+		// Turn off hooks: debug.sethook() or debug.sethook(thread)
+		L1.Hook = nil
+		L1.HookMask = 0
+		L1.BaseHookCount = 0
+		L1.HookCount = 0
+		L1.AllowHook = true
 		return 0
 	}
 
-	// debug.sethook(func, mask [, count])
-	L.CheckType(arg, 6) // LUA_TFUNCTION
-	smask := L.CheckString(arg + 1)
+	// debug.sethook([thread,] func, mask [, count])
+	L.CheckType(arg+1, objectapi.TypeFunction)
+	smask := L.CheckString(arg + 2)
 	count := 0
-	if L.IsNumber(arg + 2) {
-		v, _ := L.ToInteger(arg + 2)
+	if L.IsNumber(arg + 3) {
+		v, _ := L.ToInteger(arg + 3)
 		count = int(v)
 	}
 
@@ -433,14 +457,18 @@ func debugSethook(L *luaapi.State) int {
 		mask |= 8 // MaskCount
 	}
 
-	// Store hook function in registry["__debug_hook__"]
-	L.PushString("__debug_hook__")
-	L.PushValue(arg) // push the hook function
-	L.SetTable(luaapi.RegistryIndex)
+	// Store hook function as TValue on target thread's Hook field (per-thread).
+	// Push the function value to top, then read the TValue from the stack.
+	L.PushValue(arg + 1)
+	callerLS := L.Internal.(*stateapi.LuaState)
+	L1.Hook = callerLS.Stack[callerLS.Top-1].Val
+	L.Pop(1)
 
-	// Set hook mask and enable hooks
-	L.SetHookFields(mask, count)
-	L.SetHookMarker()
+	// Set hook mask and enable hooks on target thread
+	L1.HookMask = mask
+	L1.BaseHookCount = count
+	L1.HookCount = count
+	L1.AllowHook = true
 
 	return 0
 }
