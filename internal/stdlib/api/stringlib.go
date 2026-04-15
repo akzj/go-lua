@@ -746,6 +746,10 @@ func classEnd(pat string, p int) int {
 		if p < len(pat) && pat[p] == '^' {
 			p++
 		}
+		// ']' right after '[' or '[^' is a literal member of the class
+		if p < len(pat) && pat[p] == ']' {
+			p++
+		}
 		// skip until closing ]
 		for {
 			if p >= len(pat) {
