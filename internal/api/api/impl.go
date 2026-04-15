@@ -1407,7 +1407,8 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 func shortSrc(source string) string {
 	const idsize = 60
 	if len(source) == 0 {
-		return "[string \"?\"]"
+		// Empty string source → [string ""]
+		return `[string ""]`
 	}
 	if source[0] == '=' {
 		rest := source[1:]

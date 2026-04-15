@@ -78,8 +78,10 @@ func getCurrentLine(ci *stateapi.CallInfo, L *stateapi.LuaState) int {
 // ShortSrc creates a short source name for error messages.
 // Mirrors: luaO_chunkid in lobject.c
 func ShortSrc(source string) string {
+	const idsize = 60
 	if len(source) == 0 {
-		return "[string \"?\"]"
+		// Empty string source → [string ""]
+		return `[string ""]`
 	}
 	if source[0] == '=' {
 		if len(source) <= 60 {
