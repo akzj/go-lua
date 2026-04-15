@@ -774,6 +774,9 @@ func matchClass(c byte, cl byte) bool {
 		res = c < 32 || c == 127
 	case 'd':
 		res = c >= '0' && c <= '9'
+	case 'g':
+		// printable non-space (isgraph): printable chars except space
+		res = c > 0x20 && c < 0x7f
 	case 'l':
 		res = c >= 'a' && c <= 'z'
 	case 'p':
