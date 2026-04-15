@@ -1284,6 +1284,7 @@ func str_gsub(L *luaapi.State) int {
 	var sb strings.Builder
 	n := 0
 	si := 0
+	changed := false // tracks whether any actual substitution occurred
 	lastmatch := -1 // end of last match (Lua 5.3.3+ empty match semantics)
 	for n < maxn {
 		ms := &matchState{L: L, src: s, pat: pat}
@@ -1295,16 +1296,21 @@ func str_gsub(L *luaapi.State) int {
 			case objectapi.TypeString:
 				repl := L.CheckString(3)
 				sb.WriteString(gsubReplace(L, repl, ms, si, res))
+				changed = true
 			case objectapi.TypeTable:
 				ms.pushOneCapture(L, 0, si, res) // first capture is the index
 				L.GetTable(3)
-				addReplacement(L, &sb, s, si, res)
+				if addReplacementChanged(L, &sb, s, si, res) {
+					changed = true
+				}
 			case objectapi.TypeFunction:
 				nCap := ms.pushCapture(L, si, res)
 				L.PushValue(3)
 				L.Insert(-(nCap + 1))
 				L.Call(nCap, 1)
-				addReplacement(L, &sb, s, si, res)
+				if addReplacementChanged(L, &sb, s, si, res) {
+					changed = true
+				}
 			default:
 				L.ArgError(3, "string/function/table expected")
 			}
@@ -1324,24 +1330,32 @@ func str_gsub(L *luaapi.State) int {
 	if si <= len(s) {
 		sb.WriteString(s[si:])
 	}
-	L.PushString(sb.String())
+	if !changed {
+		// No actual substitutions — return the original string object
+		L.PushValue(1)
+	} else {
+		L.PushString(sb.String())
+	}
 	L.PushInteger(int64(n))
 	return 2
 }
 
-func addReplacement(L *luaapi.State, sb *strings.Builder, s string, si, ei int) {
+// addReplacementChanged is like addReplacement but returns true if an actual
+// substitution occurred (replacement value was truthy).
+func addReplacementChanged(L *luaapi.State, sb *strings.Builder, s string, si, ei int) bool {
 	// Value is on top of stack
 	if !L.ToBoolean(-1) {
 		L.Pop(1)
 		sb.WriteString(s[si:ei]) // keep original
-	} else {
-		r, ok := L.ToString(-1)
-		if !ok {
-			L.Errorf("invalid replacement value (a %s)", L.TypeName(L.Type(-1)))
-		}
-		sb.WriteString(r)
-		L.Pop(1)
+		return false
 	}
+	r, ok := L.ToString(-1)
+	if !ok {
+		L.Errorf("invalid replacement value (a %s)", L.TypeName(L.Type(-1)))
+	}
+	sb.WriteString(r)
+	L.Pop(1)
+	return true
 }
 
 func gsubReplace(L *luaapi.State, repl string, ms *matchState, si, ei int) string {
