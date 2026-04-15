@@ -1147,7 +1147,7 @@ func str_find_aux(L *luaapi.State, find bool) int {
 			return ms.pushCapture(L, si, res)
 		}
 		si++
-		if anchor || si >= len(s) {
+		if anchor || si > len(s) {
 			break
 		}
 	}
@@ -1241,10 +1241,12 @@ func str_gsub(L *luaapi.State) int {
 		ms.level = 0
 		res := ms.match(si, 0)
 		if res < 0 {
-			if anchor || si >= len(s) {
+			if anchor || si > len(s) {
 				break
 			}
-			sb.WriteByte(s[si])
+			if si < len(s) {
+				sb.WriteByte(s[si])
+			}
 			si++
 			continue
 		}
