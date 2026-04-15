@@ -501,8 +501,11 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 			npci = len(p.Code) - 1
 		}
 		oldpc := L.OldPC
-		if oldpc >= len(p.Code) {
-			oldpc = 0
+		if oldpc < 0 || oldpc >= len(p.Code) {
+			// OldPC is out of bounds for this proto — likely stale from a
+			// different function. Suppress spurious line hook by treating
+			// as "same position". Function entry is handled by npci == 0.
+			oldpc = npci
 		}
 		// Fire line hook when:
 		// 1. npci == 0: entering a new function (first instruction)
