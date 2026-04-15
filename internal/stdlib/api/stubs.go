@@ -223,7 +223,9 @@ func debugGetinfo(L *luaapi.State) int {
 			L.SetField(-2, "isvararg")
 		}
 		if strings.Contains(what, "n") {
-			L.PushString("")
+			// When inspecting by function value (not stack level),
+			// name/namewhat are unknown — push nil
+			L.PushNil()
 			L.SetField(-2, "name")
 			L.PushString("")
 			L.SetField(-2, "namewhat")
@@ -237,6 +239,10 @@ func debugGetinfo(L *luaapi.State) int {
 			L.SetField(-2, "istailcall")
 			L.PushInteger(0)
 			L.SetField(-2, "extraargs")
+		}
+		if strings.Contains(what, "f") {
+			L.PushValue(1) // push the function itself
+			L.SetField(-2, "func")
 		}
 		return 1
 	}
