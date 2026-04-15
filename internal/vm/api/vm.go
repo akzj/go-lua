@@ -1119,6 +1119,82 @@ func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 // For loop helpers
 // ---------------------------------------------------------------------------
 
+// forLimit implements C Lua's forlimit: convert a for-loop limit to integer
+// using floor (step>0) or ceil (step<0) rounding. Returns true to skip the loop.
+// This matches lvm.c forlimit exactly.
+func forLimit(L *stateapi.LuaState, init int64, plimit objectapi.TValue, limit *int64, step int64) bool {
+	// First try exact integer conversion (handles integer values and exact float-to-int)
+	if li, ok := flttointeger(plimit, step); ok {
+		*limit = li
+	} else {
+		// Not coercible to integer with floor/ceil rounding
+		fl, ok := ToNumber(plimit)
+		if !ok {
+			RunError(L, "'for' limit must be a number")
+		}
+		// fl is a float out of integer bounds
+		if fl > 0 { // positive, too large
+			if step < 0 {
+				return true // init must be less than limit, but limit is huge positive
+			}
+			*limit = math.MaxInt64 // truncate
+		} else { // negative or zero, too small
+			if step > 0 {
+				return true // init must be greater than limit, but limit is huge negative
+			}
+			*limit = math.MinInt64 // truncate
+		}
+	}
+	// Check if loop should not run
+	if step > 0 {
+		return init > *limit
+	}
+	return init < *limit
+}
+
+// flttointeger converts a TValue to integer using floor (step>0) or ceil (step<0)
+// rounding mode, matching C Lua's luaV_tointeger with F2Ifloor/F2Iceil.
+func flttointeger(v objectapi.TValue, step int64) (int64, bool) {
+	switch v.Tt {
+	case objectapi.TagInteger:
+		return v.Val.(int64), true
+	case objectapi.TagFloat:
+		f := v.Val.(float64)
+		return floatToIntegerRounded(f, step)
+	case objectapi.TagShortStr, objectapi.TagLongStr:
+		// String: try to parse as number, then convert with rounding
+		s := v.Val.(*objectapi.LuaString).Data
+		if n, ok := stringToInteger(s); ok {
+			return n, true
+		}
+		// Try as float then round
+		if f, ok := stringToNumber(s); ok {
+			return floatToIntegerRounded(f, step)
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+// floatToIntegerRounded converts float to integer using floor (step>0) or ceil (step<0).
+// Matches C Lua's luaV_flttointeger with F2Ifloor/F2Iceil.
+func floatToIntegerRounded(f float64, step int64) (int64, bool) {
+	fl := math.Floor(f)
+	if f != fl {
+		// Not integral — apply rounding
+		if step < 0 {
+			// F2Iceil: convert floor to ceiling
+			fl += 1
+		}
+		// else F2Ifloor: keep floor
+	}
+	// Check if fl is in int64 range
+	if fl >= -9223372036854775808.0 && fl < 9223372036854775808.0 {
+		return int64(fl), true
+	}
+	return 0, false
+}
+
 // ForPrep prepares a numeric for loop. Returns true to skip the loop.
 func ForPrep(L *stateapi.LuaState, ra int) bool {
 	pinit := L.Stack[ra].Val
@@ -1131,32 +1207,10 @@ func ForPrep(L *stateapi.LuaState, ra int) bool {
 		if step == 0 {
 			RunError(L, "'for' step is zero")
 		}
-		// Convert limit
+		// Convert limit using forlimit logic (matches C Lua's forlimit)
+		// forLimit handles both conversion and skip-check (init > limit or init < limit)
 		var limit int64
-		if li, ok := ToInteger(plimit); ok {
-			limit = li
-		} else {
-			fl, ok := ToNumber(plimit)
-			if !ok {
-				RunError(L, "'for' limit must be a number")
-			}
-			if fl > 0 {
-				if step < 0 {
-					return true
-				}
-				limit = math.MaxInt64
-			} else {
-				if step > 0 {
-					return true
-				}
-				limit = math.MinInt64
-			}
-		}
-		// Check if loop should run
-		if step > 0 && init > limit {
-			return true
-		}
-		if step < 0 && init < limit {
+		if skip := forLimit(L, init, plimit, &limit, step); skip {
 			return true
 		}
 		// Compute count
