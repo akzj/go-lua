@@ -862,7 +862,7 @@ func singlematch(ms *matchState, si int, pi int, ep int) bool {
 
 func (ms *matchState) matchBalance(si, pi int) int {
 	if pi >= len(ms.pat)-1 {
-		return -1
+		ms.L.Errorf("malformed pattern (missing arguments to '%%b')")
 	}
 	if si >= len(ms.src) || ms.src[si] != ms.pat[pi] {
 		return -1
