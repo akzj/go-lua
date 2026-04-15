@@ -549,6 +549,11 @@ func RunProtected(L *stateapi.LuaState, f func()) (status int) {
 	defer func() {
 		if r := recover(); r != nil {
 			switch e := r.(type) {
+			case stateapi.LuaBaseLevel:
+				// Self-close: propagate past all inner error handlers
+				// to the outermost RunProtected (Resume).
+				// Mirrors: luaD_throwbaselevel in ldo.c
+				panic(e)
 			case stateapi.LuaError:
 				status = e.Status
 				L.NCCalls = oldNCCalls
@@ -766,26 +771,51 @@ func Resume(L *stateapi.LuaState, from *stateapi.LuaState, nArgs int) (int, int)
 	}
 	L.NCCalls++
 
-	status := RunProtected(L, func() {
-		if L.Status == stateapi.StatusOK {
-			// Starting — call the function on the stack
-			funcIdx := L.Top - nArgs - 1
-			Call(L, funcIdx, stateapi.MultiRet)
-		} else {
-			// Resuming from yield
-			L.Status = stateapi.StatusOK
-			ci := L.CI
-			if !ci.IsLua() {
-				// C function with continuation
-				if ci.K != nil {
-					n := ci.K(L, stateapi.StatusYield, ci.Ctx)
-					PosCall(L, ci, n)
+	// Catch LuaBaseLevel (self-close) that propagates past all inner
+	// RunProtected calls. This is the outermost handler.
+	// Mirrors: luaD_throwbaselevel reaching the base luaD_rawrunprotected.
+	var status int
+	var baseLevelCaught bool
+	var baseLevelStatus int
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if bl, ok := r.(stateapi.LuaBaseLevel); ok {
+					baseLevelCaught = true
+					baseLevelStatus = bl.Status
+				} else {
+					panic(r) // re-panic anything else
 				}
 			}
-			// Continue executing
-			unroll(L)
-		}
-	})
+		}()
+		status = RunProtected(L, func() {
+			if L.Status == stateapi.StatusOK {
+				// Starting — call the function on the stack
+				funcIdx := L.Top - nArgs - 1
+				Call(L, funcIdx, stateapi.MultiRet)
+			} else {
+				// Resuming from yield
+				L.Status = stateapi.StatusOK
+				ci := L.CI
+				if !ci.IsLua() {
+					// C function with continuation
+					if ci.K != nil {
+						n := ci.K(L, stateapi.StatusYield, ci.Ctx)
+						PosCall(L, ci, n)
+					}
+				}
+				// Continue executing
+				unroll(L)
+			}
+		})
+	}()
+
+	if baseLevelCaught {
+		// Self-close terminated the coroutine.
+		// The coroutine is already reset (CI at base, TBC closed).
+		L.Status = baseLevelStatus
+		return baseLevelStatus, 0
+	}
 
 	// Continue running after recoverable errors.
 	// Mirrors: precover in ldo.c
@@ -1260,8 +1290,18 @@ func CloseThread(L *stateapi.LuaState, from *stateapi.LuaState) int {
 		// CloseProtected ran __close methods. Use the returned errObj directly.
 		L.Stack[1].Val = newErrObj
 		L.Top = 2
+		// If closing itself, throw to base level (bypasses all inner pcalls).
+		// Mirrors: lua_closethread → luaD_throwbaselevel in lstate.c:335
+		if L == from {
+			panic(stateapi.LuaBaseLevel{Status: newStatus})
+		}
 		return newStatus
 	}
 	L.Top = 1
+	// If closing itself, throw to base level even on OK status.
+	// Mirrors: lua_closethread → luaD_throwbaselevel in lstate.c:335
+	if L == from {
+		panic(stateapi.LuaBaseLevel{Status: status})
+	}
 	return status
 }

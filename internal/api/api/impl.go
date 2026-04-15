@@ -829,7 +829,9 @@ func (L *State) Arith(op ArithOp) {
 func (L *State) Call(nArgs, nResults int) {
 	ls := L.ls()
 	funcIdx := ls.Top - nArgs - 1
-	vmapi.Call(ls, funcIdx, nResults)
+	// C Lua's lua_callk with k==NULL calls luaD_callnoyield.
+	// This marks the call as non-yieldable.
+	vmapi.CallNoYield(ls, funcIdx, nResults)
 	// Ensure Top >= CI.Func + 1 so the API stack is valid
 	base := ls.CI.Func + 1
 	if ls.Top < base {

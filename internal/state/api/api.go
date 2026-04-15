@@ -240,6 +240,16 @@ type LuaYield struct {
 }
 
 // ---------------------------------------------------------------------------
+// LuaBaseLevel is thrown by CloseThread when a coroutine closes itself.
+// Mirrors C Lua's luaD_throwbaselevel: bypasses all inner error handlers
+// (pcall) and propagates directly to the outermost RunProtected (Resume).
+// RunProtected catches this and re-panics; Resume catches it as termination.
+// ---------------------------------------------------------------------------
+type LuaBaseLevel struct {
+	Status int // status from resetthread (usually StatusOK)
+}
+
+// ---------------------------------------------------------------------------
 // Hook mask constants (matches C LUA_MASK*)
 // ---------------------------------------------------------------------------
 const (
