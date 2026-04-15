@@ -129,6 +129,18 @@ func (ci *CallInfo) SetNResults(n int) {
 	ci.CallStatus = (ci.CallStatus &^ CISTNResults) | uint32(n+1)&CISTNResults
 }
 
+// GetRecst retrieves the recovery status from bits 12-14 of CallStatus.
+// Mirrors: getcistrecst in C Lua (lstate.h)
+func (ci *CallInfo) GetRecst() int {
+	return int((ci.CallStatus >> CISTRecstShift) & 0x7)
+}
+
+// SetRecst stores a recovery status in bits 12-14 of CallStatus.
+// Mirrors: setcistrecst in C Lua (lstate.h)
+func (ci *CallInfo) SetRecst(status int) {
+	ci.CallStatus = (ci.CallStatus &^ (0x7 << CISTRecstShift)) | (uint32(status&0x7) << CISTRecstShift)
+}
+
 // ---------------------------------------------------------------------------
 // LuaState is the per-thread (coroutine) state.
 // Each coroutine has its own LuaState with its own stack.
