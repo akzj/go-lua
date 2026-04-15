@@ -202,10 +202,16 @@ func coroRunning(L *luaapi.State) int {
 	return 2
 }
 
-// coroIsYieldable returns whether the running coroutine can yield.
-// coroutine.isyieldable() → boolean
+// coroIsYieldable returns whether the given (or running) coroutine can yield.
+// coroutine.isyieldable([co]) → boolean
+// Mirrors: luaB_yieldable in lcorolib.c
 func coroIsYieldable(L *luaapi.State) int {
-	L.PushBoolean(L.IsYieldable())
+	if L.Type(1) == objectapi.TypeThread {
+		co := L.ToThread(1)
+		L.PushBoolean(co.IsYieldable())
+	} else {
+		L.PushBoolean(L.IsYieldable())
+	}
 	return 1
 }
 
