@@ -139,7 +139,11 @@ func searchPackagePath(L *luaapi.State, name string) string {
 	L.GetField(-1, "path")
 	path, ok := L.ToString(-1)
 	L.Pop(2) // pop path string and package table
-	if !ok || path == "" {
+	if !ok {
+		L.Errorf("'package.path' must be a string")
+		return ""
+	}
+	if path == "" {
 		return ""
 	}
 
