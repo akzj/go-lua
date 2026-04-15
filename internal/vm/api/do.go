@@ -504,8 +504,12 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 		if oldpc >= len(p.Code) {
 			oldpc = 0
 		}
-		// Fire line hook on jump back (loop) or when entering new line
-		if npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
+		// Fire line hook when:
+		// 1. npci == 0: entering a new function (first instruction)
+		// 2. npci < oldpc: backward jump (loop)
+		// 3. line changed between oldpc and npci
+		// Mirrors: luaG_traceexec in ldebug.c
+		if npci == 0 || npci < oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
 			newline := GetFuncLine(p, npci)
 			if newline >= 0 {
 				hookDispatch(L, "line", newline)
