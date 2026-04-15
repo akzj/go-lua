@@ -42,7 +42,9 @@ func tabRemove(L *luaapi.State) int {
 	size := auxGetN(L, 1)
 	pos := L.OptInteger(2, size)
 	if pos != size {
-		L.ArgCheck(1 <= pos && pos <= size, 2, "position out of bounds")
+		// C Lua uses unsigned: (lua_Unsigned)pos - 1u <= (lua_Unsigned)size
+		// This allows pos in [1, size+1] — pos==size+1 is a no-op returning nil
+		L.ArgCheck(1 <= pos && pos <= size+1, 2, "position out of bounds")
 	}
 	L.GetI(1, pos) // result = t[pos]
 	// shift elements down
@@ -51,7 +53,7 @@ func tabRemove(L *luaapi.State) int {
 		L.SetI(1, pos)
 	}
 	L.PushNil()
-	L.SetI(1, size) // t[size] = nil
+	L.SetI(1, pos) // t[pos] = nil (pos was advanced to size by the loop)
 	return 1
 }
 
