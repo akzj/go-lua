@@ -1352,7 +1352,9 @@ func gsubReplace(repl string, ms *matchState, si, ei int) string {
 				sb.WriteString(ms.src[si:ei])
 			} else if idx <= ms.level {
 				cap := ms.capture[idx-1]
-				if cap.len >= 0 {
+				if cap.len == capPosition {
+					sb.WriteString(fmt.Sprintf("%d", cap.init+1))
+				} else if cap.len >= 0 {
 					sb.WriteString(ms.src[cap.init : cap.init+cap.len])
 				}
 			}
