@@ -100,6 +100,12 @@ type FuncState struct {
 	Lex        *lexapi.LexState // shared lexer state
 	Block      *BlockCnt        // current block scope
 
+	// StringCache deduplicates *LuaString objects across all FuncStates
+	// in the same compilation unit. Shared via openFunc inheritance.
+	// This ensures identical string literals (even long strings) get the
+	// same *LuaString pointer, matching C Lua's behavior for %p identity.
+	StringCache map[string]*objectapi.LuaString
+
 	KCache     map[any]int // constant dedup cache (key → index in Proto.K)
 	PC         int         // next code position (= len(Proto.Code) effectively)
 	LastTarget int         // pc of last jump target (for optimization guard)
