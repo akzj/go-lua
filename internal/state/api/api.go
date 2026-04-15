@@ -101,8 +101,9 @@ type CallInfo struct {
 	Ctx        int       // continuation context
 
 	// Ephemeral union (reused for different purposes)
-	NYield int // number of values yielded
-	NRes   int // number of values returned
+	NYield  int // number of values yielded
+	NRes    int // number of values returned
+	FuncIdx int // saved function index for pcall recovery (mirrors ci->u2.funcidx)
 
 	CallStatus uint32 // CIST_* flags
 }
