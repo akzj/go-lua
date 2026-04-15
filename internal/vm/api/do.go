@@ -1199,3 +1199,49 @@ func CloseProtected(L *stateapi.LuaState, level int, status int, errObj objectap
 	}
 	return status, errObj
 }
+
+// CloseThread closes all TBC variables in a coroutine and resets it.
+// Mirrors: lua_closethread → luaE_resetthread in lstate.c:315
+func CloseThread(L *stateapi.LuaState, from *stateapi.LuaState) int {
+	if from != nil {
+		L.NCCalls = from.NCCalls & 0xFFFF
+	} else {
+		L.NCCalls = 0
+	}
+
+	origStatus := L.Status // save BEFORE resetCI
+
+	// resetCI (lstate.c:151)
+	ci := &L.BaseCI
+	L.CI = ci
+	ci.Func = 0
+	L.Stack[0].Val = objectapi.Nil
+	ci.Top = 1 + stateapi.BasicStackSize/2
+	ci.K = nil
+	ci.CallStatus = stateapi.CISTC
+	L.Status = stateapi.StatusOK
+	L.ErrFunc = 0
+
+	// Convert yield to OK
+	status := origStatus
+	if status == stateapi.StatusYield {
+		status = stateapi.StatusOK
+	}
+
+	// Close TBC from level 1 in protected mode
+	errObj := objectapi.Nil
+	if L.Top > 1 {
+		errObj = L.Stack[L.Top-1].Val
+	}
+	newStatus, newErrObj := CloseProtected(L, 1, status, errObj)
+	if newStatus != stateapi.StatusOK {
+		// Place the error object at stack[1] and set Top = 2.
+		// We can't use SetErrorObj here because L.Top may be wrong after
+		// CloseProtected ran __close methods. Use the returned errObj directly.
+		L.Stack[1].Val = newErrObj
+		L.Top = 2
+		return newStatus
+	}
+	L.Top = 1
+	return status
+}

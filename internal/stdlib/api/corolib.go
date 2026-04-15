@@ -2,7 +2,9 @@ package api
 
 import (
 	luaapi "github.com/akzj/go-lua/internal/api/api"
+	objectapi "github.com/akzj/go-lua/internal/object/api"
 	stateapi "github.com/akzj/go-lua/internal/state/api"
+	vmapi "github.com/akzj/go-lua/internal/vm/api"
 )
 
 // ---------------------------------------------------------------------------
@@ -137,11 +139,20 @@ func coroWrapAux(L *luaapi.State) int {
 		return nresults
 	}
 
-	// Error: propagate via error()
-	// Move error message from co to L, then raise it
-	co.XMove(L, 1)
-	// Check if it's a string error message — if so, add "wrap" context
-	if s, ok := L.ToString(-1); ok {
+	// Error: close coroutine's TBC variables, then propagate
+	// Mirrors: luaB_auxwrap in lcorolib.c:77-92
+	coState := co.Internal.(*stateapi.LuaState)
+	callerState := L.Internal.(*stateapi.LuaState)
+	stat := coState.Status
+	if stat != stateapi.StatusOK && stat != stateapi.StatusYield {
+		vmapi.CloseThread(coState, callerState)
+		co.XMove(L, 1) // move error message to caller
+	} else {
+		co.XMove(L, 1)
+	}
+	// Add context only for real strings (no coercion), mirroring C lua_type check.
+	if L.Type(-1) == objectapi.TypeString {
+		s, _ := L.ToString(-1)
 		L.SetTop(0)
 		L.Errorf("%s", s)
 	} else {
