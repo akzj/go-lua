@@ -412,9 +412,12 @@ func luaB_ipairs(L *luaapi.State) int {
 	return 3
 }
 
-// finishPcallCont is the continuation for pcall after yield/error recovery.
+// finishPcallCont is the continuation for pcall/xpcall after yield/error recovery.
 // Mirrors: finishpcall in lbaselib.c:471
 // KFunction signature: func(L *stateapi.LuaState, status int, ctx int) int
+// ctx (extra): number of extra stack items to skip when returning results.
+//   pcall: ctx=0 (no extra items to skip)
+//   xpcall: ctx=2 (skip original func + handler)
 func finishPcallCont(L *stateapi.LuaState, status int, ctx int) int {
 	if status != stateapi.StatusOK && status != stateapi.StatusYield {
 		// Error path: push false, then the error message
@@ -426,8 +429,9 @@ func finishPcallCont(L *stateapi.LuaState, status int, ctx int) int {
 		L.Stack[L.Top-1].Val, L.Stack[L.Top-2].Val = L.Stack[L.Top-2].Val, L.Stack[L.Top-1].Val
 		return 2
 	}
-	// Success: stack has [true, result1, result2, ...]
-	return L.Top - (L.CI.Func + 1)
+	// Success: return all results minus 'extra' items to skip.
+	// Mirrors: return lua_gettop(L) - (int)extra in C Lua
+	return L.Top - (L.CI.Func + 1) - ctx
 }
 
 func luaB_pcall(L *luaapi.State) int {
@@ -446,23 +450,19 @@ func luaB_pcall(L *luaapi.State) int {
 func luaB_xpcall(L *luaapi.State) int {
 	n := L.GetTop()
 	L.CheckType(2, objectapi.TypeFunction) // check error function
+	// Mirrors: luaB_xpcall in lbaselib.c
 	// Stack: [func(1), handler(2), arg1(3), ..., argN]
-	// Rearrange to: [handler(1), func(2), arg1(3), ...] for PCall with msgHandler=1
-	L.PushValue(1) // push func copy → top
-	L.Remove(1)    // remove original func; stack: [handler, arg1, ..., argN, func]
-	L.Insert(2)    // move func from top to pos 2; stack: [handler, func, arg1, ..., argN]
-
-	status := L.PCall(n-2, luaapi.MultiRet, 1)
-	// After PCall: stack[1] = handler (still there), then results or error
-	L.Remove(1) // remove handler
-	if status != luaapi.StatusOK {
-		L.PushBoolean(false)
-		L.Insert(-2) // put false before error message
-		return 2
-	}
-	L.PushBoolean(true)
-	L.Insert(1) // put true at bottom, before results
-	return L.GetTop()
+	L.PushBoolean(true) // first result
+	L.PushValue(1)      // function copy
+	L.Rotate(3, 2)      // move true+func_copy below args
+	// Stack: [func(1), handler(2), true(3), func_copy(4), arg1(5), ..., argN]
+	// Set continuation BEFORE calling PCall — enables PATH B (yieldable).
+	// Mirrors: lua_pcallk(L, n-2, MULTRET, 2, 2, finishpcall) in C Lua
+	ls := L.Internal.(*stateapi.LuaState)
+	ls.CI.K = finishPcallCont
+	ls.CI.Ctx = 2 // skip 2 items (func + handler) when returning results
+	status := L.PCall(n-2, luaapi.MultiRet, 2)
+	return finishPcallCont(ls, status, 2)
 }
 
 func luaB_load(L *luaapi.State) int {
