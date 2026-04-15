@@ -1414,13 +1414,42 @@ func shortSrc(source string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Debug hooks (stubs)
+// Debug hooks
 // ---------------------------------------------------------------------------
 
-func (L *State) SetHook(f interface{}, mask, count int) {}
-func (L *State) GetHook() interface{}                   { return nil }
-func (L *State) GetHookMask() int                       { return 0 }
-func (L *State) GetHookCount() int                      { return 0 }
+// SetHookFields sets the hook mask, count, and enable flag on the internal state.
+func (L *State) SetHookFields(mask, count int) {
+	ls := L.ls()
+	ls.HookMask = mask
+	ls.BaseHookCount = count
+	ls.HookCount = count
+	ls.AllowHook = true
+}
+
+// ClearHookFields clears all hook fields.
+func (L *State) ClearHookFields() {
+	ls := L.ls()
+	ls.HookMask = 0
+	ls.BaseHookCount = 0
+	ls.HookCount = 0
+	ls.AllowHook = true
+	ls.Hook = nil
+}
+
+// SetHookMarker sets a non-nil marker in Hook to indicate hooks are active.
+func (L *State) SetHookMarker() {
+	L.ls().Hook = true
+}
+
+// HookMask returns the current hook mask.
+func (L *State) HookMask() int {
+	return L.ls().HookMask
+}
+
+// HookActive returns true if any hooks are set.
+func (L *State) HookActive() bool {
+	return L.ls().HookMask != 0
+}
 
 // GetFuncProtoInfo inspects a Lua closure at stack index `idx` and returns
 // its Proto metadata. For C functions returns defaults with ok=false.

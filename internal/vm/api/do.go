@@ -350,11 +350,52 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	wanted := ci.NResults()
 	res := ci.Func // destination for results
 
+	// Fire return hook if active (and no TBC — TBC case handles hook after close)
+	if L.HookMask&stateapi.MaskRet != 0 && L.AllowHook {
+		retHook(L, ci, nres)
+	}
+
 	// Move results to proper place
 	moveResults(L, res, nres, wanted)
 
 	// Back to caller
 	L.CI = ci.Prev
+}
+
+// retHook fires the return hook if set.
+// Mirrors: rethook in ldo.c
+func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
+	// Look up hook function from registry["__debug_hook__"]
+	reg := L.Global.Registry.Val.(*tableapi.Table)
+	hookKey := &objectapi.LuaString{Data: "__debug_hook__", IsShort: true}
+	hookVal, found := reg.GetStr(hookKey)
+	if !found || hookVal.Tt == objectapi.TagNil {
+		return
+	}
+
+	// Save state
+	savedTop := L.Top
+	savedAllowHook := L.AllowHook
+	L.AllowHook = false // cannot call hooks inside a hook
+
+	// Ensure stack space for hook call: hook_func + "return" arg + nil
+	CheckStack(L, 4)
+
+	// Push hook function
+	L.Stack[L.Top].Val = hookVal
+	L.Top++
+
+	// Push event name "return"
+	st := L.Global.StringTable.(*luastringapi.StringTable)
+	L.Stack[L.Top].Val = objectapi.MakeString(st.Intern("return"))
+	L.Top++
+
+	// Call hook("return") — 1 arg, 0 results
+	Call(L, L.Top-2, 0)
+
+	// Restore state
+	L.AllowHook = savedAllowHook
+	L.Top = savedTop
 }
 
 // moveResults moves nres results to res, adjusting for wanted count.

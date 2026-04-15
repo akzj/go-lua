@@ -2291,29 +2291,43 @@ startfunc:
 			goto ret
 
 		case opcodeapi.OP_RETURN0:
-			nres := ci.NResults()
-			L.CI = ci.Prev
-			L.Top = base - 1
-			for i := 0; i < nres; i++ {
-				L.Stack[L.Top].Val = objectapi.Nil
-				L.Top++
-			}
-			if nres < 0 {
+			if L.HookMask != 0 {
+				// Hooks active — fall back to full PosCall (fires return hook)
+				L.Top = ra
+				PosCall(L, ci, 0)
+			} else {
+				// Fast path — no hooks
+				nres := ci.NResults()
+				L.CI = ci.Prev
 				L.Top = base - 1
+				for i := 0; i < nres; i++ {
+					L.Stack[L.Top].Val = objectapi.Nil
+					L.Top++
+				}
+				if nres < 0 {
+					L.Top = base - 1
+				}
 			}
 			goto ret
 
 		case opcodeapi.OP_RETURN1:
-			nres := ci.NResults()
-			L.CI = ci.Prev
-			if nres == 0 {
-				L.Top = base - 1
+			if L.HookMask != 0 {
+				// Hooks active — fall back to full PosCall (fires return hook)
+				L.Top = ra + 1
+				PosCall(L, ci, 1)
 			} else {
-				L.Stack[base-1].Val = L.Stack[ra].Val
-				L.Top = base
-				for i := 1; i < nres; i++ {
-					L.Stack[L.Top].Val = objectapi.Nil
-					L.Top++
+				// Fast path — no hooks
+				nres := ci.NResults()
+				L.CI = ci.Prev
+				if nres == 0 {
+					L.Top = base - 1
+				} else {
+					L.Stack[base-1].Val = L.Stack[ra].Val
+					L.Top = base
+					for i := 1; i < nres; i++ {
+						L.Stack[L.Top].Val = objectapi.Nil
+						L.Top++
+					}
 				}
 			}
 			goto ret
