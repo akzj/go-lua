@@ -224,7 +224,12 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 		}
 	case opcodeapi.OP_GETTABUP:
 		// Table access from upvalue: upvalues[B][K[C]]
+		// If upvalue is _ENV, this is a "global" access
+		b := opcodeapi.GetArgB(inst)
 		k := opcodeapi.GetArgC(inst)
+		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil && p.Upvalues[b].Name.Data == "_ENV" {
+			return "global", kname2(p, k)
+		}
 		if k < len(p.Constants) {
 			return "field", kname2(p, k)
 		}
@@ -233,6 +238,12 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 		k := opcodeapi.GetArgC(inst)
 		if k < len(p.Constants) {
 			return "field", kname2(p, k)
+		}
+	case opcodeapi.OP_SELF:
+		// Method call: reg[A+1] = reg[B]; reg[A] = reg[B][K[C]]
+		k := opcodeapi.GetArgC(inst)
+		if k < len(p.Constants) {
+			return "method", kname2(p, k)
 		}
 	}
 	// Fallback: check LocVars for a local variable name at the call site PC.
