@@ -716,6 +716,7 @@ func quoteString(s string) string {
 
 // matchState holds pattern matching state
 type matchState struct {
+	L       *luaapi.State
 	src     string
 	pat     string
 	level   int // number of active captures
@@ -932,22 +933,24 @@ func (ms *matchState) match(si, pi int) int {
 				pi = ep
 				continue
 			}
-			// Backreference: %1-%9
+			// Backreference: %0-%9 (C Lua's match_capture + check_capture)
 			if pi+1 < len(ms.pat) {
 				c := ms.pat[pi+1]
-				if c >= '1' && c <= '9' {
-					idx := int(c - '1')
-					if idx < ms.level && ms.capture[idx].len != capUnfinished {
-						capLen := ms.capture[idx].len
-						if capLen < 0 {
-							return -1 // position capture can't be backreferenced
-						}
-						capStart := ms.capture[idx].init
-						if si+capLen <= len(ms.src) && ms.src[si:si+capLen] == ms.src[capStart:capStart+capLen] {
-							si += capLen
-							pi += 2
-							continue
-						}
+				if c >= '0' && c <= '9' {
+					idx := int(c) - int('1') // '0' → -1, '1' → 0, etc.
+					// check_capture: error if idx < 0 or idx >= level or unfinished
+					if idx < 0 || idx >= ms.level || ms.capture[idx].len == capUnfinished {
+						ms.L.Errorf("invalid capture index %%%d", idx+1)
+					}
+					capLen := ms.capture[idx].len
+					if capLen < 0 {
+						return -1 // position capture can't be backreferenced
+					}
+					capStart := ms.capture[idx].init
+					if si+capLen <= len(ms.src) && ms.src[si:si+capLen] == ms.src[capStart:capStart+capLen] {
+						si += capLen
+						pi += 2
+						continue
 					}
 					return -1
 				}
@@ -1159,7 +1162,7 @@ func str_find_aux(L *luaapi.State, find bool) int {
 		pat = pat[1:]
 	}
 
-	ms := &matchState{src: s, pat: pat}
+	ms := &matchState{L: L, src: s, pat: pat}
 	si := init - 1
 	for {
 		ms.level = 0
@@ -1216,7 +1219,7 @@ func str_gmatch(L *luaapi.State) int {
 		if done {
 			return 0
 		}
-		ms := &matchState{src: s, pat: pat}
+		ms := &matchState{L: L, src: s, pat: pat}
 		for pos <= len(s) {
 			ms.level = 0
 			res := ms.match(pos, 0)
@@ -1265,7 +1268,7 @@ func str_gsub(L *luaapi.State) int {
 	si := 0
 	lastmatch := -1 // end of last match (Lua 5.3.3+ empty match semantics)
 	for n < maxn {
-		ms := &matchState{src: s, pat: pat}
+		ms := &matchState{L: L, src: s, pat: pat}
 		ms.level = 0
 		res := ms.match(si, 0)
 		if res >= 0 && res != lastmatch { // match, not same end as last
@@ -1273,7 +1276,7 @@ func str_gsub(L *luaapi.State) int {
 			switch replType {
 			case objectapi.TypeString:
 				repl := L.CheckString(3)
-				sb.WriteString(gsubReplace(repl, ms, si, res))
+				sb.WriteString(gsubReplace(L, repl, ms, si, res))
 			case objectapi.TypeTable:
 				ms.pushCapture(L, si, res)
 				L.GetTable(3)
@@ -1323,7 +1326,7 @@ func addReplacement(L *luaapi.State, sb *strings.Builder, s string, si, ei int) 
 	}
 }
 
-func gsubReplace(repl string, ms *matchState, si, ei int) string {
+func gsubReplace(L *luaapi.State, repl string, ms *matchState, si, ei int) string {
 	var sb strings.Builder
 	for i := 0; i < len(repl); i++ {
 		c := repl[i]
@@ -1343,7 +1346,9 @@ func gsubReplace(repl string, ms *matchState, si, ei int) string {
 				sb.WriteString(ms.src[si:ei])
 			} else if idx <= ms.level {
 				cap := ms.capture[idx-1]
-				if cap.len == capPosition {
+				if cap.len == capUnfinished {
+					L.Errorf("unfinished capture")
+				} else if cap.len == capPosition {
 					sb.WriteString(fmt.Sprintf("%d", cap.init+1))
 				} else if cap.len >= 0 {
 					sb.WriteString(ms.src[cap.init : cap.init+cap.len])
@@ -1351,11 +1356,13 @@ func gsubReplace(repl string, ms *matchState, si, ei int) string {
 			} else if ms.level == 0 && idx == 1 {
 				// No explicit captures: %1 = whole match (C Lua compat)
 				sb.WriteString(ms.src[si:ei])
+			} else {
+				L.Errorf("invalid capture index %%%d", idx)
 			}
 		} else if c == '%' {
 			sb.WriteByte('%')
 		} else {
-			sb.WriteByte(c)
+			L.Errorf("invalid use of '%%' in replacement string")
 		}
 	}
 	return sb.String()
