@@ -103,7 +103,7 @@ func (t *Table) SetStr(key *objectapi.LuaString, value objectapi.TValue) {
 // To start iteration, pass object.Nil as key.
 // Returns (key, value, true) for the next entry, or (Nil, Nil, false) when done.
 // Iteration order: array part first (keys 1..N), then hash part.
-func (t *Table) Next(key objectapi.TValue) (nextKey, nextVal objectapi.TValue, ok bool) {
+func (t *Table) Next(key objectapi.TValue) (nextKey, nextVal objectapi.TValue, ok bool, err error) {
 	return t.next(key)
 }
 

@@ -5,6 +5,7 @@
 package api
 
 import (
+	"errors"
 	"math"
 
 	obj "github.com/akzj/go-lua/internal/object/api"
@@ -272,8 +273,12 @@ func (t *Table) hashSearchBoundary(asize int64) int64 {
 // Next — iteration
 // ---------------------------------------------------------------------------
 
+// ErrInvalidKey is returned by Next when the given key is not in the table.
+var ErrInvalidKey = errors.New("invalid key to 'next'")
+
 // next advances the iterator. Pass Nil to start.
-func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool) {
+// Returns ErrInvalidKey if the key is not found in the table.
+func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool, error) {
 	asize := len(t.Array)
 
 	var startIdx int // 0-based unified index (array then hash)
@@ -286,14 +291,14 @@ func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool) {
 		} else {
 			ni, found := getFromHashDeadOk(t, key)
 			if !found {
-				panic("invalid key to 'next'")
+				return obj.Nil, obj.Nil, false, ErrInvalidKey
 			}
 			startIdx = asize + ni + 1
 		}
 	} else {
 		ni, found := getFromHashDeadOk(t, key)
 		if !found {
-			panic("invalid key to 'next'")
+			return obj.Nil, obj.Nil, false, ErrInvalidKey
 		}
 		startIdx = asize + ni + 1
 	}
@@ -301,7 +306,7 @@ func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool) {
 	// Scan array part
 	for i := startIdx; i < asize; i++ {
 		if !t.Array[i].Tt.IsNil() {
-			return obj.MakeInteger(int64(i + 1)), t.Array[i], true
+			return obj.MakeInteger(int64(i + 1)), t.Array[i], true, nil
 		}
 	}
 
@@ -313,11 +318,11 @@ func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool) {
 	for i := hashStart; i < len(t.Nodes); i++ {
 		nd := &t.Nodes[i]
 		if !nodeIsEmpty(nd) {
-			return nodeKey(nd), nd.Val, true
+			return nodeKey(nd), nd.Val, true, nil
 		}
 	}
 
-	return obj.Nil, obj.Nil, false
+	return obj.Nil, obj.Nil, false, nil
 }
 
 // ---------------------------------------------------------------------------
