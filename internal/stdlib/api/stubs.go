@@ -316,11 +316,14 @@ func debugSethook(L *luaapi.State) int {
 
 	if L.IsNoneOrNil(arg) {
 		// Turn off hooks: debug.sethook() or debug.sethook(nil)
-		L.ClearHookFields()
-		// Remove hook function from registry
+		// IMPORTANT: clear registry hook first, then disable mask.
+		// In close/return hook contexts, ClearHookFields first can allow
+		// pending returns to run with HookMask==0 before registry is cleared,
+		// causing flaky hook visibility.
 		L.PushString("__debug_hook__")
 		L.PushNil()
 		L.SetTable(luaapi.RegistryIndex)
+		L.ClearHookFields()
 		return 0
 	}
 
