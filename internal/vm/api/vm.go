@@ -1055,7 +1055,10 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 // when the key doesn't already exist. This is the "fast set + fallback" pattern
 // matching C Lua's luaV_fastset / luaV_finishset.
 func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val objectapi.TValue) {
-	// Check for NaN key — C Lua raises error, not panic
+	// Check for nil/NaN key — C Lua raises luaG_runerror, not panic
+	if key.IsNil() {
+		RunError(L, "table index is nil")
+	}
 	if key.IsFloat() && math.IsNaN(key.Float()) {
 		RunError(L, "table index is NaN")
 	}
@@ -1569,8 +1572,7 @@ startfunc:
 			}
 			ra = 0 // OP_SETTABUP uses A for upvalue index, not register
 			if upval.IsTable() {
-				h := upval.Val.(*tableapi.Table)
-				h.Set(rb, rc)
+				tableSetWithMeta(L, upval, rb, rc)
 			} else {
 				FinishSet(L, upval, rb, rc)
 			}
