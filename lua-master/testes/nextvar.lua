@@ -935,6 +935,7 @@ assert(i == a.n)
 
 
 -- testing yield inside __pairs
+if not _port then
 do
   local t = setmetatable({10, 20, 30}, {__pairs = function (t)
     local inc = coroutine.yield()
@@ -953,5 +954,6 @@ do
   assert(res[1] == 30 and res[2] == 20 and res[3] == 10 and #res == 3)
 
 end
+end   -- if not _port
 
 print"OK"

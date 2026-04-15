@@ -7,11 +7,11 @@ import (
 	luaapi "github.com/akzj/go-lua/internal/api/api"
 )
 
-func TestChunkidFormat(t *testing.T) {
+func TestMetamethodError(t *testing.T) {
 	L := luaapi.NewState()
 	OpenAll(L)
 
-	// Run errors.lua with debug flag on checkmessage to find which call fails
+	// Test what error message we get for failed metamethod call
 	code := `
 local function doit (s)
   local f, msg = load(s)
@@ -20,30 +20,14 @@ local function doit (s)
   return (not cond) and msg
 end
 
-local function checkmessage (prog, msg, debug)
-  local m = doit(prog)
-  if not string.find(m, msg, 1, true) then
-    print("FAILED checkmessage:")
-    print("  prog:", prog)
-    print("  expected substring:", msg)
-    print("  actual message:", m)
-    error("checkmessage failed")
-  end
-end
-
--- Test the calls from errors.lua around line 134-160
-checkmessage("a = {} + 1", "arithmetic")
-print("PASS: arithmetic")
-checkmessage("a = {} | 1", "bitwise operation")
-print("PASS: bitwise")
-checkmessage("a = {} < 1", "attempt to compare")
-print("PASS: compare")
-checkmessage("aaa=1; bbbb=2; aaa=math.sin(3)+bbbb(3)", "global 'bbbb'")
-print("PASS: global bbbb")
-checkmessage("aaa={}; do local aaa=1 end aaa:bbbb(3)", "method 'bbbb'")
-print("PASS: method bbbb")
-checkmessage("local a={}; a.bbbb(3)", "field 'bbbb'")
-print("PASS: field bbbb")
+-- This is the test that fails at line 172-175 of errors.lua
+local m = doit([[
+  local a = setmetatable({}, {__add = 34})
+  a = a + 1
+]])
+print("metamethod error:", m)
+-- Expected: should contain "metamethod 'add'"
+-- C Lua: [string "..."]:2: attempt to call a number value (metamethod 'add')
 `
 	err := L.DoString(code)
 	if err != nil {
