@@ -5,6 +5,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
@@ -92,18 +93,23 @@ func ShortSrc(source string) string {
 		}
 		return "..." + source[len(source)-57:]
 	}
-	// String source — find first newline
-	first := source
-	for i := 0; i < len(source); i++ {
-		if source[i] == '\n' {
-			first = source[:i]
-			break
-		}
+	// String source: [string "content"] or [string "content..."]
+	// maxContent = LUA_IDSIZE(60) - len([string ") - len(...) - len("]) - 1
+	const maxContent = 45
+	nl := strings.IndexByte(source, '\n')
+	srclen := len(source)
+	if srclen <= maxContent && nl < 0 {
+		// Short one-line source — keep as-is
+		return `[string "` + source + `"]`
 	}
-	if len(first) > 45 {
-		first = first[:45] + "..."
+	// Truncated: stop at first newline, clamp to maxContent, add "..."
+	if nl >= 0 && nl < srclen {
+		srclen = nl
 	}
-	return fmt.Sprintf("[string \"%s\"]", first)
+	if srclen > maxContent {
+		srclen = maxContent
+	}
+	return `[string "` + source[:srclen] + `..."]`
 }
 
 // addInfo prepends "source:line: " to a message for the current Lua frame.

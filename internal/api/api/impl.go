@@ -1406,28 +1406,43 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 }
 
 // shortSrc creates a short source name for error messages.
+// Mirrors luaO_chunkid in lobject.c. LUA_IDSIZE = 60.
 func shortSrc(source string) string {
+	const idsize = 60
 	if len(source) == 0 {
 		return "[string \"?\"]"
 	}
 	if source[0] == '=' {
-		if len(source) <= 60 {
-			return source[1:]
+		rest := source[1:]
+		if len(rest)+1 <= idsize {
+			return rest
 		}
-		return source[1:60]
+		return rest[:idsize-1]
 	}
 	if source[0] == '@' {
-		if len(source) <= 60 {
-			return source[1:]
+		rest := source[1:]
+		if len(rest)+1 <= idsize {
+			return rest
 		}
-		return "..." + source[len(source)-57:]
+		return "..." + rest[len(rest)-(idsize-1-3):]
 	}
-	// String source
-	first := strings.SplitN(source, "\n", 2)[0]
-	if len(first) > 45 {
-		first = first[:45]
+	// String source: format as [string "source"]
+	// PRE=[string " (9), POS="] (2), RETS=... (3), +1 for NUL
+	const maxContent = idsize - 9 - 3 - 2 - 1 // = 45
+	nl := strings.IndexByte(source, '\n')
+	srclen := len(source)
+	if srclen <= maxContent && nl < 0 {
+		// Small one-line source — keep it as-is
+		return fmt.Sprintf("[string \"%s\"]", source)
 	}
-	return fmt.Sprintf("[string \"%s\"]", first)
+	// Truncate: stop at first newline, then clamp to maxContent, add "..."
+	if nl >= 0 {
+		srclen = nl
+	}
+	if srclen > maxContent {
+		srclen = maxContent
+	}
+	return fmt.Sprintf("[string \"%s...\"]", source[:srclen])
 }
 
 // ---------------------------------------------------------------------------
