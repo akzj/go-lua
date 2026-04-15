@@ -410,24 +410,17 @@ func readString(ls *LexState, delimiter int) Token {
 	return Token{Type: TK_STRING, StrVal: content}
 }
 
-// readHexaEsc reads \xHH escape. Returns the byte value.
-func readHexaEsc(ls *LexState) int {
-	next(ls) // skip 'x'
-	h1 := hexValue(ls)
-	next(ls)
-	h2 := hexValue(ls)
-	next(ls)
-	// Remove saved chars: '\' and 'x' are in buffer, plus the 2 hex digits were not saved
-	// Actually we saved '\' before the switch, and then 'x' was ls.Current when we entered.
-	// We need to remove the '\' that was saved. The hex digits were consumed by next() not saveAndNext().
-	return (h1 << 4) | h2
-}
-
-func hexValue(ls *LexState) int {
+// getHexa mirrors C Lua's gethexa: save_and_next, then check hex digit.
+func getHexa(ls *LexState) int {
+	saveAndNext(ls)
 	if !isHexDigit(ls.Current) {
 		escError(ls, "hexadecimal digit expected")
 	}
-	c := ls.Current
+	return hexaValue(ls.Current)
+}
+
+// hexaValue returns the numeric value of a hex digit character.
+func hexaValue(c int) int {
 	if c >= '0' && c <= '9' {
 		return c - '0'
 	}
@@ -436,6 +429,18 @@ func hexValue(ls *LexState) int {
 	}
 	return c - 'A' + 10
 }
+
+// readHexaEsc reads \xHH escape. Returns the byte value.
+// Mirrors C Lua's readhexaesc: uses getHexa to save chars for error messages.
+func readHexaEsc(ls *LexState) int {
+	r := getHexa(ls)
+	r = (r << 4) | getHexa(ls)
+	// Remove the 2 saved chars ('x' and first hex digit) from buffer.
+	ls.Buf = ls.Buf[:len(ls.Buf)-2]
+	next(ls) // advance past second hex digit
+	return r
+}
+
 
 // readDecEsc reads \ddd escape (up to 3 decimal digits). Returns the byte value.
 func readDecEsc(ls *LexState) int {
@@ -464,47 +469,43 @@ func readDecEsc(ls *LexState) int {
 }
 
 // readUTF8Esc reads \u{XXXX} escape and saves UTF-8 bytes.
+// Mirrors C Lua's utf8esc + readutf8esc: saves everything to buffer
+// for error reporting, counts saved chars, removes them on success.
 func readUTF8Esc(ls *LexState) {
-	savedBackslashPos := len(ls.Buf) - 1 // position of the '\'
-
-	next(ls) // skip 'u'
+	// Phase 1: read the codepoint value, saving chars for error messages
+	// i counts chars to remove on success; starts at 4 for "\u{X"
+	i := 4
+	saveAndNext(ls) // save 'u', advance to '{'
 	if ls.Current != '{' {
 		escError(ls, "missing '{'")
 	}
-	next(ls) // skip '{'
-
-	if !isHexDigit(ls.Current) {
-		escError(ls, "hexadecimal digit expected")
-	}
-
-	var r uint32
-	r = uint32(hexVal(ls.Current))
-	next(ls)
-	for isHexDigit(ls.Current) {
+	r := uint32(getHexa(ls)) // save '{', advance, check first hex digit
+	for {
+		saveAndNext(ls) // save current digit (or non-digit), advance
+		if !isHexDigit(ls.Current) {
+			break
+		}
+		i++
 		if r > (0x7FFFFFFF >> 4) {
 			escError(ls, "UTF-8 value too large")
 		}
-		r = (r << 4) + uint32(hexVal(ls.Current))
-		next(ls)
+		r = (r << 4) + uint32(hexaValue(ls.Current))
 	}
-
 	if ls.Current != '}' {
 		escError(ls, "missing '}'")
 	}
 	next(ls) // skip '}'
+	// Remove i saved chars from buffer (includes the '\' saved by caller)
+	ls.Buf = ls.Buf[:len(ls.Buf)-i]
 
-	// Remove the '\' that was saved
-	ls.Buf = ls.Buf[:savedBackslashPos]
-
-	// Encode UTF-8 (generalized, supports up to 0x7FFFFFFF like C Lua)
-	// Mirrors luaO_utf8esc in lobject.c
+	// Phase 2: encode UTF-8 and save to buffer
 	const utf8BufSz = 8
 	var buf [utf8BufSz]byte
 	n := 1
-	if r < 0x80 { // ASCII
+	if r < 0x80 {
 		buf[utf8BufSz-1] = byte(r)
 	} else {
-		mfb := uint32(0x3F) // maximum that fits in first byte
+		mfb := uint32(0x3F)
 		for {
 			buf[utf8BufSz-n] = byte(0x80 | (r & 0x3F))
 			n++
@@ -514,23 +515,13 @@ func readUTF8Esc(ls *LexState) {
 				break
 			}
 		}
-		buf[utf8BufSz-n] = byte((^mfb << 1) | r) // first byte
+		buf[utf8BufSz-n] = byte((^mfb << 1) | r)
 	}
-	// Save encoded bytes in forward order
-	for i := utf8BufSz - n; i < utf8BufSz; i++ {
-		save(ls, int(buf[i]))
+	for j := utf8BufSz - n; j < utf8BufSz; j++ {
+		save(ls, int(buf[j]))
 	}
 }
 
-func hexVal(c int) int {
-	if c >= '0' && c <= '9' {
-		return c - '0'
-	}
-	if c >= 'a' && c <= 'f' {
-		return c - 'a' + 10
-	}
-	return c - 'A' + 10
-}
 
 func escError(ls *LexState, msg string) {
 	// Save current char for error message if not EOF
