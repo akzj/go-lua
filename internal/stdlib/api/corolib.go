@@ -235,10 +235,16 @@ func coroIsYieldable(L *luaapi.State) int {
 // coroutine.close(co) → true | false, errMsg
 // Mirrors: luaB_close in lcorolib.c
 func coroClose(L *luaapi.State) int {
-	co := L.ToThread(1)
-	if co == nil {
-		L.ArgError(1, "coroutine expected")
-		return 0
+	// getoptco: if no argument, close the running thread itself
+	var co *luaapi.State
+	if L.IsNone(1) {
+		co = L // close itself
+	} else {
+		co = L.ToThread(1)
+		if co == nil {
+			L.ArgError(1, "coroutine expected")
+			return 0
+		}
 	}
 
 	st := auxStatus(L, co)
