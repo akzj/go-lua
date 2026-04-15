@@ -1210,6 +1210,7 @@ func str_gmatch(L *luaapi.State) int {
 	// Capture state in upvalues via closure
 	pos := init
 	done := false
+	lastmatch := -1 // tracks last match end to skip duplicate empty matches
 
 	iter := func(L *luaapi.State) int {
 		if done {
@@ -1219,12 +1220,12 @@ func str_gmatch(L *luaapi.State) int {
 		for pos <= len(s) {
 			ms.level = 0
 			res := ms.match(pos, 0)
-			if res >= 0 {
+			if res >= 0 && res != lastmatch {
+				lastmatch = res
 				si := pos
-				if res == pos {
-					pos++ // empty match: advance
-				} else {
-					pos = res
+				pos = res
+				if res == si {
+					pos++ // empty match: advance for next iteration
 				}
 				return ms.pushCapture(L, si, res)
 			}
