@@ -930,6 +930,26 @@ func (ms *matchState) match(si, pi int) int {
 				pi = ep
 				continue
 			}
+			// Backreference: %1-%9
+			if pi+1 < len(ms.pat) {
+				c := ms.pat[pi+1]
+				if c >= '1' && c <= '9' {
+					idx := int(c - '1')
+					if idx < ms.level && ms.capture[idx].len != capUnfinished {
+						capLen := ms.capture[idx].len
+						if capLen < 0 {
+							return -1 // position capture can't be backreferenced
+						}
+						capStart := ms.capture[idx].init
+						if si+capLen <= len(ms.src) && ms.src[si:si+capLen] == ms.src[capStart:capStart+capLen] {
+							si += capLen
+							pi += 2
+							continue
+						}
+					}
+					return -1
+				}
+			}
 			goto dflt
 		default:
 			goto dflt
