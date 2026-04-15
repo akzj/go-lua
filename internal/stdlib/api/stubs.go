@@ -473,10 +473,6 @@ func pkgSearchPath(L *luaapi.State) int {
 	var tried strings.Builder
 	templates := strings.Split(path, ";")
 	for _, tmpl := range templates {
-		tmpl = strings.TrimSpace(tmpl)
-		if tmpl == "" {
-			continue
-		}
 		candidate := strings.ReplaceAll(tmpl, "?", name)
 		if _, err := os.Stat(candidate); err == nil {
 			L.PushString(candidate)
