@@ -1795,8 +1795,6 @@ func statement(ls *lexapi.LexState) {
 		} else {
 			localStat(ls)
 		}
-	case lexapi.TK_GLOBAL:
-		globalStatFunc(ls, line)
 	case lexapi.TK_DBCOLON:
 		lexapi.Next(ls)
 		labelStat(ls, strCheckName(ls), line)
@@ -1809,6 +1807,16 @@ func statement(ls *lexapi.LexState) {
 		lexapi.Next(ls)
 		gotoStat(ls, line)
 	default:
+		// LUA_COMPAT_GLOBAL: "global" is not a reserved word, but when
+		// the current token is TK_NAME with value "global" and the lookahead
+		// is '<', TK_NAME, '*', or TK_FUNCTION, parse it as a global statement.
+		if ls.Token.Type == lexapi.TK_NAME && ls.Token.StrVal == "global" {
+			lk := lexapi.Lookahead(ls)
+			if lk == '<' || lk == lexapi.TK_NAME || lk == '*' || lk == lexapi.TK_FUNCTION {
+				globalStatFunc(ls, line)
+				break
+			}
+		}
 		exprStat(ls)
 	}
 	fs := getFS(ls)

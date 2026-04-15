@@ -868,9 +868,6 @@ func (L *State) PCall(nArgs, nResults, msgHandler int) int {
 // Load loads a Lua chunk from a string. Pushes the compiled function.
 func (L *State) Load(code string, name string, mode string) int {
 	ls := L.ls()
-	if name == "" {
-		name = "=(load)"
-	}
 	if mode == "" {
 		mode = "bt"
 	}
