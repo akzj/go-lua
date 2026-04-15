@@ -298,6 +298,16 @@ func TryFuncTM(L *stateapi.LuaState, funcIdx int, status uint32) uint32 {
 		// If the caller is closing TBC vars, identify as metamethod 'close'
 		if L.CI != nil && L.CI.CallStatus&stateapi.CISTClsRet != 0 {
 			extra = " (metamethod 'close')"
+		} else {
+			// Try to get variable name from bytecode analysis
+			base := 0
+			if L.CI != nil {
+				base = L.CI.Func + 1
+			}
+			reg := funcIdx - base
+			if reg >= 0 {
+				extra = VarInfo(L, reg)
+			}
 		}
 		RunError(L, "attempt to call a "+typeName+" value"+extra)
 	}
