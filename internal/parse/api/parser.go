@@ -668,6 +668,12 @@ func openFunc(ls *lexapi.LexState, fs *FuncState, bl *BlockCnt) {
 	f.Source = &objectapi.LuaString{Data: ls.Source, IsShort: len(ls.Source) <= 40}
 	f.MaxStackSize = 2 // registers 0/1 always valid
 	fs.KCache = make(map[any]int)
+	// Inherit or create shared string cache for the compilation unit
+	if fs.Prev != nil {
+		fs.StringCache = fs.Prev.StringCache
+	} else {
+		fs.StringCache = make(map[string]*objectapi.LuaString)
+	}
 	enterBlock(fs, bl, 0)
 }
 

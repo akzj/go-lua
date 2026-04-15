@@ -317,9 +317,15 @@ func k2proto(fs *FuncState, key any, v objectapi.TValue) int {
 	return k
 }
 
-// stringK adds a string constant.
+// stringK adds a string constant, deduplicating *LuaString objects
+// across the entire compilation unit via fs.StringCache.
 func stringK(fs *FuncState, s string) int {
-	return k2proto(fs, s, objectapi.MakeString(&objectapi.LuaString{Data: s, IsShort: len(s) <= 40}))
+	ls := fs.StringCache[s]
+	if ls == nil {
+		ls = &objectapi.LuaString{Data: s, IsShort: len(s) <= 40}
+		fs.StringCache[s] = ls
+	}
+	return k2proto(fs, s, objectapi.MakeString(ls))
 }
 
 // IntK adds an integer constant.
