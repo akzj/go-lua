@@ -1388,6 +1388,32 @@ func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vata
 // Execute — the main VM execution loop
 // ---------------------------------------------------------------------------
 
+// FinishOp finishes execution of an opcode interrupted by a yield.
+// Called when resuming a Lua CI that was interrupted during __close
+// (CIST_CLSRET is set). For OP_RETURN/OP_CLOSE, backs up savedpc
+// so the instruction re-executes and continues the close loop.
+// Mirrors: luaV_finishOp in lvm.c (subset: only close-related ops).
+func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
+	cl := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	code := cl.Proto.Code
+	inst := code[ci.SavedPC-1] // interrupted instruction
+	op := opcodeapi.GetOpCode(inst)
+	base := ci.Func + 1
+	switch op {
+	case opcodeapi.OP_CLOSE:
+		// Yielded closing variables — re-execute to close remaining vars
+		ci.SavedPC--
+	case opcodeapi.OP_RETURN:
+		// Yielded closing variables on return — restore top and re-execute
+		ra := base + opcodeapi.GetArgA(inst)
+		L.Top = ra + ci.NRes
+		ci.SavedPC--
+	default:
+		// For other opcodes (OP_CALL, etc.), no adjustment needed.
+		// This shouldn't happen when CIST_CLSRET is set, but be safe.
+	}
+}
+
 // Execute runs the VM main loop for the given CallInfo.
 // This is the Go equivalent of luaV_execute in lvm.c.
 func Execute(L *stateapi.LuaState, ci *stateapi.CallInfo) {

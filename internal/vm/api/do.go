@@ -565,6 +565,44 @@ func RunProtected(L *stateapi.LuaState, f func()) (status int) {
 // PCall performs a protected function call.
 // On error, restores the call stack and sets the error object.
 // Mirrors: luaD_pcall in ldo.c
+// finishPCallK finishes a pcall that was interrupted by a yield.
+// Mirrors: finishpcallk in ldo.c
+// Returns the status to pass to the continuation function.
+func finishPCallK(L *stateapi.LuaState, ci *stateapi.CallInfo) int {
+	status := ci.Ctx // retrieve saved error status (0 = no error, just yield)
+	if status == stateapi.StatusOK {
+		// No error — was interrupted by a yield
+		status = stateapi.StatusYield
+	} else {
+		// Error during close after yield — complete the pcall error path
+		// Restore allowhook from the saved OAH bit
+		if ci.CallStatus&stateapi.CISTOAH != 0 {
+			L.AllowHook = true
+		} else {
+			L.AllowHook = false
+		}
+		// Close any remaining TBC vars in protected mode
+		funcIdx := ci.Func
+		if L.TBCList >= funcIdx {
+			errObj := objectapi.Nil
+			if L.Top > funcIdx {
+				errObj = L.Stack[L.Top-1].Val
+			}
+			var newErr objectapi.TValue
+			status, newErr = CloseProtected(L, funcIdx, status, errObj)
+			if L.Top > funcIdx {
+				L.Stack[L.Top-1].Val = newErr
+			}
+		}
+		SetErrorObj(L, status, funcIdx)
+		ShrinkStack(L)
+		ci.Ctx = stateapi.StatusOK // clear for next iteration
+	}
+	ci.CallStatus &^= stateapi.CISTYPCall
+	L.ErrFunc = ci.OldErrFunc
+	return status
+}
+
 func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 	oldCI := L.CI
 	oldAllowHook := L.AllowHook
@@ -577,6 +615,19 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 	status := RunProtected(L, func() {
 		Call(L, funcIdx, nResults)
 	})
+
+	if status == stateapi.StatusYield {
+		// Yield inside pcall — save pcall state on the pcall's own CI
+		// and re-panic so the yield propagates to Resume's RunProtected.
+		// oldCI is the pcall's C-function CI (captured before Call).
+		// On resume, unroll's finishCcall path will check CISTYPCall.
+		// Mirrors: C Lua lua_pcallk sets CIST_YPCALL before luaD_pcall.
+		oldCI.CallStatus |= stateapi.CISTYPCall
+		oldCI.OldErrFunc = oldErrFunc
+		L.ErrFunc = oldErrFunc
+		// Re-panic with yield to propagate to Resume
+		panic(stateapi.LuaYield{})
+	}
 
 	if status != stateapi.StatusOK {
 		// Restore state (mirrors C Lua luaD_pcall order)
@@ -716,9 +767,51 @@ func Resume(L *stateapi.LuaState, from *stateapi.LuaState, nArgs int) (int, int)
 		}
 	})
 
+	// Continue running after recoverable errors.
+	// Mirrors: precover in ldo.c
+	status = precover(L, status)
+
 	L.Status = status
 	nresults := L.Top - (L.CI.Func + 1)
 	return status, nresults
+}
+
+// findPCall searches the CI chain for a suspended protected call
+// (a "recover point"). Returns the CI with CISTYPCall set, or nil.
+// Mirrors: findpcall in ldo.c
+func findPCall(L *stateapi.LuaState) *stateapi.CallInfo {
+	for ci := L.CI; ci != nil; ci = ci.Prev {
+		if ci.CallStatus&stateapi.CISTYPCall != 0 {
+			return ci
+		}
+	}
+	return nil
+}
+
+// precover recovers from errors during unroll by finding pcall recovery
+// points. When an error occurs during unroll (e.g., __close method errors
+// after yield-resume), this finds the nearest pcall and re-runs unroll
+// in protected mode.
+// Mirrors: precover in ldo.c
+func precover(L *stateapi.LuaState, status int) int {
+	for isErrorStatus(status) {
+		ci := findPCall(L)
+		if ci == nil {
+			break // no recovery point — unrecoverable error
+		}
+		L.CI = ci // go down to recovery function
+		// Save error status for finishPCallK to retrieve
+		ci.Ctx = status // reuse Ctx to store the error status
+		status = RunProtected(L, func() {
+			unroll(L)
+		})
+	}
+	return status
+}
+
+// isErrorStatus returns true for error statuses (not OK, not Yield).
+func isErrorStatus(status int) bool {
+	return status != stateapi.StatusOK && status != stateapi.StatusYield
 }
 
 // unroll executes the full continuation stack.
@@ -726,14 +819,40 @@ func unroll(L *stateapi.LuaState) {
 	for L.CI != &L.BaseCI {
 		ci := L.CI
 		if !ci.IsLua() {
-			// C function continuation
-			if ci.K != nil {
-				n := ci.K(L, stateapi.StatusYield, ci.Ctx)
-				PosCall(L, ci, n)
+			// C function — finish its call.
+			// Mirrors: finishCcall in ldo.c
+			if ci.CallStatus&stateapi.CISTClsRet != 0 {
+				// Was closing TBC variable — just redo PosCall.
+				// The __close method finished; continue with the
+				// return that was in progress.
+				PosCall(L, ci, ci.NRes)
 			} else {
-				PosCall(L, ci, 0)
+				// Check for yieldable pcall (CIST_YPCALL)
+				status := stateapi.StatusYield
+				if ci.CallStatus&stateapi.CISTYPCall != 0 {
+					status = finishPCallK(L, ci)
+				}
+				// Call continuation if present
+				if ci.K != nil {
+					n := ci.K(L, status, ci.Ctx)
+					PosCall(L, ci, n)
+				} else {
+					// No continuation — just finish the call.
+					// For pcall: results are already on the stack.
+					// Adjust results to MultiRet equivalent.
+					nres := L.Top - (ci.Func + 1)
+					PosCall(L, ci, nres)
+				}
 			}
 		} else {
+			// If this CI was interrupted during __close (CIST_CLSRET set),
+			// finish the interrupted op before resuming execution.
+			// This backs up savedpc so OP_RETURN/OP_CLOSE re-executes
+			// and continues the close loop.
+			// Mirrors: luaV_finishOp call in ldo.c unroll().
+			if ci.CallStatus&stateapi.CISTClsRet != 0 {
+				FinishOp(L, ci)
+			}
 			Execute(L, ci)
 		}
 	}
