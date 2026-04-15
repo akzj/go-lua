@@ -1357,6 +1357,9 @@ func gsubReplace(repl string, ms *matchState, si, ei int) string {
 				} else if cap.len >= 0 {
 					sb.WriteString(ms.src[cap.init : cap.init+cap.len])
 				}
+			} else if ms.level == 0 && idx == 1 {
+				// No explicit captures: %1 = whole match (C Lua compat)
+				sb.WriteString(ms.src[si:ei])
 			}
 		} else if c == '%' {
 			sb.WriteByte('%')
