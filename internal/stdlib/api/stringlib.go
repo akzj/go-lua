@@ -921,12 +921,7 @@ func (ms *matchState) match(si, pi int) int {
 				if si < len(ms.src) {
 					cur = ms.src[si]
 				}
-				if !singlematch(ms, si-1, pi, ep) || singlematch(ms, si, pi, ep) {
-					// Check: prev NOT in set, cur IN set
-					_ = prev
-					_ = cur
-				}
-				// Simplified: just check the boundary
+				// Check frontier boundary: prev NOT in set, cur IN set
 				if singlematchByte(ms, prev, pi, ep) || !singlematchByte(ms, cur, pi, ep) {
 					return -1
 				}
