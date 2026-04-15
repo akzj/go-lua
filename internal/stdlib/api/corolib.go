@@ -277,9 +277,14 @@ func coroClose(L *luaapi.State) int {
 			return 0
 		}
 		// Running non-main coroutine — close itself
-		// TODO: call lua_closethread
-		L.PushBoolean(true)
-		return 1
+		// Mirrors: luaB_close COS_RUN case in lcorolib.c:194-198
+		// CloseThread with L == from will panic(LuaBaseLevel) to unwind
+		// past all inner pcalls back to Resume.
+		coState := co.Internal.(*stateapi.LuaState)
+		callerState := L.Internal.(*stateapi.LuaState)
+		vmapi.CloseThread(coState, callerState)
+		// CloseThread panics when L == from, so this is unreachable
+		return 0
 	default:
 		L.PushBoolean(false)
 		L.PushString("cannot close coroutine")
