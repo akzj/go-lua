@@ -416,8 +416,8 @@ func luaB_pairs(L *luaapi.State) int {
 	L.CheckAny(1)
 	if L.GetMetafield(1, "__pairs") {
 		L.PushValue(1)
-		L.Call(1, 3) // get 3 values from metamethod
-		return 3
+		L.Call(1, 4) // get 4 values from metamethod (iter, state, control, closing)
+		return 4
 	}
 	L.PushCFunction(luaB_next)
 	L.PushValue(1)
