@@ -406,6 +406,7 @@ func hookDispatch(L *stateapi.LuaState, event string, line int) {
 	savedCITop := ci.Top
 	savedAllowHook := L.AllowHook
 	L.AllowHook = false // cannot call hooks inside a hook
+	ci.CallStatus |= stateapi.CISTHooked // mark caller as hook frame
 
 	// Protect entire activation register (mirrors luaD_hook in ldo.c)
 	// For Lua functions, L.Top may be below ci.Top. Push hook args above ci.Top
@@ -416,6 +417,7 @@ func hookDispatch(L *stateapi.LuaState, event string, line int) {
 
 	defer func() {
 		L.AllowHook = savedAllowHook
+		ci.CallStatus &^= stateapi.CISTHooked // clear hook flag
 		ci.Top = savedCITop
 		L.Top = savedTop
 	}()
