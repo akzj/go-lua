@@ -171,19 +171,39 @@ func kname2(p *objectapi.Proto, index int) string {
 
 // findSetReg scans backward from 'lastpc' to find the instruction that
 // last set register 'reg'. Returns the PC of that instruction, or -1.
-// Simplified version of findsetreg in ldebug.c.
+// Mirrors: backward scan of findsetreg in ldebug.c.
+// Note: for conditional short-circuit (OP_TEST/JMP), use findSetRegForward
+// which is aware of jmptarget.
 func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
+	if lastpc <= 0 || lastpc > len(p.Code) {
+		return -1
+	}
+	// Backward scan: start from lastpc-1, go back to 0
 	for pc := lastpc - 1; pc >= 0; pc-- {
 		inst := p.Code[pc]
 		op := opcodeapi.GetOpCode(inst)
 		a := opcodeapi.GetArgA(inst)
 		switch op {
+		case opcodeapi.OP_LOADNIL:
+			// Sets registers a to a+b
+			b := opcodeapi.GetArgB(inst)
+			if a <= reg && reg <= a+b {
+				return pc
+			}
 		case opcodeapi.OP_LOADK, opcodeapi.OP_LOADKX, opcodeapi.OP_LOADFALSE,
-			opcodeapi.OP_LOADTRUE, opcodeapi.OP_LOADNIL, opcodeapi.OP_LOADI,
-			opcodeapi.OP_LOADF, opcodeapi.OP_MOVE, opcodeapi.OP_GETUPVAL,
-			opcodeapi.OP_CLOSURE, opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE,
-			opcodeapi.OP_GETI, opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
+			opcodeapi.OP_LOADTRUE, opcodeapi.OP_LOADI, opcodeapi.OP_LOADF,
+			opcodeapi.OP_MOVE, opcodeapi.OP_GETUPVAL, opcodeapi.OP_CLOSURE,
+			opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE, opcodeapi.OP_GETI,
+			opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
 			if a == reg {
+				return pc
+			}
+		case opcodeapi.OP_TFORCALL:
+			if reg >= a+2 {
+				return pc
+			}
+		case opcodeapi.OP_CALL, opcodeapi.OP_TAILCALL:
+			if reg >= a {
 				return pc
 			}
 		}
@@ -191,11 +211,68 @@ func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
 	return -1
 }
 
+// findSetRegForward scans forward from 0 to lastpc, tracking jmptarget.
+// Returns the PC of the last unconditional instruction that set 'reg',
+// or -1 if 'reg' was only set inside conditional jumps.
+// Used for luaG_typeerror to detect short-circuit expression results.
+// Mirrors: findsetreg + filterpc in ldebug.c.
+func findSetRegForward(p *objectapi.Proto, lastpc int, reg int) int {
+	setreg := -1
+	jmptarget := 0
+
+	if lastpc > len(p.Code) {
+		lastpc = len(p.Code)
+	}
+
+	// For metamethod-mode ops, the previous instruction wasn't executed
+	// p.Code[lastpc] is the instruction that triggered the error
+	if lastpc > 0 && lastpc < len(p.Code) {
+		op := opcodeapi.GetOpCode(p.Code[lastpc])
+		if opcodeapi.TestMMMode(op) {
+			lastpc--
+		}
+	}
+
+	for pc := 0; pc < lastpc; pc++ {
+		inst := p.Code[pc]
+		op := opcodeapi.GetOpCode(inst)
+		a := opcodeapi.GetArgA(inst)
+		change := false
+
+		switch op {
+		case opcodeapi.OP_LOADNIL:
+			b := opcodeapi.GetArgB(inst)
+			change = (reg >= a && reg <= a+b)
+		case opcodeapi.OP_TFORCALL:
+			change = (reg >= a+2)
+		case opcodeapi.OP_CALL, opcodeapi.OP_TAILCALL:
+			change = (reg >= a)
+		case opcodeapi.OP_JMP:
+			sj := opcodeapi.GetArgSJ(inst)
+			dest := pc + 1 + sj
+			if dest <= lastpc && dest > jmptarget {
+				jmptarget = dest
+			}
+		default:
+			change = opcodeapi.TestAMode(op) && reg == a
+		}
+
+		if change {
+			if pc < jmptarget {
+				setreg = -1 // inside conditional — can't determine
+			} else {
+				setreg = pc
+			}
+		}
+	}
+	return setreg
+}
+
 // basicGetObjName traces the origin of register 'reg' at 'pc' in proto 'p'.
 // Returns (kind, name) where kind is "constant", "local", "upvalue", or "".
 // Simplified version of basicgetobjname in ldebug.c.
 func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name string) {
-	setpc := findSetReg(p, pc, reg)
+	setpc := findSetRegForward(p, pc, reg)
 	if setpc < 0 {
 		// No instruction found that sets this register — try local variable name
 		if name := locVarName(p, pc, reg); name != "" {
