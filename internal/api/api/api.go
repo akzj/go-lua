@@ -106,7 +106,8 @@ type DebugInfo struct {
 	IsVararg        bool   // is a vararg function
 	IsTailCall      bool   // is a tail call
 	ExtraArgs       int    // number of extra arguments (vararg)
-	ci              interface{} // internal: *stateapi.CallInfo (not exposed to Lua)
+	CI              interface{} // internal: *stateapi.CallInfo
+	ThreadState     interface{} // internal: *stateapi.LuaState (set by GetStack)
 }
 
 // Status codes
