@@ -478,7 +478,12 @@ func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) b
 				return result.IsFalsy() // !(b < a)
 			}
 		}
-		RunError(L, "attempt to compare two "+objectapi.TypeNames[l.Type()]+" values")
+		// Build comparison error message: "two <type> values" or "<type1> with <type2> values"
+		if l.Type() == r.Type() {
+			RunError(L, "attempt to compare two "+objectapi.TypeNames[l.Type()]+" values")
+		} else {
+			RunError(L, "attempt to compare "+objectapi.TypeNames[l.Type()]+" with "+objectapi.TypeNames[r.Type()]+" values")
+		}
 	}
 	result := callTMRes(L, tm, l, r)
 	return !result.IsFalsy()
