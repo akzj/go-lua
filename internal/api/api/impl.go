@@ -1596,20 +1596,29 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 	// Negative n: vararg slots
 	if n < 0 {
 		if !proto.IsVararg() {
+			vmapi.CheckStack(ls, 1)
+			ls.Stack[ls.Top].Val = objectapi.Nil
+			ls.Top++
 			return ""
 		}
 		numExtra := ci.NExtraArgs
 		if numExtra <= 0 {
+			vmapi.CheckStack(ls, 1)
+			ls.Stack[ls.Top].Val = objectapi.Nil
+			ls.Top++
 			return ""
 		}
 		// Formula: slot = ci.Func - numExtra - n - 1 (n is negative).
 		slot := ci.Func - int(numExtra) - n - 1
 		// Valid: slot >= ci.Func-numExtra and slot <= ci.Func-1.
 		if slot < ci.Func-int(numExtra) || slot > ci.Func-1 {
+			vmapi.CheckStack(ls, 1)
+			ls.Stack[ls.Top].Val = objectapi.Nil
+			ls.Top++
 			return ""
 		}
 		vmapi.CheckStack(ls, 1)
-		ls.Stack[ls.Top] = ls.Stack[slot]
+		ls.Stack[ls.Top].Val = ls.Stack[slot].Val
 		ls.Top++
 		return "(vararg)"
 	}
@@ -1634,10 +1643,16 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 		}
 	}
 	if name == "" || name == "?" {
+		vmapi.CheckStack(ls, 1)
+		ls.Stack[ls.Top].Val = objectapi.Nil
+		ls.Top++
 		return ""
 	}
 	slot := ci.Func + n
 	if slot < 0 || slot >= len(ls.Stack) {
+		vmapi.CheckStack(ls, 1)
+		ls.Stack[ls.Top].Val = objectapi.Nil
+		ls.Top++
 		return ""
 	}
 	vmapi.CheckStack(ls, 1)
@@ -1668,20 +1683,24 @@ func (L *State) SetLocal(ar *DebugInfo, n int) string {
 	// Negative n: vararg slots
 	if n < 0 {
 		if !proto.IsVararg() {
-			return ""
-		}
-		// For PF_VATAB (vararg table), can't modify table — return "".
-		// For PF_VAHID (hidden stack args), use the hidden slots.
-		if proto.Flag&objectapi.PF_VATAB != 0 {
+			vmapi.CheckStack(ls, 1)
+			ls.Stack[ls.Top].Val = objectapi.Nil
+			ls.Top++
 			return ""
 		}
 		numExtra := ci.NExtraArgs
 		if numExtra <= 0 {
+			vmapi.CheckStack(ls, 1)
+			ls.Stack[ls.Top].Val = objectapi.Nil
+			ls.Top++
 			return ""
 		}
 		// Same formula as GetLocal: slot = ci.Func - numExtra - n - 1.
 		slot := ci.Func - int(numExtra) - n - 1
 		if slot < ci.Func-int(numExtra) || slot > ci.Func-1 {
+			vmapi.CheckStack(ls, 1)
+			ls.Stack[ls.Top].Val = objectapi.Nil
+			ls.Top++
 			return ""
 		}
 		ls.Stack[slot] = ls.Stack[ls.Top-1]
