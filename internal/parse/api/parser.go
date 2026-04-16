@@ -355,7 +355,7 @@ func searchVar(fs *FuncState, n string, v *ExpDesc) int {
 				if vd.Name == n { // found
 					initExp(v, VGLOBAL, fs.FirstLocal+i)
 					return int(VGLOBAL)
-				} else if v.Info == -1 { // active preambular?
+				} else if v.Info == -1 && i < v.Info-fs.FirstLocal { // active preambular, AND named global declared BEFORE preambular
 					v.Info = -2
 				}
 			}
@@ -416,7 +416,9 @@ func singleVarAux(fs *FuncState, n string, v *ExpDesc, base bool) {
 				return // global or constant — nothing to do
 			}
 		}
-		initExp(v, VUPVAL, idx)
+		if idx >= 0 {
+			initExp(v, VUPVAL, idx)
+		}
 	}
 }
 
