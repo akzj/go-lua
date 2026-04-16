@@ -246,13 +246,11 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 		// Table access: reg[A] = reg[B][reg[C]]
 		b := opcodeapi.GetArgB(inst)
 		c := opcodeapi.GetArgC(inst)
-		// Try to get the key name from register C
-		rkind, rname := BasicGetObjName(p, setpc, c)
+		// Use rname logic: only use key name if it's a constant
+		rkind, rn := BasicGetObjName(p, setpc, c)
 		keyName := "?"
 		if rkind == "constant" {
-			keyName = rname
-		} else {
-			keyName = rname
+			keyName = rn
 		}
 		if isEnvReg(p, setpc, b) {
 			return "global", keyName
