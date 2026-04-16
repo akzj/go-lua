@@ -1670,6 +1670,11 @@ func (L *State) SetLocal(ar *DebugInfo, n int) string {
 		if !proto.IsVararg() {
 			return ""
 		}
+		// For PF_VATAB (vararg table), can't modify table — return "".
+		// For PF_VAHID (hidden stack args), use the hidden slots.
+		if proto.Flag&objectapi.PF_VATAB != 0 {
+			return ""
+		}
 		numExtra := ci.NExtraArgs
 		if numExtra <= 0 {
 			return ""
