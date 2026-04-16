@@ -63,7 +63,28 @@ func OpenDebug(L *luaapi.State) int {
 		"gethook":      debugGethook,
 		"getlocal":     debugGetlocal,
 		"setlocal":     debugSetlocal,
+		"getregistry":  debugGetregistry,
 	})
+
+	// Create _HOOKKEY table in registry with weak keys.
+	// Mirrors C Lua's HOOKKEY in ldblib.c — a table mapping threads to hook functions.
+	// The metatable has __mode='k' so threads can be GC'd.
+	L.PushValue(luaapi.RegistryIndex)     // push registry
+	L.NewTable()                           // hook table
+	L.NewTable()                           // metatable for hook table
+	L.PushString("k")
+	L.SetField(-2, "__mode")               // mt.__mode = 'k'
+	L.SetMetatable(-2)                     // setmetatable(hooktable, mt)
+	L.SetField(-2, "_HOOKKEY")             // registry._HOOKKEY = hooktable
+	L.Pop(1)                               // pop registry
+
+	return 1
+}
+
+// debug.getregistry() — returns the registry table
+// Mirrors: luaB_getregistry in ldblib.c
+func debugGetregistry(L *luaapi.State) int {
+	L.PushValue(luaapi.RegistryIndex)
 	return 1
 }
 
