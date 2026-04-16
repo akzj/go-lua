@@ -1138,12 +1138,30 @@ func (L *State) CheckString(idx int) string {
 }
 
 // CheckInteger checks that argument at idx is an integer and returns it.
+// If the value is a float that can't be represented as an int64,
+// raises "has no integer representation" error. If the value is not a
+// number at all, raises "number expected" error.
+// Mirrors: luaL_checkinteger → luaO_str2intX in lauxlib.c / lobject.c.
 func (L *State) CheckInteger(idx int) int64 {
-	n, ok := L.ToInteger(idx)
-	if !ok {
+	v := L.index2val(idx)
+	switch v.Tt {
+	case objectapi.TagInteger:
+		return v.Val.(int64)
+	case objectapi.TagFloat:
+		f := v.Val.(float64)
+		if i, ok := objectapi.FloatToInteger(f); ok {
+			return i
+		}
+		L.ArgError(idx, fmt.Sprintf("number (%.10g) has no integer representation", f))
+	case objectapi.TagShortStr, objectapi.TagLongStr:
+		if i, ok := objectapi.StringToInteger(v.Val.(*objectapi.LuaString).Data); ok {
+			return i
+		}
+		L.ArgError(idx, "malformed number")
+	default:
 		L.tagError(idx, objectapi.TypeNumber)
 	}
-	return n
+	return 0 // unreachable
 }
 
 // CheckNumber checks that argument at idx is a number and returns it.
