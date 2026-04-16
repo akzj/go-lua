@@ -1416,6 +1416,13 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 				ar.NameWhat = "metamethod"
 				break
 			}
+			// Check if caller is running a hook (CISTHooked flag)
+			// If so, this frame was called from a hook dispatch
+			if caller.CallStatus&stateapi.CISTHooked != 0 {
+				ar.Name = "?"
+				ar.NameWhat = "hook"
+				break
+			}
 			fval := ls.Stack[caller.Func].Val
 			if fval.Tt != objectapi.TagLuaClosure {
 				break
