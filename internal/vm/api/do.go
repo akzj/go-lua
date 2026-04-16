@@ -508,7 +508,7 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 		// 2. npci < oldpc: backward jump (loop)
 		// 3. line changed between oldpc and npci
 		// Mirrors: luaG_traceexec in ldebug.c
-		if npci == 0 || npci < oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
+		if npci == 0 || npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
 			newline := GetFuncLine(p, npci)
 			if newline >= 0 {
 				hookDispatch(L, "line", newline)
