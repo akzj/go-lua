@@ -292,23 +292,10 @@ func precallC(L *stateapi.LuaState, funcIdx int, status uint32, f stateapi.CFunc
 func TryFuncTM(L *stateapi.LuaState, funcIdx int, status uint32) uint32 {
 	tm := mmapi.GetTMByObj(L.Global, L.Stack[funcIdx].Val, mmapi.TM_CALL)
 	if tm.IsNil() {
-		// Build error message with context
+		// Build error message with context.
+		// Mirrors: luaG_callerror in ldebug.c
 		typeName := objectapi.TypeNames[L.Stack[funcIdx].Val.Type()]
-		extra := ""
-		// If the caller is closing TBC vars, identify as metamethod 'close'
-		if L.CI != nil && L.CI.CallStatus&stateapi.CISTClsRet != 0 {
-			extra = " (metamethod 'close')"
-		} else {
-			// Try to get variable name from bytecode analysis
-			base := 0
-			if L.CI != nil {
-				base = L.CI.Func + 1
-			}
-			reg := funcIdx - base
-			if reg >= 0 {
-				extra = VarInfo(L, reg)
-			}
-		}
+		extra := callErrorExtra(L, funcIdx)
 		RunError(L, "attempt to call a "+typeName+" value"+extra)
 	}
 	// Shift stack up to make room for metamethod
