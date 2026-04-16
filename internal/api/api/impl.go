@@ -1574,8 +1574,146 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 func shortSrcStr(source string) string {
 	return shortSrc(source)
 }
-func (L *State) GetLocal(ar *DebugInfo, n int) string { return "" }
-func (L *State) SetLocal(ar *DebugInfo, n int) string { return "" }
+func (L *State) GetLocal(ar *DebugInfo, n int) string {
+	ls, ok := ar.ThreadState.(*stateapi.LuaState)
+	if !ok {
+		ls = L.ls()
+	}
+	ci, ok := ar.CI.(*stateapi.CallInfo)
+	if !ok || ci == nil {
+		return ""
+	}
+	clfn := ls.Stack[ci.Func].Val
+	if clfn.Tt != objectapi.TagLuaClosure {
+		return ""
+	}
+	cl, ok := clfn.Val.(*closureapi.LClosure)
+	if !ok || cl == nil || cl.Proto == nil {
+		return ""
+	}
+	proto := cl.Proto
+
+	// Negative n: vararg slots
+	if n < 0 {
+		if !proto.IsVararg() {
+			return ""
+		}
+		numExtra := ci.NExtraArgs
+		if numExtra <= 0 {
+			return ""
+		}
+		// Formula: slot = ci.Func - numExtra - n - 1 (n is negative).
+		slot := ci.Func - int(numExtra) - n - 1
+		// Valid: slot >= ci.Func-numExtra and slot <= ci.Func-1.
+		if slot < ci.Func-int(numExtra) || slot > ci.Func-1 {
+			return ""
+		}
+		vmapi.CheckStack(ls, 1)
+		ls.Stack[ls.Top] = ls.Stack[slot]
+		ls.Top++
+		return "(vararg)"
+	}
+
+	// Positive n: named locals
+	// Inline getLocalName logic (from vm/api/do.go)
+	localNum := n
+	pc := ci.SavedPC - 1
+	if pc < 0 {
+		pc = 0
+	}
+	name := ""
+	for i := 0; i < len(proto.LocVars) && proto.LocVars[i].StartPC <= pc; i++ {
+		if pc < proto.LocVars[i].EndPC {
+			localNum--
+			if localNum == 0 {
+				if proto.LocVars[i].Name != nil {
+					name = proto.LocVars[i].Name.Data
+				}
+				break
+			}
+		}
+	}
+	if name == "" || name == "?" {
+		return ""
+	}
+	slot := ci.Func + n
+	if slot < 0 || slot >= len(ls.Stack) {
+		return ""
+	}
+	vmapi.CheckStack(ls, 1)
+	ls.Stack[ls.Top] = ls.Stack[slot]
+	ls.Top++
+	return name
+}
+
+func (L *State) SetLocal(ar *DebugInfo, n int) string {
+	ls, ok := ar.ThreadState.(*stateapi.LuaState)
+	if !ok {
+		ls = L.ls()
+	}
+	ci, ok := ar.CI.(*stateapi.CallInfo)
+	if !ok || ci == nil {
+		return ""
+	}
+	clfn := ls.Stack[ci.Func].Val
+	if clfn.Tt != objectapi.TagLuaClosure {
+		return ""
+	}
+	cl, ok := clfn.Val.(*closureapi.LClosure)
+	if !ok || cl == nil || cl.Proto == nil {
+		return ""
+	}
+	proto := cl.Proto
+
+	// Negative n: vararg slots
+	if n < 0 {
+		if !proto.IsVararg() {
+			return ""
+		}
+		numExtra := ci.NExtraArgs
+		if numExtra <= 0 {
+			return ""
+		}
+		// Same formula as GetLocal: slot = ci.Func - numExtra - n - 1.
+		slot := ci.Func - int(numExtra) - n - 1
+		if slot < ci.Func-int(numExtra) || slot > ci.Func-1 {
+			return ""
+		}
+		ls.Stack[slot] = ls.Stack[ls.Top-1]
+		ls.Top--
+		return "(vararg)"
+	}
+
+	// Positive n: named locals
+	// Inline getLocalName logic (from vm/api/do.go)
+	localNum := n
+	pc := ci.SavedPC - 1
+	if pc < 0 {
+		pc = 0
+	}
+	name := ""
+	for i := 0; i < len(proto.LocVars) && proto.LocVars[i].StartPC <= pc; i++ {
+		if pc < proto.LocVars[i].EndPC {
+			localNum--
+			if localNum == 0 {
+				if proto.LocVars[i].Name != nil {
+					name = proto.LocVars[i].Name.Data
+				}
+				break
+			}
+		}
+	}
+	if name == "" || name == "?" {
+		return ""
+	}
+	slot := ci.Func + n
+	if slot < 0 || slot >= len(ls.Stack) {
+		return ""
+	}
+	ls.Stack[slot] = ls.Stack[ls.Top-1]
+	ls.Top--
+	return name
+}
 
 // ---------------------------------------------------------------------------
 // Coroutine API
