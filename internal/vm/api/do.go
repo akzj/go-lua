@@ -367,12 +367,14 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	// The OldPC restoration is unconditional (needed by line hook even when
 	// return hook is off). This is critical: without it, the line hook fires
 	// spurious events when returning from calls (e.g. hook function returns).
-	if L.HookMask != 0 && L.AllowHook {
-		if L.HookMask&stateapi.MaskRet != 0 {
+	if L.HookMask != 0 {
+		if L.AllowHook && L.HookMask&stateapi.MaskRet != 0 {
 			retHook(L, ci, nres)
 		}
 		// Restore OldPC for the caller's frame (unconditional).
 		// Mirrors: rethook in ldo.c: L->oldpc = pcRel(ci->u.l.savedpc, ...)
+		// Must run even when AllowHook is false (during hook dispatch),
+		// otherwise changedline() sees stale OldPC and misses a line event.
 		if prev := ci.Prev; prev != nil && prev.IsLua() {
 			L.OldPC = prev.SavedPC - 1
 		}
