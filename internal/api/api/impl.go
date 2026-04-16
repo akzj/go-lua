@@ -1354,7 +1354,7 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 	}
 	ar := &DebugInfo{}
 	// Store this CI for GetInfo to use
-	ar.ci = ci
+	ar.CI = ci
 	fval := ls.Stack[ci.Func].Val
 	switch fval.Tt {
 	case objectapi.TagLuaClosure:
@@ -1398,10 +1398,10 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 	for i := 0; i < len(what); i++ {
 		switch what[i] {
 		case 'n':
-			if ar.ci == nil {
+			if ar.CI == nil {
 				break
 			}
-			queriedCI, ok := ar.ci.(*stateapi.CallInfo)
+			queriedCI, ok := ar.CI.(*stateapi.CallInfo)
 			if !ok {
 				break
 			}
@@ -1443,8 +1443,8 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			// Already filled by GetStack
 		case 't':
 			// Tail call and extra args info
-			if ar.ci != nil {
-				if ci, ok := ar.ci.(*stateapi.CallInfo); ok {
+			if ar.CI != nil {
+				if ci, ok := ar.CI.(*stateapi.CallInfo); ok {
 					ar.IsTailCall = ci.CallStatus&stateapi.CISTTail != 0
 					ar.ExtraArgs = ci.NExtraArgs
 				}
@@ -1898,10 +1898,10 @@ func DebugGetProto(L *State) *objectapi.Proto {
 // PushFuncFromDebug pushes the function associated with a DebugInfo onto the stack.
 // Returns true if successful, false if the CI is nil or invalid.
 func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
-	if ar == nil || ar.ci == nil {
+	if ar == nil || ar.CI == nil {
 		return false
 	}
-	ci, ok := ar.ci.(*stateapi.CallInfo)
+	ci, ok := ar.CI.(*stateapi.CallInfo)
 	if !ok {
 		return false
 	}
