@@ -445,12 +445,7 @@ func (L *State) ToInteger(idx int) (int64, bool) {
 	case objectapi.TagInteger:
 		return v.Val.(int64), true
 	case objectapi.TagFloat:
-		f := v.Val.(float64)
-		i := int64(f)
-		if float64(i) == f {
-			return i, true
-		}
-		return 0, false
+		return objectapi.FloatToInteger(v.Val.(float64))
 	case objectapi.TagShortStr, objectapi.TagLongStr:
 		s := v.Val.(*objectapi.LuaString).Data
 		return objectapi.StringToInteger(s)

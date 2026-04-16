@@ -68,11 +68,18 @@ func ToInteger(v objectapi.TValue) (int64, bool) {
 	return 0, false
 }
 
-// FloatToInteger converts a float64 to int64 if it has an exact integer value.
+// FloatToInteger converts a float64 to int64 if it has an exact integer value
+// and is within int64 range. Mirrors: luaO_cast_number2int in lobject.c.
 func FloatToInteger(f float64) (int64, bool) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
 	i := int64(f)
-	if float64(i) == f {
+	if float64(i) == f && i != 0 {
 		return i, true
+	}
+	if f == 0 {
+		return 0, true
 	}
 	return 0, false
 }
