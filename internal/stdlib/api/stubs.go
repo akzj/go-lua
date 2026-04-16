@@ -64,6 +64,8 @@ func OpenDebug(L *luaapi.State) int {
 		"getlocal":     debugGetlocal,
 		"setlocal":     debugSetlocal,
 		"getregistry":  debugGetregistry,
+		"setuservalue": debugSetuservalue,
+		"getuservalue": debugGetuservalue,
 	})
 
 	// Create _HOOKKEY table in registry with weak keys.
@@ -805,5 +807,36 @@ func debugSetlocal(L *luaapi.State) int {
 	} else {
 		L.PushString(name)
 	}
+	return 1
+}
+
+// debug.getuservalue(u, n) → value, bool
+// Mirrors: luaB_getuservalue in ldblib.c
+// Returns the nth user value of userdata u, plus a boolean indicating success.
+func debugGetuservalue(L *luaapi.State) int {
+	n := 1
+	if L.GetTop() >= 2 {
+		n = int(L.CheckInteger(2))
+	}
+	tp := L.GetIUserValue(1, n)
+	L.PushBoolean(tp != objectapi.TypeNone)
+	return 2
+}
+
+// debug.setuservalue(u, value, n) → u (or fail)
+// Mirrors: luaB_setuservalue in ldblib.c
+// Sets the nth user value of userdata u to value. Returns u on success, or fail.
+func debugSetuservalue(L *luaapi.State) int {
+	n := 1
+	if L.GetTop() >= 3 {
+		n = int(L.CheckInteger(3))
+	}
+	L.CheckAny(1)
+	L.CheckAny(2)
+	if !L.SetIUserValue(1, n) {
+		L.PushBoolean(false) // luaL_pushfail
+		return 1
+	}
+	L.PushValue(1) // return the userdata
 	return 1
 }
