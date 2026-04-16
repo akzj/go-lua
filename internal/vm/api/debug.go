@@ -236,9 +236,28 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 	case opcodeapi.OP_GETFIELD:
 		// Table field access: reg[A] = reg[B][K[C]]
 		k := opcodeapi.GetArgC(inst)
-		if k < len(p.Constants) {
-			return "field", kname2(p, k)
+		b := opcodeapi.GetArgB(inst)
+		name := kname2(p, k)
+		if isEnvReg(p, setpc, b) {
+			return "global", name
 		}
+		return "field", name
+	case opcodeapi.OP_GETTABLE:
+		// Table access: reg[A] = reg[B][reg[C]]
+		b := opcodeapi.GetArgB(inst)
+		c := opcodeapi.GetArgC(inst)
+		// Try to get the key name from register C
+		rkind, rname := BasicGetObjName(p, setpc, c)
+		keyName := "?"
+		if rkind == "constant" {
+			keyName = rname
+		} else {
+			keyName = rname
+		}
+		if isEnvReg(p, setpc, b) {
+			return "global", keyName
+		}
+		return "field", keyName
 	case opcodeapi.OP_SELF:
 		// Method call: reg[A+1] = reg[B]; reg[A] = reg[B][K[C]]
 		k := opcodeapi.GetArgC(inst)
@@ -251,6 +270,17 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 		return "local", name
 	}
 	return "", ""
+}
+
+// isEnvReg checks whether register 'reg' at instruction 'pc' holds the _ENV table.
+// Mirrors: isEnv in ldebug.c (for the register case).
+func isEnvReg(p *objectapi.Proto, pc int, reg int) bool {
+	kind, name := BasicGetObjName(p, pc, reg)
+	// Must be a local or upvalue named "_ENV"
+	if (kind == "local" || kind == "upvalue") && name == "_ENV" {
+		return true
+	}
+	return false
 }
 
 // locVarName returns the local variable name for register 'reg' at instruction 'pc',
