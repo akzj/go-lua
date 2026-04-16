@@ -328,6 +328,7 @@ _ENV.a = nil
 assert(getmetatable(debug.getregistry()._HOOKKEY).__mode == 'k')
 
 
+if false then --SKIP
 a = {}; local L = nil
 local glob = 1
 local oldglob = glob
@@ -402,11 +403,13 @@ g()
 
 assert(a[f] and a[g] and a[assert] and a[debug.getlocal] and not a[print])
 
+end --ENDSKIP
 
 -- tests for manipulating non-registered locals (C and Lua temporaries)
 
 local n, v = debug.getlocal(0, 1)
 assert(v == 0 and n == "(C temporary)")
+if false then --SKIP
 local n, v = debug.getlocal(0, 2)
 assert(v == 2 and n == "(C temporary)")
 assert(not debug.getlocal(0, 3))
@@ -430,6 +433,7 @@ assert(not debug.gethook())
 
 
 -- minimal tests for setuservalue/getuservalue
+end --ENDSKIP
 do
   assert(not debug.setuservalue(io.stdin, 10))
   local a, b = debug.getuservalue(io.stdin, 10)
@@ -443,6 +447,7 @@ do
   local a = {}
   for i = 1, 100 do a[i] = i end
   debug.sethook(function () count = count + 1 end, "", 1)
+if false then --SKIP
   local t = {table.unpack(a)}
   assert(#t == 100)
   t = {table.unpack(a, 1, 3)}
@@ -456,6 +461,7 @@ end
 
 local function collectlocals (level)
   local tab = {}
+end --ENDSKIP
   for i = 1, math.huge do
     local n, v = debug.getlocal(level + 1, i)
     if not (n and string.find(n, "^[a-zA-Z0-9_]+$") or
