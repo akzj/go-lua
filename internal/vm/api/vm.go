@@ -1496,13 +1496,17 @@ startfunc:
 	base := ci.Func + 1
 
 	for {
-		// Hook dispatch: fire line/count hooks if active
-		// Mirrors: vmfetch trap check in lvm.c
-		if L.HookMask&(stateapi.MaskLine|stateapi.MaskCount) != 0 && L.AllowHook {
+		inst := code[ci.SavedPC]
+
+		// Hook dispatch: fire line/count hooks if active.
+		// Skip for OP_VARARGPREP — C Lua's luaG_tracecall returns 0 (trap=0)
+		// for vararg functions, so traceexec is not called for instruction 0.
+		// The call hook and OldPC adjustment happen inside OP_VARARGPREP instead.
+		// Mirrors: vmfetch trap check in lvm.c + luaG_tracecall in ldebug.c
+		if L.HookMask&(stateapi.MaskLine|stateapi.MaskCount) != 0 && L.AllowHook &&
+			opcodeapi.GetOpCode(inst) != opcodeapi.OP_VARARGPREP {
 			TraceExec(L, ci)
 		}
-
-		inst := code[ci.SavedPC]
 		ci.SavedPC++
 		op := opcodeapi.GetOpCode(inst)
 		ra := base + opcodeapi.GetArgA(inst)
@@ -2451,6 +2455,12 @@ startfunc:
 			AdjustVarargs(L, ci, cl.Proto)
 			// Update base after adjustment
 			base = ci.Func + 1
+			// Set OldPC past VARARGPREP so the next instruction is seen as a
+			// "new" line. Mirrors: OP_VARARGPREP in lvm.c sets L->oldpc = 1.
+			// The call hook was already fired by PreCall/CallHook.
+			if L.HookMask != 0 {
+				L.OldPC = 1
+			}
 
 		// ===== Table construction =====
 
@@ -2574,7 +2584,7 @@ startfunc:
 		// needs OldPC left alone to fire the correct line event on resume.
 		// Mirrors: rethook in ldo.c (L->oldpc = pcRel(ci->u.l.savedpc, ...))
 		if ci.IsLua() {
-			L.OldPC = ci.SavedPC
+			L.OldPC = ci.SavedPC - 1
 		}
 		goto startfunc
 	}
