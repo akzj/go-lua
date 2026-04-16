@@ -362,9 +362,20 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	wanted := ci.NResults()
 	res := ci.Func // destination for results
 
-	// Fire return hook if active (and no TBC — TBC case handles hook after close)
-	if L.HookMask&stateapi.MaskRet != 0 && L.AllowHook {
-		retHook(L, ci, nres)
+	// Fire return hook and restore OldPC for caller.
+	// Mirrors: rethook in ldo.c — called when ANY hook is active, not just MaskRet.
+	// The OldPC restoration is unconditional (needed by line hook even when
+	// return hook is off). This is critical: without it, the line hook fires
+	// spurious events when returning from calls (e.g. hook function returns).
+	if L.HookMask != 0 && L.AllowHook {
+		if L.HookMask&stateapi.MaskRet != 0 {
+			retHook(L, ci, nres)
+		}
+		// Restore OldPC for the caller's frame (unconditional).
+		// Mirrors: rethook in ldo.c: L->oldpc = pcRel(ci->u.l.savedpc, ...)
+		if prev := ci.Prev; prev != nil && prev.IsLua() {
+			L.OldPC = prev.SavedPC - 1
+		}
 	}
 
 	// Move results to proper place
@@ -500,15 +511,15 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 		oldpc := L.OldPC
 		if oldpc < 0 || oldpc >= len(p.Code) {
 			// OldPC is out of bounds for this proto — likely stale from a
-			// different function. Use npci to suppress spurious line events.
-			oldpc = npci
+			// different function. Clamp to 0 (matches C Lua behavior).
+			oldpc = 0
 		}
 		// Fire line hook when:
-		// 1. npci == 0: entering a new function (first instruction)
-		// 2. npci < oldpc: backward jump (loop)
-		// 3. line changed between oldpc and npci
+		// 1. npci <= oldpc: backward jump (loop) or same instruction
+		// 2. line changed between oldpc and npci
+		
 		// Mirrors: luaG_traceexec in ldebug.c
-		if npci == 0 || npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
+		if npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
 			newline := GetFuncLine(p, npci)
 			if newline >= 0 {
 				hookDispatch(L, "line", newline)
