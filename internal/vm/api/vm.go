@@ -1023,7 +1023,7 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 		} else {
 			tm = mmapi.GetTMByObj(L.Global, t, mmapi.TM_INDEX)
 			if tm.IsNil() {
-				RunError(L, "attempt to index a "+objectapi.TypeNames[t.Type()]+" value")
+				RunTypeErrorByVal(L, t, "index")
 			}
 		}
 		if tm.IsFunction() {
@@ -1094,7 +1094,7 @@ func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 		} else {
 			tm = mmapi.GetTMByObj(L.Global, t, mmapi.TM_NEWINDEX)
 			if tm.IsNil() {
-				RunError(L, "attempt to index a "+objectapi.TypeNames[t.Type()]+" value")
+				RunTypeErrorByVal(L, t, "index")
 			}
 		}
 		if tm.IsFunction() {
