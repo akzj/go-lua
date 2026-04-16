@@ -726,14 +726,11 @@ func debugGetlocal(L *luaapi.State) int {
 		}
 		name := thread.GetLocal(ar, n)
 		if name == "" {
-			L.Pop(1) // remove wrong value pushed by GetLocal
-			L.PushNil()
+			L.PushNil() // no local found, push nil
 			return 1
 		}
-		// GetLocal already pushed value onto stack. Push name first, then rotate.
-		// Stack: [value], Top points after value. Push name → [value, name].
-		L.PushString(name)
-		L.Insert(-2) // move name to position 1 → [name, value]
+		L.PushString(name) // push name on top of value
+		L.Insert(-2)       // move name below value: [name, value]
 		return 2
 	}
 
@@ -746,13 +743,11 @@ func debugGetlocal(L *luaapi.State) int {
 	}
 	name := L.GetLocal(ar, n)
 	if name == "" {
-		L.Pop(1) // remove wrong value pushed by GetLocal
-		L.PushNil()
+		L.PushNil() // no local found, push nil
 		return 1
 	}
-	// GetLocal already pushed value onto stack. Push name first, then rotate.
-	L.PushString(name)
-	L.Insert(-2) // move name to position 1 → [name, value]
+	L.PushString(name) // push name on top of value
+	L.Insert(-2)       // move name below value: [name, value]
 	return 2
 }
 
