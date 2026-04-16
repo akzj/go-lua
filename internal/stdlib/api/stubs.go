@@ -61,6 +61,8 @@ func OpenDebug(L *luaapi.State) int {
 		"upvalueid":    debugUpvalueid,
 		"sethook":      debugSethook,
 		"gethook":      debugGethook,
+		"getlocal":     debugGetlocal,
+		"setlocal":     debugSetlocal,
 	})
 	return 1
 }
@@ -625,4 +627,158 @@ func pkgSearchPath(L *luaapi.State) int {
 	L.PushNil()
 	L.PushString(tried.String())
 	return 2
+}
+
+// getLocalNameFromProto returns the name of local variable n from prototype p.
+func getLocalNameFromProto(p *objectapi.Proto, idx int) string {
+	if p == nil {
+		return ""
+	}
+	if idx == 0 {
+		if p.IsVararg() {
+			return "(*vararg*)"
+		}
+		return ""
+	}
+	// Parameters have StartPC == 0 (declared at function entry).
+	// Iterate LocVars with StartPC == 0, count named locals.
+	for i := 0; i < len(p.LocVars) && p.LocVars[i].StartPC == 0; i++ {
+		if p.LocVars[i].Name != nil {
+			if idx == 1 {
+				return p.LocVars[i].Name.Data
+			}
+			idx--
+		}
+	}
+	return ""
+}
+
+// debug.getlocal — 3 forms (mirrors luaB_getlocal in C Lua ldblib.c)
+func debugGetlocal(L *luaapi.State) int {
+	n := int(L.CheckInteger(L.GetTop())) // n is ALWAYS last arg
+
+	if L.Type(1) == objectapi.TypeFunction {
+		// (func, n) — name only, return 1
+		cl := L.GetLClosure(1)
+		if cl == nil || cl.Proto == nil {
+			L.PushNil()
+			return 1
+		}
+		p := cl.Proto
+		if n == 0 {
+			if p.IsVararg() {
+				L.PushString("(*vararg*)")
+				return 1
+			}
+			L.PushNil()
+			return 1
+		}
+		if n < 0 || n > int(p.NumParams) {
+			L.PushNil()
+			return 1
+		}
+		name := getLocalNameFromProto(p, n)
+		if name == "" {
+			L.PushNil()
+			return 1
+		}
+		L.PushString(name)
+		return 1
+	}
+
+	if L.Type(1) == objectapi.TypeThread {
+		thread := L.ToThread(1)
+		if L.Type(2) == objectapi.TypeFunction {
+			// (co, func, n) — name only from func's proto, return 1
+			// C Lua ignores the coroutine argument entirely here.
+			cl := L.GetLClosure(2)
+			if cl == nil || cl.Proto == nil {
+				L.PushNil()
+				return 1
+			}
+			p := cl.Proto
+			if n == 0 {
+				if p.IsVararg() {
+					L.PushString("(*vararg*)")
+					return 1
+				}
+				L.PushNil()
+				return 1
+			}
+			if n < 0 || n > int(p.NumParams) {
+				L.PushNil()
+				return 1
+			}
+			name := getLocalNameFromProto(p, n)
+			if name == "" {
+				L.PushNil()
+				return 1
+			}
+			L.PushString(name)
+			return 1
+		}
+		// (co, level, n) — name + value, return 2
+		level := int(L.CheckInteger(2))
+		ar, ok := thread.GetStack(level)
+		if !ok {
+			L.ArgError(2, "invalid level")
+			return 0
+		}
+		name := thread.GetLocal(ar, n)
+		if name == "" {
+			return 1 // nil already on stack from GetLocal's failed push
+		}
+		L.PushString(name) // name as 2nd return value; value already on stack from GetLocal
+		return 2
+	}
+
+	// (level, n) — name + value, return 2
+	level := int(L.CheckInteger(1))
+	ar, ok := L.GetStack(level)
+	if !ok {
+		L.ArgError(1, "invalid level")
+		return 0
+	}
+	name := L.GetLocal(ar, n)
+	if name == "" {
+		return 1 // nil already on stack from GetLocal's failed push
+	}
+	L.PushString(name) // name as 2nd return value; value already on stack from GetLocal
+	return 2
+}
+
+// debug.setlocal(level, n, value) → name or nil
+func debugSetlocal(L *luaapi.State) int {
+	n := int(L.CheckInteger(L.GetTop() - 1)) // n is 2nd to last arg
+	if L.Type(1) == objectapi.TypeThread {
+		// (co, level, n, value)
+		thread := L.ToThread(1)
+		level := int(L.CheckInteger(2))
+		ar, ok := thread.GetStack(level)
+		if !ok {
+			L.ArgError(2, "invalid level")
+			return 0
+		}
+		name := thread.SetLocal(ar, n)
+		if name == "" {
+			L.PushNil()
+		} else {
+			L.PushString(name)
+		}
+		return 1
+	}
+	// (level, n, value)
+	level := int(L.CheckInteger(1))
+	ar, ok := L.GetStack(level)
+	if !ok {
+		L.ArgError(1, "invalid level")
+		return 0
+	}
+	name := L.SetLocal(ar, n)
+	if name == "" {
+		L.PushNil()
+	} else {
+		L.PushString(name)
+	}
+	return 1
 }
