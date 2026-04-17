@@ -1383,6 +1383,8 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		// ci.Func now lives after the hidden (extra) arguments
 		ci.Func += totalargs + 1
 		ci.Top = ci.Func + 1 + int(p.MaxStackSize)
+		// Set vararg parameter slot to nil (mirrors C Lua: setnilvalue)
+		L.Stack[ci.Func+nfixparams+1].Val = objectapi.Nil
 	}
 }
 
