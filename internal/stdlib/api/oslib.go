@@ -65,8 +65,8 @@ func osTime(L *luaapi.State) int {
 	L.CheckType(1, 5) // TypeTable = 5
 	L.SetTop(1)
 
-	year := getTimeField(L, "year", -1, 1900)
-	month := getTimeField(L, "month", -1, 1)
+	year := getTimeField(L, "year", -1, 0)
+	month := getTimeField(L, "month", -1, 0)
 	day := getTimeField(L, "day", -1, 0)
 	hour := getTimeField(L, "hour", 12, 0)
 	min := getTimeField(L, "min", 0, 0)
@@ -156,7 +156,7 @@ func setTimeFields(L *luaapi.State, t time.Time) {
 	L.SetField(1, "sec")
 	L.PushInteger(int64(t.YearDay()))
 	L.SetField(1, "yday")
-	L.PushInteger(int64(t.Weekday()))
+	L.PushInteger(int64(t.Weekday()) + 1) // Lua wday: 1=Sunday..7=Saturday
 	L.SetField(1, "wday")
 
 	// DST: Go's time package handles this via the zone
@@ -211,7 +211,7 @@ func osDate(L *luaapi.State) int {
 		L.SetField(-2, "sec")
 		L.PushInteger(int64(t.YearDay()))
 		L.SetField(-2, "yday")
-		L.PushInteger(int64(t.Weekday()))
+		L.PushInteger(int64(t.Weekday()) + 1) // Lua wday: 1=Sunday..7=Saturday
 		L.SetField(-2, "wday")
 
 		_, offset := t.Zone()
