@@ -67,7 +67,14 @@ func NVarStack(fs *FuncState) int {
 
 func checkLimit(fs *FuncState, v, lim int, what string) {
 	if v > lim {
-		msg := fmt.Sprintf("too many %s (limit is %d)", what, lim)
+		line := fs.Proto.LineDefined
+		var where string
+		if line == 0 {
+			where = "main function"
+		} else {
+			where = fmt.Sprintf("function at line %d", line)
+		}
+		msg := fmt.Sprintf("too many %s (limit is %d) in %s", what, lim, where)
 		throwSyntaxError(fs, msg)
 	}
 }
