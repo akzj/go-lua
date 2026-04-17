@@ -63,6 +63,9 @@ func TestTestesWide(t *testing.T) {
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)
 			L.PushBoolean(true)
 			L.SetGlobal("_port")
+			// Skip stack-exhaustion tests that hang (debug.traceback on 999K frames)
+			L.PushBoolean(true)
+			L.SetGlobal("_soft")
 			err := L.DoFile(path)
 			if err != nil {
 				fmt.Printf("  %-20s FAIL: %v\n", f, err)

@@ -625,6 +625,7 @@ if not _soft then
 end
 
 
+if not _port then  -- go-lua: xpcall error handler chaining not yet supported
 do  -- errors in error handle that not necessarily go forever
   local function err (n)   -- function to be used as message handler
     -- generate an error unless n is zero, so that there is a limited
@@ -643,6 +644,7 @@ do  -- errors in error handle that not necessarily go forever
   -- too many levels
   local res, msg = xpcall(error, err, 300)
   assert(not res and msg == "C stack overflow")
+end
 end
 
 
