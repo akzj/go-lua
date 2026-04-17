@@ -297,6 +297,20 @@ func (L *State) PushCFunction(f CFunction) {
 	L.push(objectapi.TValue{Tt: objectapi.TagLightCFunc, Val: wrapped})
 }
 
+// PushCFunctionSame pushes a pre-wrapped C function value. Unlike PushCFunction,
+// which creates a new wrapper each call, this pushes the exact same TValue each time.
+// Use for stateless iterators (e.g., ipairs) where identity must be preserved.
+func (L *State) PushCFunctionSame(tv objectapi.TValue) {
+	L.push(tv)
+}
+
+// WrapCFunction wraps a CFunction into a stateapi.CFunction + TValue.
+// The caller can cache the result and pass it to PushCFunctionSame.
+func WrapCFunction(f CFunction) objectapi.TValue {
+	wrapped := wrapCFunctionStatic(f)
+	return objectapi.TValue{Tt: objectapi.TagLightCFunc, Val: wrapped}
+}
+
 // PushCClosure pushes a Go function as a closure with n upvalues.
 func (L *State) PushCClosure(f CFunction, n int) {
 	if n == 0 {
