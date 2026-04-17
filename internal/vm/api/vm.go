@@ -1717,6 +1717,21 @@ startfunc:
 			L.Global.GCTotalBytes += t.EstimateBytes()
 			L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
 
+			// Periodic GC: fire __gc finalizers during tight allocation loops.
+			// Go's GC doesn't fire on every allocation like C Lua's.
+			// Strategy: drain the queue frequently (cheap), trigger full
+			// GC rarely (expensive). Only active when finalizers exist.
+			if g := L.Global; g.GCHasFinalizers {
+				g.GCAllocCount++
+				n := g.GCAllocCount
+				if n%10 == 0 && g.GCDrainFn != nil {
+					g.GCDrainFn(L) // cheap: just drain queue
+				}
+				if n%100 == 0 && g.GCStepFn != nil {
+					g.GCStepFn(L) // expensive: clear stack + runtime.GC + drain
+				}
+			}
+
 		case opcodeapi.OP_SELF:
 			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
 			rc := k[opcodeapi.GetArgC(inst)]

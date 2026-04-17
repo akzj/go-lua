@@ -135,7 +135,40 @@ func wrapCFunctionStatic(f CFunction) stateapi.CFunction {
 // NewState creates a new Lua state.
 func NewState() *State {
 	ls := stateapi.NewState()
-	return &State{Internal: ls}
+	L := &State{Internal: ls}
+
+	// Wire up GC step functions so the VM can trigger periodic GC
+	// without importing this package.
+
+	// GCStepFn: expensive — triggers full GC cycle + drain. Called rarely.
+	ls.Global.GCStepFn = func(thread *stateapi.LuaState) {
+		// Clear ALL stale stack slots above Top on the main thread AND
+		// the current thread so Go GC can collect objects that Lua has
+		// "popped" (Top decremented but slots not zeroed).
+		clearThread := func(t *stateapi.LuaState) {
+			for i := t.Top; i < len(t.Stack); i++ {
+				t.Stack[i].Val = objectapi.Nil
+			}
+		}
+		clearThread(thread)
+		if g := thread.Global; g != nil && g.MainThread != nil && g.MainThread != thread {
+			clearThread(g.MainThread)
+		}
+		wrapper := &State{Internal: thread}
+		runtime.GC()
+		runtime.Gosched() // let finalizer goroutine enqueue callbacks
+		runtime.GC()      // second pass to sweep finalized objects
+		runtime.Gosched()
+		wrapper.DrainGCFinalizers()
+	}
+
+	// GCDrainFn: cheap — just drains the finalizer queue. Called frequently.
+	ls.Global.GCDrainFn = func(thread *stateapi.LuaState) {
+		wrapper := &State{Internal: thread}
+		wrapper.DrainGCFinalizers()
+	}
+
+	return L
 }
 
 // Close releases all resources associated with the state.
@@ -749,6 +782,25 @@ func (L *State) CreateTable(nArr, nRec int) {
 	t := tableapi.New(nArr, nRec)
 	L.TrackAlloc(t.EstimateBytes())
 	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
+
+	// Periodic GC: fire __gc finalizers during tight allocation loops.
+	ls := L.ls()
+	if g := ls.Global; g.GCHasFinalizers {
+		g.GCAllocCount++
+		n := g.GCAllocCount
+		if n%10 == 0 {
+			L.DrainGCFinalizers() // cheap: just drain queue
+		}
+		if n%100 == 0 {
+			// Clear stale stack slots above Top before GC
+			for i := ls.Top; i < len(ls.Stack); i++ {
+				ls.Stack[i].Val = objectapi.Nil
+			}
+			runtime.GC()
+			runtime.Gosched()
+			L.DrainGCFinalizers()
+		}
+	}
 }
 
 // NewTable pushes a new empty table.
@@ -801,6 +853,7 @@ func (L *State) SetMetatable(idx int) {
 			tmName := g.TMNames[metamethodapi.TM_GC]
 			gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
 			if !gcTM.IsNil() {
+				g.GCHasFinalizers = true // enable periodic GC in allocation loops
 				runtime.SetFinalizer(tbl, func(t *tableapi.Table) {
 					g.GCFinalizerMu.Lock()
 					defer g.GCFinalizerMu.Unlock()

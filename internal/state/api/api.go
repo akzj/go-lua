@@ -217,6 +217,26 @@ type GlobalState struct {
 	// Monotonically increasing — Go's GC handles actual freeing.
 	GCTotalBytes int64
 
+	// GCAllocCount counts table allocations since the last runtime.GC() call.
+	// Used to trigger periodic GC so that __gc finalizers fire during tight
+	// allocation loops (Go's GC doesn't fire on every allocation like C Lua's).
+	GCAllocCount int64
+
+	// GCHasFinalizers is set to true when any __gc finalizer has been
+	// registered via runtime.SetFinalizer. The periodic GC check is
+	// skipped entirely when false, making the common case zero-cost.
+	GCHasFinalizers bool
+
+	// GCStepFn is set by the API layer to drain GC finalizers.
+	// The VM calls this periodically during allocation-heavy loops.
+	// Signature: func(L *LuaState) — runs runtime.GC + DrainGCFinalizers.
+	GCStepFn func(L *LuaState)
+
+	// GCDrainFn is set by the API layer to drain the finalizer queue only
+	// (no runtime.GC call). Cheap to call frequently.
+	// Signature: func(L *LuaState) — just DrainGCFinalizers.
+	GCDrainFn func(L *LuaState)
+
 	// __gc finalizer support: tables/userdata with __gc metamethod are
 	// enqueued here by Go's runtime.SetFinalizer callback, then drained
 	// synchronously by collectgarbage("collect").
