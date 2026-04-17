@@ -404,8 +404,8 @@ func debugGetinfo(L *luaapi.State) int {
 func debugGetupvalue(L *luaapi.State) int {
 	L.CheckType(1, objectapi.TypeFunction)
 	n := int(L.CheckInteger(2))
-	name := L.GetUpvalue(1, n)
-	if name == "" {
+	name, ok := L.GetUpvalue(1, n)
+	if !ok {
 		return 0 // no results when upvalue doesn't exist (matches C Lua)
 	}
 	L.PushString(name) // push name
@@ -420,8 +420,8 @@ func debugSetupvalue(L *luaapi.State) int {
 	n := int(L.CheckInteger(2))
 	// SetUpvalue pops the value from the top of the stack
 	L.PushValue(3) // push the value to top for SetUpvalue to consume
-	name := L.SetUpvalue(1, n)
-	if name == "" {
+	name, ok := L.SetUpvalue(1, n)
+	if !ok {
 		return 0 // no results when upvalue doesn't exist
 	}
 	L.PushString(name)

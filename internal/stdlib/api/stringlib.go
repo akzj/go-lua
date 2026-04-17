@@ -1259,9 +1259,13 @@ func str_gmatch(L *luaapi.State) int {
 		return 0
 	}
 
-	L.PushCFunction(func(L *luaapi.State) int {
+	// Push as CClosure with 1 upvalue (the source string) so that
+	// debug.getupvalue sees it as a C closure (upvalues named "").
+	// C Lua's gmatch pushes a CClosure with upvalues for state.
+	L.PushString(s)
+	L.PushCClosure(func(L *luaapi.State) int {
 		return iter(L)
-	})
+	}, 1)
 	return 1
 }
 
