@@ -28,13 +28,15 @@ func OpenIO(L *luaapi.State) int {
 	L.NewMetatable("FILE*") // creates/fetches registry["FILE*"]
 	L.PushString("FILE*")
 	L.SetField(-2, "__name")
-	// __gc stub
+	// __gc stub — checks arg is FILE* userdata (mirrors luaopen_io's __gc)
 	L.PushCFunction(func(L *luaapi.State) int {
+		L.CheckUdata(1, "FILE*")
 		return 0
 	})
 	L.SetField(-2, "__gc")
 	// __close stub
 	L.PushCFunction(func(L *luaapi.State) int {
+		L.CheckUdata(1, "FILE*")
 		return 0
 	})
 	L.SetField(-2, "__close")
