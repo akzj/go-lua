@@ -324,12 +324,8 @@ func fClose(L *luaapi.State) int {
 
 // __gc / __close metamethod
 func fGC(L *luaapi.State) int {
-	ud := L.GetUserdataObj(1)
-	if ud == nil {
-		return 0
-	}
-	s, ok := ud.Data.(*ioStream)
-	if !ok || s.isClosed() {
+	s := toStream(L, 1) // validates argument is FILE* userdata
+	if s.isClosed() {
 		return 0
 	}
 	// Close the file, ignoring errors
