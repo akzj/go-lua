@@ -4,6 +4,41 @@
 // GC object types and raw equality comparison.
 package api
 
+import "unsafe"
+
+// ---------------------------------------------------------------------------
+// Light C function identity
+//
+// Go func values created by the same function literal share the same code
+// entry point, so reflect.ValueOf(fn).Pointer() returns the same address
+// for all of them. However each closure instance has a unique data pointer
+// in the interface representation. We extract that data word using unsafe
+// to get a truly unique identity for each light C function.
+// ---------------------------------------------------------------------------
+
+// eface mirrors the runtime layout of an empty interface (any).
+type eface struct {
+	_type uintptr
+	data  uintptr
+}
+
+// FuncDataPtr returns the interface data-word for a func value stored in
+// an any. This is unique per closure instance even when multiple closures
+// share the same function literal. Returns 0 for nil.
+func FuncDataPtr(val any) uintptr {
+	if val == nil {
+		return 0
+	}
+	ef := (*eface)(unsafe.Pointer(&val))
+	return ef.data
+}
+
+// LightCFuncEqual returns true if two light C function values (stored as
+// any) refer to the same closure instance.
+func LightCFuncEqual(a, b any) bool {
+	return FuncDataPtr(a) == FuncDataPtr(b)
+}
+
 // ---------------------------------------------------------------------------
 // GC-type constructors
 // These use 'any' to avoid import cycles with table/closure/state packages.
@@ -186,6 +221,8 @@ func RawEqual(v1, v2 TValue) bool {
 		return v1.Val.(*LuaString).Data == v2.Val.(*LuaString).Data
 	case TagLightUserdata:
 		return v1.Val == v2.Val
+	case TagLightCFunc:
+		return LightCFuncEqual(v1.Val, v2.Val)
 	default:
 		// Tables, closures, userdata, threads: pointer identity
 		return v1.Val == v2.Val
