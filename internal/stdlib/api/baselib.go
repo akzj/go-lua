@@ -669,6 +669,14 @@ func luaB_collectgarbage(L *luaapi.State) int {
 	case 5: // isrunning
 		L.PushBoolean(true)
 		return 1
+	case 6: // generational
+		prev := L.SetGCMode("generational")
+		L.PushString(prev)
+		return 1
+	case 7: // incremental
+		prev := L.SetGCMode("incremental")
+		L.PushString(prev)
+		return 1
 	default:
 		L.PushInteger(0)
 		return 1
