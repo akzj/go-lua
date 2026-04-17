@@ -17,6 +17,12 @@ import objectapi "github.com/akzj/go-lua/internal/object/api"
 // Table — the core Lua data structure
 // ---------------------------------------------------------------------------
 
+// Weak table mode constants.
+const (
+	WeakKey   byte = 1 // bit 0: weak keys
+	WeakValue byte = 2 // bit 1: weak values
+)
+
 // Table is a Lua table with hybrid array + hash storage.
 type Table struct {
 	Array     []objectapi.TValue // array part: indices 0..len-1 map to Lua keys 1..len
@@ -25,7 +31,19 @@ type Table struct {
 	LastFree  int                // index for free-slot backward scan
 	Flags     byte               // metamethod absence cache (bit p = TM p absent)
 	Metatable *Table             // metatable or nil
+
+	// Weak table support (__mode metafield)
+	WeakMode      byte           // bit 0 = weak keys, bit 1 = weak values
+	WeakArrayRefs []any          // parallel to Array: weak.Pointer[T] for weak values (nil = not weak)
+	WeakKeyRefs   map[int]any    // node index → weak.Pointer[T] for weak keys
+	WeakValRefs   map[int]any    // node index → weak.Pointer[T] for weak values
 }
+
+// HasWeakKeys returns true if this table has weak keys (__mode contains "k").
+func (t *Table) HasWeakKeys() bool { return t.WeakMode&WeakKey != 0 }
+
+// HasWeakValues returns true if this table has weak values (__mode contains "v").
+func (t *Table) HasWeakValues() bool { return t.WeakMode&WeakValue != 0 }
 
 // Node is a hash table entry (key + value + chain offset).
 type Node struct {
