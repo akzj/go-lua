@@ -1291,6 +1291,43 @@ func (L *State) SetGCMode(mode string) string {
 	return prev
 }
 
+// gcParamDefaults are the C Lua 5.5.1 default GC parameter values.
+// Reference: lgc.h — LUAI_GCPAUSE=200, LUAI_GCMUL=200, LUAI_GCSTEPSIZE=8
+var gcParamDefaults = map[string]int64{
+	"pause":      200,
+	"stepmul":    200,
+	"stepsize":   8,
+	"minormul":   25,
+	"majorminor": 50,
+	"minormajor": 100,
+}
+
+// GetGCParam returns the current value of a GC parameter.
+// If the parameter was never set, returns the C Lua default.
+func (L *State) GetGCParam(name string) int64 {
+	g := L.ls().Global
+	if g.GCParams != nil {
+		if v, ok := g.GCParams[name]; ok {
+			return v
+		}
+	}
+	if def, ok := gcParamDefaults[name]; ok {
+		return def
+	}
+	return 0
+}
+
+// SetGCParam sets a GC parameter and returns the previous value.
+func (L *State) SetGCParam(name string, value int64) int64 {
+	g := L.ls().Global
+	prev := L.GetGCParam(name)
+	if g.GCParams == nil {
+		g.GCParams = make(map[string]int64)
+	}
+	g.GCParams[name] = value
+	return prev
+}
+
 // ---------------------------------------------------------------------------
 // Auxiliary functions (luaL_*)
 // ---------------------------------------------------------------------------
