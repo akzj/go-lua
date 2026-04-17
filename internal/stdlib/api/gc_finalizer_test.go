@@ -79,3 +79,35 @@ assert(_G.gc_after_error == true, "expected __gc to fire even after error in ano
 		t.Fatalf("gc finalizer error swallowed test failed: %v", err)
 	}
 }
+
+// TestGCFinalizerManyErrors is a stress test: many __gc finalizers that all
+// error. Without proper stack cleanup (SetTop after PCall), this would overflow
+// the Lua stack because each failed PCall leaves an error object.
+func TestGCFinalizerManyErrors(t *testing.T) {
+	L := luaapi.NewState()
+	OpenAll(L)
+
+	script := `
+_G.gc_ok = false
+-- Create 100 tables whose __gc all error
+for i = 1, 100 do
+    local t = setmetatable({}, {__gc = function(self)
+        error("gc error " .. i)
+    end})
+end
+-- Create one more that succeeds, to prove the stack is not corrupted
+local sentinel = setmetatable({}, {__gc = function(self)
+    _G.gc_ok = true
+end})
+sentinel = nil
+-- Multiple cycles to collect everything
+for i = 1, 5 do
+    collectgarbage("collect")
+end
+assert(_G.gc_ok == true, "expected sentinel __gc to fire after 100 erroring __gc calls")
+`
+	err := L.DoString(script)
+	if err != nil {
+		t.Fatalf("gc finalizer many errors test failed: %v", err)
+	}
+}
