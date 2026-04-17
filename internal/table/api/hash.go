@@ -305,8 +305,10 @@ func insertKey(t *Table, key obj.TValue, value obj.TValue) bool {
 	mp := mainPosition(t, key)
 	nd := &t.Nodes[mp]
 
-	// Check if main position is occupied (has a non-nil key, live or dead)
-	if !keyIsNil(nd) {
+	// Check if main position is taken.
+	// Matches C Lua: !isempty(gval(mp)) — check VALUE, not key.
+	// A dead key (value nil) means the slot is available for reuse.
+	if !nodeIsEmpty(nd) {
 		f := getFreePos(t)
 		if f < 0 {
 			return false
