@@ -1388,6 +1388,12 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		ar.Source = "=[C]"
 		ar.ShortSrc = "[C]"
 		ar.What = "C"
+		ar.IsVararg = true // All C functions are vararg
+		ar.NParams = 0
+		if fval.Tt == objectapi.TagCClosure {
+			cc := fval.Val.(*closureapi.CClosure)
+			ar.NUps = len(cc.UpVals)
+		}
 	}
 	return ar, true
 }
@@ -1571,7 +1577,7 @@ func (L *State) HasCallFrames() bool {
 func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDefined, lastLine, nups, nparams int, isVararg, ok bool) {
 	v := L.index2val(idx)
 	if v == nil {
-		return "[C]", "[C]", "C", 0, 0, 0, 0, false, false
+		return "=[C]", "[C]", "C", 0, 0, 0, 0, true, false
 	}
 	if v.Tt == objectapi.TagLuaClosure {
 		cl := v.Val.(*closureapi.LClosure)
@@ -1588,7 +1594,12 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 			return src, shortSrcStr(src), w, p.LineDefined, p.LastLine, len(cl.UpVals), int(p.NumParams), p.IsVararg(), true
 		}
 	}
-	return "[C]", "[C]", "C", 0, 0, 0, 0, false, false
+	if v.Tt == objectapi.TagCClosure {
+		cc := v.Val.(*closureapi.CClosure)
+		return "=[C]", "[C]", "C", 0, 0, len(cc.UpVals), 0, true, false
+	}
+	// TagLightCFunc or other C function types
+	return "=[C]", "[C]", "C", 0, 0, 0, 0, true, false
 }
 
 // shortSrcStr creates a short source name (exported for use by stdlib).
