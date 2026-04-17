@@ -854,14 +854,17 @@ func ioReadline(L *luaapi.State) int {
 	}
 
 	n := int(toIntegerFromIdx(L, luaapi.UpvalueIndex(2)))
-	if n == 0 {
-		n = 1 // default: read one line
-	}
 
 	L.SetTop(1)
-	// Push format arguments
-	for i := 1; i <= n; i++ {
-		L.PushValue(luaapi.UpvalueIndex(3 + i))
+	if n == 0 {
+		// Default: read one line ("l" format)
+		L.PushString("l")
+		n = 1
+	} else {
+		// Push format arguments from upvalues
+		for i := 1; i <= n; i++ {
+			L.PushValue(luaapi.UpvalueIndex(3 + i))
+		}
 	}
 
 	nResults := gRead(L, s.f, 2)
