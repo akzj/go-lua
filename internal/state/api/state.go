@@ -328,6 +328,13 @@ func NewThread(L *LuaState) *LuaState {
 // CloseState cleans up a Lua state. In Go, most cleanup is handled by GC,
 // but we nil out references to help the collector.
 func CloseState(L *LuaState) {
+	// Prevent Go finalizer callbacks from enqueuing after close
+	if L.Global != nil {
+		L.Global.GCFinalizerMu.Lock()
+		L.Global.GCClosed = true
+		L.Global.GCFinalizerMu.Unlock()
+	}
+
 	// Reset CI chain
 	L.CI = &L.BaseCI
 	FreeCI(L)
