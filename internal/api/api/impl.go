@@ -398,14 +398,15 @@ func (L *State) Type(idx int) objectapi.Type {
 // TypeName returns the name of the given type.
 func (L *State) TypeName(tp objectapi.Type) string {
 	names := [...]string{
-		objectapi.TypeNil:      "nil",
-		objectapi.TypeBoolean:  "boolean",
-		objectapi.TypeNumber:   "number",
-		objectapi.TypeString:   "string",
-		objectapi.TypeTable:    "table",
-		objectapi.TypeFunction: "function",
-		objectapi.TypeUserdata: "userdata",
-		objectapi.TypeThread:   "thread",
+		objectapi.TypeNil:           "nil",
+		objectapi.TypeBoolean:       "boolean",
+		objectapi.TypeLightUserdata: "userdata",
+		objectapi.TypeNumber:        "number",
+		objectapi.TypeString:        "string",
+		objectapi.TypeTable:         "table",
+		objectapi.TypeFunction:      "function",
+		objectapi.TypeUserdata:      "userdata",
+		objectapi.TypeThread:        "thread",
 	}
 	if tp == TypeNone {
 		return "no value"
@@ -815,6 +816,12 @@ func (L *State) GetMetatable(idx int) bool {
 	switch v.Tt {
 	case objectapi.TagTable:
 		mt = v.Val.(*tableapi.Table).GetMetatable()
+	case objectapi.TagUserdata:
+		if ud, ok := v.Val.(*objectapi.Userdata); ok {
+			if tbl, ok := ud.MetaTable.(*tableapi.Table); ok {
+				mt = tbl
+			}
+		}
 	default:
 		// Check global type metatables
 		ls := L.ls()
@@ -1322,9 +1329,18 @@ func (L *State) ArgError(arg int, extraMsg string) int {
 }
 
 // TypeError raises a type error for argument arg.
+// Mirrors: luaL_typeerror in lauxlib.c — checks __name, then light userdata, then standard name.
 func (L *State) TypeError(arg int, tname string) int {
-	got := L.TypeName(L.Type(arg))
-	msg := fmt.Sprintf("%s expected, got %s", tname, got)
+	var typearg string
+	if L.GetMetafield(arg, "__name") {
+		typearg, _ = L.ToString(-1)
+		L.Pop(1)
+	} else if L.Type(arg) == objectapi.TypeLightUserdata {
+		typearg = "light userdata"
+	} else {
+		typearg = L.TypeName(L.Type(arg))
+	}
+	msg := fmt.Sprintf("%s expected, got %s", tname, typearg)
 	return L.ArgError(arg, msg)
 }
 
