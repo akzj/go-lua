@@ -2261,6 +2261,42 @@ func (L *State) NewMetatable(tname string) bool {
 	return true
 }
 
+// TestUdata checks if the value at idx is a userdata with metatable matching registry[tname].
+// Returns true if it matches, false otherwise. Does not modify the stack.
+// Mirrors: luaL_testudata in lauxlib.c
+func (L *State) TestUdata(idx int, tname string) bool {
+	v := L.index2val(idx)
+	if v.Tt != objectapi.TagUserdata {
+		return false
+	}
+	ud, ok := v.Val.(*objectapi.Userdata)
+	if !ok || ud.MetaTable == nil {
+		return false
+	}
+	// Get the expected metatable from registry
+	L.GetField(RegistryIndex, tname)
+	expectedMT := L.index2val(-1)
+	L.Pop(1)
+	// Compare metatable pointers
+	if expectedMT.Tt != objectapi.TagTable {
+		return false
+	}
+	mt, ok := ud.MetaTable.(*tableapi.Table)
+	if !ok {
+		return false
+	}
+	return mt == expectedMT.Val.(*tableapi.Table)
+}
+
+// CheckUdata checks that the value at idx is a userdata with metatable matching registry[tname].
+// Raises a type error if not. Mirrors: luaL_checkudata in lauxlib.c
+func (L *State) CheckUdata(idx int, tname string) {
+	if !L.TestUdata(idx, tname) {
+		L.TypeError(idx, tname)
+	}
+}
+
+
 
 // GetLClosure returns the LClosure at the given stack index, or nil if not a Lua closure.
 func (L *State) GetLClosure(idx int) *closureapi.LClosure {
