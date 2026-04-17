@@ -499,12 +499,27 @@ func luaB_xpcall(L *luaapi.State) int {
 	return finishPcallCont(ls, status, 2)
 }
 
+// isValidLoadMode checks if a load mode string is valid ("b", "t", "bt", "tb").
+func isValidLoadMode(mode string) bool {
+	for _, c := range mode {
+		if c != 'b' && c != 't' {
+			return false
+		}
+	}
+	return len(mode) > 0 && len(mode) <= 2
+}
+
 func luaB_load(L *luaapi.State) int {
 	s, ok := L.ToString(1)
 	mode := L.OptString(3, "bt")
 	env := 0
 	if !L.IsNone(4) {
 		env = 4
+	}
+	// Validate mode: C Lua's load checks mode via luaL_argcheck
+	if !isValidLoadMode(mode) {
+		L.ArgError(3, "invalid mode")
+		return 0
 	}
 	var status int
 	if ok { // loading a string
@@ -569,13 +584,48 @@ func loadAux(L *luaapi.State, status, env int) int {
 }
 
 func luaB_dofile(L *luaapi.State) int {
-	L.Errorf("dofile not yet supported")
-	return 0
+	fname := L.OptString(1, "")
+	L.SetTop(1)
+	if luaB_loadfileImpl(L, fname) != 1 {
+		// loadfile returned (nil, errmsg) — error
+		L.Error()
+		return 0
+	}
+	// Call the loaded chunk, passing through all results
+	L.Call(0, luaapi.MultiRet)
+	return L.GetTop() - 1
 }
 
 func luaB_loadfile(L *luaapi.State) int {
-	L.Errorf("loadfile not yet supported")
-	return 0
+	fname := L.OptString(1, "")
+	return luaB_loadfileImpl(L, fname)
+}
+
+// luaB_loadfileImpl implements loadfile(filename [, mode [, env]])
+func luaB_loadfileImpl(L *luaapi.State, fname string) int {
+	mode := L.OptString(2, "bt")
+	env := 0
+	if !L.IsNone(3) {
+		env = 3
+	}
+
+	if fname == "" {
+		// Read from stdin — not commonly needed for tests
+		L.PushFail()
+		L.PushString("loadfile from stdin not supported")
+		return 2
+	}
+
+	data, err := os.ReadFile(fname)
+	if err != nil {
+		L.PushFail()
+		L.PushString(err.Error())
+		return 2
+	}
+
+	chunkname := "@" + fname
+	status := L.Load(string(data), chunkname, mode)
+	return loadAux(L, status, env)
 }
 
 func luaB_collectgarbage(L *luaapi.State) int {
