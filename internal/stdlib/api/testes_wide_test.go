@@ -106,6 +106,15 @@ func TestTestesWide(t *testing.T) {
 					"assert(a == 20 and b == \"\\0\\0\\0\" and c == nil)\nassert(os.remove(file))\n\n\n-- 'loadfile' with 'env'\n",
 					"assert(a == 20 and b == \"\\0\\0\\0\" and c == nil)\nassert(os.remove(file))\nend  -- binary chunk guard\n\n\n-- 'loadfile' with 'env'\n",
 					1)
+				// Patch 4: wrap setvbuf buffer tests in _port guard (Go has no C stdio buffering)
+				src = strings.Replace(src,
+					"-- testing buffers\n",
+					"if not _port then  -- skip: Go has no C stdio buffering\n-- testing buffers\n",
+					1)
+				src = strings.Replace(src,
+					"  f:close(); fr:close()\n  assert(os.remove(file))\nend\n\n\nif T",
+					"  f:close(); fr:close()\n  assert(os.remove(file))\nend\nend  -- buffer guard\n\n\nif T",
+					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)
