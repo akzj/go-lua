@@ -574,10 +574,14 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 }
 
 // moveResults moves nres results to res, adjusting for wanted count.
+// After moving results, clears stale stack slots between the new Top and old Top
+// so Go's GC can collect objects that are no longer reachable from Lua.
 func moveResults(L *stateapi.LuaState, res int, nres int, wanted int) {
+	oldTop := L.Top
 	switch wanted {
 	case 0: // no values needed
 		L.Top = res
+		clearStackSlots(L, res, oldTop)
 		return
 	case 1: // one value needed
 		if nres == 0 {
@@ -586,13 +590,27 @@ func moveResults(L *stateapi.LuaState, res int, nres int, wanted int) {
 			L.Stack[res].Val = L.Stack[L.Top-nres].Val
 		}
 		L.Top = res + 1
+		clearStackSlots(L, res+1, oldTop)
 		return
 	case stateapi.MultiRet: // all results
 		genMoveResults(L, res, nres, nres)
+		// genMoveResults sets Top = res+nres, clear above that
+		clearStackSlots(L, L.Top, oldTop)
 		return
 	default: // specific number of results
 		genMoveResults(L, res, nres, wanted)
+		clearStackSlots(L, L.Top, oldTop)
 		return
+	}
+}
+
+// clearStackSlots nils out stack slots in [from, to) so Go's GC can
+// collect objects that are no longer reachable from Lua. This is critical
+// because Lua "pops" values by decrementing Top without clearing slots,
+// which leaves Go pointers alive and prevents runtime.SetFinalizer from firing.
+func clearStackSlots(L *stateapi.LuaState, from, to int) {
+	for i := from; i < to; i++ {
+		L.Stack[i].Val = objectapi.Nil
 	}
 }
 
