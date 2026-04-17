@@ -117,26 +117,13 @@ func (L *State) wrapCFunction(f CFunction) stateapi.CFunction {
 	}
 }
 
-// cfuncCache maps CFunction code pointers to their wrapped stateapi.CFunction.
-// This ensures that the same Go function always produces the same wrapper,
-// preserving identity semantics (e.g., ipairs{} == ipairs{} must be true).
-var cfuncCache = map[uintptr]stateapi.CFunction{}
-
 // wrapCFunctionStatic creates an adapter without capturing a specific State.
 // Each call creates a temporary State wrapper.
-// Results are cached by function code pointer so the same CFunction always
-// returns the same stateapi.CFunction (preserving equality/identity).
 func wrapCFunctionStatic(f CFunction) stateapi.CFunction {
-	key := reflect.ValueOf(f).Pointer()
-	if cached, ok := cfuncCache[key]; ok {
-		return cached
-	}
-	wrapped := func(ls *stateapi.LuaState) int {
+	return func(ls *stateapi.LuaState) int {
 		pub := &State{Internal: ls}
 		return f(pub)
 	}
-	cfuncCache[key] = wrapped
-	return wrapped
 }
 
 // ---------------------------------------------------------------------------
