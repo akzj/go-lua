@@ -421,15 +421,16 @@ func ioTmpfile(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func ioFlush(L *luaapi.State) int {
-	f := getIOFile(L, ioOutput)
-	err := f.Sync()
-	return pushFileResult(L, err == nil, "", err)
+	_ = getIOFile(L, ioOutput) // validate file is open
+	// Go's *os.File writes are unbuffered (no C stdio buffer to flush)
+	// so flush is effectively a no-op
+	return pushFileResult(L, true, "", nil)
 }
 
 func fFlush(L *luaapi.State) int {
-	f := toFile(L, 1)
-	err := f.Sync()
-	return pushFileResult(L, err == nil, "", err)
+	_ = toFile(L, 1) // validate file is open
+	// Go's *os.File writes are unbuffered — flush is a no-op
+	return pushFileResult(L, true, "", nil)
 }
 
 // ---------------------------------------------------------------------------
