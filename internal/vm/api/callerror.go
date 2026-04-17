@@ -96,7 +96,7 @@ func callErrorExtra(L *stateapi.LuaState, funcIdx int) string {
 // reg is the register index (relative to CI base) holding the offending value.
 // If reg < 0, no variable info is added.
 func RunTypeError(L *stateapi.LuaState, val objectapi.TValue, op string, reg int) {
-	typeName := objectapi.TypeNames[val.Type()]
+	typeName := mmapi.ObjTypeName(L.Global, val)
 	extra := ""
 	if reg >= 0 {
 		extra = VarInfo(L, reg)
@@ -108,7 +108,7 @@ func RunTypeError(L *stateapi.LuaState, val objectapi.TValue, op string, reg int
 // the current VM instruction to determine which register holds the offending value.
 // Mirrors: luaG_typeerror → varinfo in ldebug.c
 func RunTypeErrorByVal(L *stateapi.LuaState, val objectapi.TValue, op string) {
-	typeName := objectapi.TypeNames[val.Type()]
+	typeName := mmapi.ObjTypeName(L.Global, val)
 	extra := ""
 	if L.CI != nil && L.CI.IsLua() {
 		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closureapi.LClosure); ok && cl.Proto != nil {

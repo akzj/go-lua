@@ -485,10 +485,12 @@ func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) b
 			}
 		}
 		// Build comparison error message: "two <type> values" or "<type1> with <type2> values"
-		if l.Type() == r.Type() {
-			RunError(L, "attempt to compare two "+objectapi.TypeNames[l.Type()]+" values")
+		lt := mmapi.ObjTypeName(L.Global, l)
+		rt := mmapi.ObjTypeName(L.Global, r)
+		if lt == rt {
+			RunError(L, "attempt to compare two "+lt+" values")
 		} else {
-			RunError(L, "attempt to compare "+objectapi.TypeNames[l.Type()]+" with "+objectapi.TypeNames[r.Type()]+" values")
+			RunError(L, "attempt to compare "+lt+" with "+rt)
 		}
 	}
 	result := callTMRes(L, tm, l, r)
@@ -1130,6 +1132,13 @@ func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 // For loop helpers
 // ---------------------------------------------------------------------------
 
+// forerror raises a for-loop type error matching C Lua's luaG_forerror:
+// "bad 'for' <what> (number expected, got <typename>)"
+func forerror(L *stateapi.LuaState, val objectapi.TValue, what string) {
+	RunError(L, "bad 'for' "+what+" (number expected, got "+mmapi.ObjTypeName(L.Global, val)+")")
+}
+
+
 // forLimit implements C Lua's forlimit: convert a for-loop limit to integer
 // using floor (step>0) or ceil (step<0) rounding. Returns true to skip the loop.
 // This matches lvm.c forlimit exactly.
@@ -1141,7 +1150,7 @@ func forLimit(L *stateapi.LuaState, init int64, plimit objectapi.TValue, limit *
 		// Not coercible to integer with floor/ceil rounding
 		fl, ok := ToNumber(plimit)
 		if !ok {
-			RunError(L, "'for' limit must be a number")
+			forerror(L, plimit, "limit")
 		}
 		// fl is a float out of integer bounds
 		if fl > 0 { // positive, too large
@@ -1245,13 +1254,13 @@ func ForPrep(L *stateapi.LuaState, ra int) bool {
 		flimit, ok2 := ToNumber(plimit)
 		fstep, ok3 := ToNumber(pstep)
 		if !ok1 {
-			RunError(L, "'for' initial value must be a number")
+			forerror(L, pinit, "initial value")
 		}
 		if !ok2 {
-			RunError(L, "'for' limit must be a number")
+			forerror(L, plimit, "limit")
 		}
 		if !ok3 {
-			RunError(L, "'for' step must be a number")
+			forerror(L, pstep, "step")
 		}
 		if fstep == 0 {
 			RunError(L, "'for' step is zero")
