@@ -112,14 +112,19 @@ func debugGetmetatable(L *luaapi.State) int {
 }
 
 // debug.traceback([thread,] [message [, level]]) — returns a traceback string
-// Mirrors: luaB_traceback in ldblib.c (simplified)
+// Mirrors: luaB_traceback in ldblib.c
 func debugTraceback(L *luaapi.State) int {
-	// Parse arguments
+	// Handle optional thread argument (mirrors getthread in ldblib.c)
 	arg := 1
-	// Skip thread argument if present (we don't support coroutine tracing)
+	L1 := L // target state for traceback
+	if L.Type(1) == objectapi.TypeThread {
+		L1 = L.ToThread(1)
+		arg = 2
+	}
+
 	msg, hasMsg := L.ToString(arg)
 	level := 1
-	if L.Type(arg) == 3 { // number as first arg = level
+	if L.Type(arg) == objectapi.TypeNumber { // number as first arg = level
 		level = int(L.CheckInteger(arg))
 		hasMsg = false
 	} else {
@@ -133,6 +138,11 @@ func debugTraceback(L *luaapi.State) int {
 		}
 	}
 
+	// If tracing the same thread, add 1 to skip this C function frame
+	if L1 == L {
+		// level already relative to caller
+	}
+
 	// Build traceback
 	var buf strings.Builder
 	if hasMsg {
@@ -142,11 +152,11 @@ func debugTraceback(L *luaapi.State) int {
 	buf.WriteString("stack traceback:")
 
 	for level < 200 { // safety limit
-		ar, ok := L.GetStack(level)
+		ar, ok := L1.GetStack(level)
 		if !ok {
 			break
 		}
-		L.GetInfo("Slnt", ar)
+		L1.GetInfo("Slnt", ar)
 		buf.WriteString("\n\t")
 		buf.WriteString(ar.ShortSrc)
 		if ar.CurrentLine > 0 {
@@ -159,32 +169,32 @@ func debugTraceback(L *luaapi.State) int {
 			buf.WriteString("main chunk")
 		} else if ar.What == "C" {
 			// Try to get function name for C functions
-			L.GetInfo("n", ar)
+			L1.GetInfo("n", ar)
 			if ar.Name != "" {
 				buf.WriteString(fmt.Sprintf("function '%s'", ar.Name))
 			} else {
 				// Try to find function name by searching globals
 				// Mirrors: pushglobalfuncname in lauxlib.c
 				name := ""
-				if L.PushFuncFromDebug(ar) {
-					funcIdx := L.GetTop()
-					funcPtr := L.ToPointer(funcIdx)
+				if L1.PushFuncFromDebug(ar) {
+					funcIdx := L1.GetTop()
+					funcPtr := L1.ToPointer(funcIdx)
 					// Search _G for this function
-					L.PushGlobalTable()
-					L.PushNil()
-					for L.Next(-2) {
+					L1.PushGlobalTable()
+					L1.PushNil()
+					for L1.Next(-2) {
 						// Compare using ToPointer for safe function comparison
-						if L.ToPointer(-1) == funcPtr && funcPtr != "" {
-							if s, ok := L.ToString(-2); ok {
+						if L1.ToPointer(-1) == funcPtr && funcPtr != "" {
+							if s, ok := L1.ToString(-2); ok {
 								name = s
 							}
-							L.Pop(2) // pop key and value
+							L1.Pop(2) // pop key and value
 							break
 						}
-						L.Pop(1) // pop value, keep key
+						L1.Pop(1) // pop value, keep key
 					}
-					L.Pop(1) // pop _G
-					L.Pop(1) // pop function
+					L1.Pop(1) // pop _G
+					L1.Pop(1) // pop function
 				}
 				if name != "" {
 					buf.WriteString(fmt.Sprintf("function '%s'", name))
@@ -194,7 +204,7 @@ func debugTraceback(L *luaapi.State) int {
 			}
 		} else {
 			// Try to get function name
-			L.GetInfo("n", ar)
+			L1.GetInfo("n", ar)
 			if ar.Name != "" {
 				if ar.NameWhat == "metamethod" {
 					buf.WriteString(fmt.Sprintf("metamethod '%s'", ar.Name))
