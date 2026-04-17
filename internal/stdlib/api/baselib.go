@@ -584,6 +584,8 @@ func luaB_collectgarbage(L *luaapi.State) int {
 	switch o {
 	case 2: // collect
 		runtime.GC()
+		runtime.GC() // second pass ensures finalizers from first GC have run
+		L.DrainGCFinalizers()
 		L.PushInteger(0)
 		return 1
 	case 3: // count
@@ -592,6 +594,8 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		return 1
 	case 4: // step
 		runtime.GC()
+		runtime.GC()
+		L.DrainGCFinalizers()
 		L.PushBoolean(true)
 		return 1
 	case 5: // isrunning
