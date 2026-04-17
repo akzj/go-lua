@@ -15,7 +15,10 @@ import (
 // funcNameFromCode examines the instruction at pc to determine the function name.
 // Returns (kind, name) or ("", "") if unknown.
 // Mirrors: funcnamefromcode in ldebug.c
-func funcNameFromCode(L *stateapi.LuaState, p *objectapi.Proto, pc int) (string, string) {
+// FuncNameFromCode examines the instruction at pc to determine the function name.
+// Returns (kind, name) or ("", "") if unknown.
+// Mirrors: funcnamefromcode in ldebug.c
+func FuncNameFromCode(L *stateapi.LuaState, p *objectapi.Proto, pc int) (string, string) {
 	if pc < 0 || pc >= len(p.Code) {
 		return "", ""
 	}
@@ -70,7 +73,7 @@ func callErrorExtra(L *stateapi.LuaState, funcIdx int) string {
 	if L.CI != nil && L.CI.IsLua() {
 		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closureapi.LClosure); ok && cl.Proto != nil {
 			pc := L.CI.SavedPC - 1 // -1 to get the calling instruction
-			kind, name := funcNameFromCode(L, cl.Proto, pc)
+			kind, name := FuncNameFromCode(L, cl.Proto, pc)
 			if kind != "" {
 				return " (" + kind + " '" + name + "')"
 			}

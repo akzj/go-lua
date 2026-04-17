@@ -349,11 +349,32 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 
 // isEnvReg checks whether register 'reg' at instruction 'pc' holds the _ENV table.
 // Mirrors: isEnv in ldebug.c (for the register case).
+// isEnvReg checks whether register 'reg' at instruction 'pc' holds the _ENV table.
+// Mirrors: isEnv in ldebug.c (for the register case).
+// Only checks local variables and upvalues — does NOT recurse into table accesses.
 func isEnvReg(p *objectapi.Proto, pc int, reg int) bool {
-	kind, name := BasicGetObjName(p, pc, reg)
-	// Must be a local or upvalue named "_ENV"
-	if (kind == "local" || kind == "upvalue") && name == "_ENV" {
+	// First try local variable name
+	if name := locVarName(p, pc, reg); name == "_ENV" {
 		return true
+	}
+	// Then try to find the register's source via findSetRegForward
+	setpc := findSetRegForward(p, pc, reg)
+	if setpc < 0 {
+		return false
+	}
+	inst := p.Code[setpc]
+	op := opcodeapi.GetOpCode(inst)
+	switch op {
+	case opcodeapi.OP_GETUPVAL:
+		b := opcodeapi.GetArgB(inst)
+		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil {
+			return p.Upvalues[b].Name.Data == "_ENV"
+		}
+	case opcodeapi.OP_MOVE:
+		b := opcodeapi.GetArgB(inst)
+		if b < opcodeapi.GetArgA(inst) {
+			return isEnvReg(p, setpc, b)
+		}
 	}
 	return false
 }
