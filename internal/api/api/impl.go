@@ -13,7 +13,7 @@ import (
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
 	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode/api"
+
 	parseapi "github.com/akzj/go-lua/internal/parse/api"
 	stateapi "github.com/akzj/go-lua/internal/state/api"
 	tableapi "github.com/akzj/go-lua/internal/table/api"
@@ -1405,7 +1405,11 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 	if ar == nil {
 		return false
 	}
+	// Use the thread state from the debug info if available (for coroutine inspection)
 	ls := L.ls()
+	if ts, ok := ar.ThreadState.(*stateapi.LuaState); ok {
+		ls = ts
+	}
 	for i := 0; i < len(what); i++ {
 		switch what[i] {
 		case 'n':
@@ -1447,15 +1451,12 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			if pc < 0 || pc >= len(p.Code) {
 				break
 			}
-			inst := p.Code[pc]
-			op := opcodeapi.GetOpCode(inst)
-			if op == opcodeapi.OP_CALL || op == opcodeapi.OP_TAILCALL {
-				reg := int(opcodeapi.GetArgA(inst))
-				kind, name := vmapi.BasicGetObjName(p, pc, reg)
-				if name != "" {
-					ar.Name = name
-					ar.NameWhat = kind
-				}
+			// Use funcNameFromCode which handles all opcodes:
+			// OP_CALL, OP_TAILCALL, OP_TFORCALL, OP_MMBIN, OP_GETTABUP, etc.
+			kind, name := vmapi.FuncNameFromCode(ls, p, pc)
+			if name != "" {
+				ar.Name = name
+				ar.NameWhat = kind
 			}
 		case 'S', 'l', 'u', 'f':
 			// Already filled by GetStack
