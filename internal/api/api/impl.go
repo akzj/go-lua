@@ -1352,7 +1352,7 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 	for i := 0; i < level && ci != nil; i++ {
 		ci = ci.Prev
 	}
-	if ci == nil {
+	if ci == nil || ci == &ls.BaseCI {
 		return nil, false
 	}
 	ar := &DebugInfo{}

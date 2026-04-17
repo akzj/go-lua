@@ -123,7 +123,12 @@ func debugTraceback(L *luaapi.State) int {
 	}
 
 	msg, hasMsg := L.ToString(arg)
-	level := 1
+	// Default level: 1 for same thread, 0 for different thread (matches C Lua)
+	defaultLevel := 1
+	if L1 != L {
+		defaultLevel = 0
+	}
+	level := defaultLevel
 	if L.Type(arg) == objectapi.TypeNumber { // number as first arg = level
 		level = int(L.CheckInteger(arg))
 		hasMsg = false
@@ -134,13 +139,8 @@ func debugTraceback(L *luaapi.State) int {
 			return 1
 		}
 		if L.GetTop() >= arg+1 {
-			level = int(L.OptInteger(arg+1, 1))
+			level = int(L.OptInteger(arg+1, int64(defaultLevel)))
 		}
-	}
-
-	// If tracing the same thread, add 1 to skip this C function frame
-	if L1 == L {
-		// level already relative to caller
 	}
 
 	// Build traceback
@@ -281,52 +281,60 @@ func pushActiveLines(L *luaapi.State, idx int) {
 // debug.getinfo([thread,] f [, what]) — returns debug info table
 // Mirrors: db_getinfo in ldblib.c
 func debugGetinfo(L *luaapi.State) int {
-	// Parse arguments: getinfo(level [, what])
+	// Handle optional thread argument (mirrors getthread in ldblib.c)
+	arg := 1
+	L1 := L // target state
+	if L.Type(1) == objectapi.TypeThread {
+		L1 = L.ToThread(1)
+		arg = 2
+	}
+
+	// Parse arguments: getinfo([thread,] level|func [, what])
 	var ar *luaapi.DebugInfo
 	var ok bool
 	what := "flnStu" // default: all options (matches C Lua)
 
-	if L.Type(1) == 3 { // number = stack level
-		level := int(L.CheckInteger(1))
-		if L.GetTop() >= 2 {
-			what = L.CheckString(2)
+	if L.Type(arg) == objectapi.TypeNumber { // number = stack level
+		level := int(L.CheckInteger(arg))
+		if L.GetTop() >= arg+1 {
+			what = L.CheckString(arg + 1)
 		}
 		// Validate: '>' is invalid when using stack level
 		if strings.Contains(what, ">") {
-			L.ArgError(2, "invalid option '>'")
+			L.ArgError(arg+1, "invalid option '>'")
 		}
 		// Validate option characters
 		for _, c := range what {
 			if !strings.ContainsRune("flnSrtupLa", c) {
-				L.ArgError(2, "invalid option")
+				L.ArgError(arg+1, "invalid option")
 			}
 		}
-		ar, ok = L.GetStack(level) // level passed directly (like C Lua)
+		ar, ok = L1.GetStack(level) // use L1 (target thread)
 		if !ok {
 			L.PushNil()
 			return 1
 		}
 	} else {
 		// function argument — inspect the function directly
-		L.CheckAny(1)
+		L.CheckAny(arg)
 		what = "flnStu" // default for function arg
-		if L.GetTop() >= 2 {
-			what = L.CheckString(2)
+		if L.GetTop() >= arg+1 {
+			what = L.CheckString(arg + 1)
 		}
 		// Validate: '>' is invalid in user-supplied options
 		if strings.Contains(what, ">") {
-			L.ArgError(2, "invalid option '>'")
+			L.ArgError(arg+1, "invalid option '>'")
 		}
 		// Validate option characters
 		for _, c := range what {
 			if !strings.ContainsRune("flnSrtupLa", c) {
-				L.ArgError(2, "invalid option")
+				L.ArgError(arg+1, "invalid option")
 			}
 		}
 
 		L.CreateTable(0, 10)
 
-		src, shortSrc, whatKind, lineDefined, lastLine, nups, nparams, isVararg, _ := L.GetFuncProtoInfo(1)
+		src, shortSrc, whatKind, lineDefined, lastLine, nups, nparams, isVararg, _ := L.GetFuncProtoInfo(arg)
 
 		if strings.Contains(what, "S") {
 			L.PushString(src)
@@ -367,18 +375,18 @@ func debugGetinfo(L *luaapi.State) int {
 			L.SetField(-2, "extraargs")
 		}
 		if strings.Contains(what, "f") {
-			L.PushValue(1) // push the function itself
+			L.PushValue(arg) // push the function itself
 			L.SetField(-2, "func")
 		}
 		if strings.Contains(what, "L") {
-			pushActiveLines(L, 1) // push activelines table (or nil for C func)
+			pushActiveLines(L, arg) // push activelines table (or nil for C func)
 			L.SetField(-2, "activelines")
 		}
 		return 1
 	}
 
 	// Fill additional fields based on 'what' string
-	L.GetInfo(what, ar)
+	L1.GetInfo(what, ar)
 
 	// Build result table
 	L.CreateTable(0, 8)
@@ -421,8 +429,13 @@ func debugGetinfo(L *luaapi.State) int {
 
 	// Handle "f" (push function) and "L" (activelines) for stack-level path
 	if strings.Contains(what, "f") || strings.Contains(what, "L") {
-		if L.PushFuncFromDebug(ar) {
-			funcIdx := L.GetTop() // function is now on top
+		if L1.PushFuncFromDebug(ar) {
+			funcIdx := L1.GetTop() // function is now on L1's stack
+			if L1 != L {
+				// Transfer function from L1 to L
+				L1.XMove(L, 1) // moves top of L1 to L
+				funcIdx = L.GetTop()
+			}
 			if strings.Contains(what, "f") {
 				L.PushValue(funcIdx)
 				L.SetField(-3, "func") // table is at funcIdx-1, but after push it's -3
