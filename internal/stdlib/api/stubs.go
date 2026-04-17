@@ -114,25 +114,7 @@ func ioLinesStub(L *luaapi.State) int {
 }
 
 
-func OpenOS(L *luaapi.State) int {
-	L.NewLib(map[string]luaapi.CFunction{
-		"clock":     osClockStub,
-		"setlocale": osSetlocaleStub,
-	})
-	return 1
-}
-
-func osClockStub(L *luaapi.State) int {
-	L.PushNumber(0)
-	return 1
-}
-
-// osSetlocaleStub returns nil (locale not available in Go).
-// This allows tests like `if os.setlocale("pt_BR") then ... end` to skip.
-func osSetlocaleStub(L *luaapi.State) int {
-	L.PushNil()
-	return 1
-}
+// OpenOS moved to oslib.go
 
 func OpenDebug(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{
