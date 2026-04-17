@@ -1138,7 +1138,11 @@ func unroll(L *stateapi.LuaState) {
 // Mirrors: lua_yieldk in ldo.c (simplified)
 func Yield(L *stateapi.LuaState, nResults int) {
 	if !L.Yieldable() {
-		RunError(L, "attempt to yield from outside a coroutine")
+		if L != L.Global.MainThread {
+			RunError(L, "attempt to yield across a C-call boundary")
+		} else {
+			RunError(L, "attempt to yield from outside a coroutine")
+		}
 	}
 	L.Status = stateapi.StatusYield
 	ci := L.CI

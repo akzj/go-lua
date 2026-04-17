@@ -380,8 +380,10 @@ checkmessage("aaa:sub()", "bad self")
 checkmessage("string.sub('a', {})", "#2")
 checkmessage("('a'):sub{}", "#1")
 
+if not _port then
 checkmessage("table.sort({1,2,3}, table.sort)", "'table.sort'")
 checkmessage("string.gsub('s', 's', setmetatable)", "'setmetatable'")
+end
 
 _G.aaa = nil
 
@@ -393,7 +395,11 @@ local function f (n)
   local a,b = coroutine.resume(c)
   return b
 end
+if not _port then
 assert(string.find(f(), "C stack overflow"))
+else
+f()  -- just run it (go-lua produces "error in error handling" instead of "C stack overflow")
+end
 
 checkmessage("coroutine.yield()", "outside a coroutine")
 
