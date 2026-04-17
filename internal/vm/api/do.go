@@ -563,9 +563,7 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 		// Mirrors: luaG_traceexec in ldebug.c
 		if npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
 			newline := GetFuncLine(p, npci)
-			if newline >= 0 {
-				hookDispatch(L, "line", newline, 0, 0)
-			}
+			hookDispatch(L, "line", newline, 0, 0)
 		}
 		L.OldPC = npci
 	}
