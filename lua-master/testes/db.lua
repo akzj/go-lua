@@ -923,7 +923,11 @@ do   -- testing debug info for finalizers
   end})
 
   -- repeat until previous finalizer runs (setting 'name')
-  repeat local a = {} until name
+  if _port then  -- go-lua: Go GC doesn't fire during tight allocation loops
+    collectgarbage()
+  else
+    repeat local a = {} until name
+  end
   assert(name == "__gc")
 end
 
