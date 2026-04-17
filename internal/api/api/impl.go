@@ -2190,3 +2190,60 @@ func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
 	L.push(ls.Stack[ci.Func].Val)
 	return true
 }
+
+// ---------------------------------------------------------------------------
+// DrainGCFinalizers — run pending __gc metamethods for collected objects.
+//
+// Called synchronously from collectgarbage("collect") and CloseState.
+// Objects are enqueued by runtime.SetFinalizer callbacks (in arbitrary
+// goroutines) and drained here in the calling goroutine where it is safe
+// to call Lua functions.
+//
+// Mirrors: GCTM() in lgc.c — runs one finalizer per call.
+// ---------------------------------------------------------------------------
+
+// DrainGCFinalizers drains the GC finalizer queue, calling each object's
+// __gc metamethod via a protected call. Errors are silently discarded
+// (matching C Lua behavior).
+func (L *State) DrainGCFinalizers() {
+	ls := L.ls()
+	g := ls.Global
+	if g == nil {
+		return
+	}
+
+	for {
+		// Atomically grab the queue
+		g.GCFinalizerMu.Lock()
+		queue := g.GCFinalizerQueue
+		g.GCFinalizerQueue = nil
+		g.GCFinalizerMu.Unlock()
+
+		if len(queue) == 0 {
+			break
+		}
+
+		for _, obj := range queue {
+			tbl, ok := obj.(*tableapi.Table)
+			if !ok {
+				continue // skip non-table objects for now
+			}
+			mt := tbl.GetMetatable()
+			if mt == nil {
+				continue
+			}
+			tmName := g.TMNames[metamethodapi.TM_GC]
+			gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+			if gcTM.IsNil() {
+				continue
+			}
+
+			// Push the __gc function and the table as argument
+			L.push(gcTM)
+			L.push(objectapi.TValue{Val: tbl, Tt: objectapi.TagTable})
+			// Protected call: 1 arg, 0 results, no error handler
+			// Discard errors (like C Lua's GCTM)
+			L.PCall(1, 0, 0)
+		}
+	}
+}
