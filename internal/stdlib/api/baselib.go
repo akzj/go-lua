@@ -436,9 +436,11 @@ func ipairsAux(L *luaapi.State) int {
 	return 2
 }
 
+var ipairsAuxTV = luaapi.WrapCFunction(ipairsAux)
+
 func luaB_ipairs(L *luaapi.State) int {
 	L.CheckAny(1)
-	L.PushCFunction(ipairsAux)
+	L.PushCFunctionSame(ipairsAuxTV)
 	L.PushValue(1)
 	L.PushInteger(0)
 	return 3
