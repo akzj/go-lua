@@ -248,6 +248,10 @@ type GlobalState struct {
 	// Scanned after runtime.GC() to clear collected weak refs.
 	// Stored as []any to avoid importing table/api in this file.
 	WeakTables []any // []*tableapi.Table
+
+	// GCMode tracks the current GC mode: "incremental" (default) or "generational".
+	// Mirrors C Lua's g->gckind (KGC_INC / KGC_GEN).
+	GCMode string
 }
 
 // ---------------------------------------------------------------------------

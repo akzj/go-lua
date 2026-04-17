@@ -1274,6 +1274,23 @@ func (L *State) TrackAlloc(n int64) {
 	L.ls().Global.GCTotalBytes += n
 }
 
+// GetGCMode returns the current GC mode string ("incremental" or "generational").
+// Defaults to "incremental" if not set.
+func (L *State) GetGCMode() string {
+	mode := L.ls().Global.GCMode
+	if mode == "" {
+		return "incremental"
+	}
+	return mode
+}
+
+// SetGCMode sets the GC mode and returns the previous mode string.
+func (L *State) SetGCMode(mode string) string {
+	prev := L.GetGCMode()
+	L.ls().Global.GCMode = mode
+	return prev
+}
+
 // ---------------------------------------------------------------------------
 // Auxiliary functions (luaL_*)
 // ---------------------------------------------------------------------------
