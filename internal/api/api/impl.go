@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"unsafe"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
 	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
+	metamethodapi "github.com/akzj/go-lua/internal/metamethod/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 
 	parseapi "github.com/akzj/go-lua/internal/parse/api"
@@ -791,7 +793,24 @@ func (L *State) SetMetatable(idx int) {
 
 	switch v.Tt {
 	case objectapi.TagTable:
-		v.Val.(*tableapi.Table).SetMetatable(mt)
+		tbl := v.Val.(*tableapi.Table)
+		tbl.SetMetatable(mt)
+		// Register __gc finalizer if metatable has __gc
+		if mt != nil {
+			g := ls.Global
+			tmName := g.TMNames[metamethodapi.TM_GC]
+			gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+			if !gcTM.IsNil() {
+				runtime.SetFinalizer(tbl, func(t *tableapi.Table) {
+					g.GCFinalizerMu.Lock()
+					defer g.GCFinalizerMu.Unlock()
+					if g.GCClosed {
+						return
+					}
+					g.GCFinalizerQueue = append(g.GCFinalizerQueue, t)
+				})
+			}
+		}
 	default:
 		tp := v.Type()
 		if int(tp) < len(ls.Global.MT) {
