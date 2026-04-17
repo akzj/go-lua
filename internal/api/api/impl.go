@@ -1448,6 +1448,16 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			}
 		case 'S', 'l', 'u', 'f':
 			// Already filled by GetStack
+		case 'r':
+			// Transfer info for call/return hooks
+			if ar.CI != nil {
+				if ci, ok := ar.CI.(*stateapi.CallInfo); ok {
+					if ci.CallStatus&stateapi.CISTHooked != 0 {
+						ar.FTransfer = ls.FTransfer
+						ar.NTransfer = ls.NTransfer
+					}
+				}
+			}
 		case 't':
 			// Tail call and extra args info
 			if ar.CI != nil {
