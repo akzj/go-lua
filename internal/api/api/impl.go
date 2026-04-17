@@ -1036,6 +1036,18 @@ func (L *State) Load(code string, name string, mode string) int {
 	if mode == "" {
 		mode = "bt"
 	}
+	// Validate mode: only "b", "t", "bt", "tb" are valid
+	validMode := true
+	for _, c := range mode {
+		if c != 'b' && c != 't' {
+			validMode = false
+			break
+		}
+	}
+	if !validMode || len(mode) == 0 || len(mode) > 2 {
+		L.PushString(fmt.Sprintf("invalid mode '%s'", mode))
+		return StatusErrSyntax
+	}
 	isBinary := len(code) > 0 && code[0] == '\x1b' // LUA_SIGNATURE
 
 	if isBinary {
