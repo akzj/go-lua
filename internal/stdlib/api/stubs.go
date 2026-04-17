@@ -1035,12 +1035,10 @@ func debugGetuservalue(L *luaapi.State) int {
 // Mirrors: luaB_setuservalue in ldblib.c
 // Sets the nth user value of userdata u to value. Returns u on success, or fail.
 func debugSetuservalue(L *luaapi.State) int {
-	n := 1
-	if L.GetTop() >= 3 {
-		n = int(L.CheckInteger(3))
-	}
-	L.CheckAny(1)
+	n := int(L.OptInteger(3, 1))
+	L.CheckType(1, objectapi.TypeUserdata)
 	L.CheckAny(2)
+	L.SetTop(2)
 	if !L.SetIUserValue(1, n) {
 		L.PushBoolean(false) // luaL_pushfail
 		return 1
