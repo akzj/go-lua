@@ -645,7 +645,7 @@ func luaB_loadfileImpl(L *luaapi.State, fname string) int {
 }
 
 func luaB_collectgarbage(L *luaapi.State) int {
-	opts := []string{"stop", "restart", "collect", "count", "step", "isrunning", "generational", "incremental"}
+	opts := []string{"stop", "restart", "collect", "count", "step", "isrunning", "generational", "incremental", "param"}
 	o := L.CheckOption(1, "collect", opts)
 	switch o {
 	case 2: // collect
@@ -676,6 +676,20 @@ func luaB_collectgarbage(L *luaapi.State) int {
 	case 7: // incremental
 		prev := L.SetGCMode("incremental")
 		L.PushString(prev)
+		return 1
+	case 8: // param
+		params := []string{"minormul", "majorminor", "minormajor", "pause", "stepmul", "stepsize"}
+		p := L.CheckOption(2, "", params)
+		paramName := params[p]
+		value := L.OptInteger(3, -1)
+		if value < 0 {
+			// query only — return current value
+			L.PushInteger(L.GetGCParam(paramName))
+		} else {
+			// set and return previous value
+			prev := L.SetGCParam(paramName, value)
+			L.PushInteger(prev)
+		}
 		return 1
 	default:
 		L.PushInteger(0)

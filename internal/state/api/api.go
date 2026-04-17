@@ -252,6 +252,12 @@ type GlobalState struct {
 	// GCMode tracks the current GC mode: "incremental" (default) or "generational".
 	// Mirrors C Lua's g->gckind (KGC_INC / KGC_GEN).
 	GCMode string
+
+	// GCParams stores GC tuning parameters (pause, stepmul, stepsize, etc.).
+	// Go's GC doesn't use these, but we store them so Lua code that
+	// reads/writes them (e.g., gc.lua tests) works correctly.
+	// Keys: "pause", "stepmul", "stepsize", "minormul", "majorminor", "minormajor"
+	GCParams map[string]int64
 }
 
 // ---------------------------------------------------------------------------
