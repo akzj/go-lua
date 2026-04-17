@@ -1524,6 +1524,14 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 				ar.NameWhat = "hook"
 				break
 			}
+			// Check if caller is running a finalizer (CISTFin flag)
+			// If so, this frame is a __gc metamethod call.
+			// Mirrors C Lua's funcnamefromcall order: ClsRet → Hooked → Fin → isLua
+			if caller.CallStatus&stateapi.CISTFin != 0 {
+				ar.Name = "__gc"
+				ar.NameWhat = "metamethod"
+				break
+			}
 			fval := ls.Stack[caller.Func].Val
 			if fval.Tt != objectapi.TagLuaClosure {
 				break
@@ -2300,9 +2308,13 @@ func (L *State) DrainGCFinalizers() {
 			// Push the __gc function and the table as argument
 			L.push(gcTM)
 			L.push(objectapi.TValue{Val: tbl, Tt: objectapi.TagTable})
+			// Mark current CI as running a finalizer so debug.getinfo
+			// returns name="__gc", namewhat="metamethod" (mirrors C Lua's GCTM).
+			ls.CI.CallStatus |= stateapi.CISTFin
 			// Protected call: 1 arg, 0 results, no error handler
 			// Discard errors (like C Lua's GCTM)
 			L.PCall(1, 0, 0)
+			ls.CI.CallStatus &^= stateapi.CISTFin
 			// Restore stack — discard any leftover error object
 			L.SetTop(oldTop)
 		}
