@@ -1372,7 +1372,8 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		ar.NUps = len(cl.UpVals)
 		ar.NParams = int(p.NumParams)
 		ar.IsVararg = p.IsVararg()
-		if ci == &ls.BaseCI {
+		// Mirrors C Lua funcinfo: linedefined==0 means "main" chunk
+		if p.LineDefined == 0 {
 			ar.What = "main"
 		} else {
 			ar.What = "Lua"
