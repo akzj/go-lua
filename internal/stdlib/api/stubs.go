@@ -574,7 +574,9 @@ func debugSethook(L *luaapi.State) int {
 	L1.HookMask = mask
 	L1.BaseHookCount = count
 	L1.HookCount = count
-	L1.AllowHook = true
+	// Do NOT set AllowHook here — if called from inside a hook,
+	// AllowHook must remain false until hookDispatch restores it.
+	// C Lua's db_sethook does not touch allowhook when setting hooks.
 
 	// When activating line hooks on the CURRENT thread (not a coroutine),
 	// initialize OldPC to the calling Lua frame's current PC so that
