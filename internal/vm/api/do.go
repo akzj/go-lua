@@ -505,7 +505,7 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 	}
 
 	if mask&stateapi.MaskLine != 0 {
-		npci := ci.SavedPC // PC of instruction about to execute
+		npci := ci.SavedPC - 1 // PC of instruction about to execute (SavedPC already incremented)
 		if npci < 0 {
 			npci = 0
 		}

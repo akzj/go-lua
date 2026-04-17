@@ -1496,6 +1496,7 @@ startfunc:
 
 	for {
 		inst := code[ci.SavedPC]
+		ci.SavedPC++ // increment BEFORE hook check — mirrors C Lua vmfetch
 
 		// Hook dispatch: fire line/count hooks if active.
 		// Skip for OP_VARARGPREP — C Lua's luaG_tracecall returns 0 (trap=0)
@@ -1506,7 +1507,6 @@ startfunc:
 			opcodeapi.GetOpCode(inst) != opcodeapi.OP_VARARGPREP {
 			TraceExec(L, ci)
 		}
-		ci.SavedPC++
 		op := opcodeapi.GetOpCode(inst)
 		ra := base + opcodeapi.GetArgA(inst)
 
