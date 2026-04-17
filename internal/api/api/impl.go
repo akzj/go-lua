@@ -864,6 +864,10 @@ func (L *State) SetMetatable(idx int) {
 				})
 			}
 		}
+	case objectapi.TagUserdata:
+		if ud, ok := v.Val.(*objectapi.Userdata); ok {
+			ud.MetaTable = mt
+		}
 	default:
 		tp := v.Type()
 		if int(tp) < len(ls.Global.MT) {
@@ -1101,9 +1105,18 @@ func (L *State) Error() int {
 // Userdata
 // ---------------------------------------------------------------------------
 
-// NewUserdata creates a new full userdata.
-func (L *State) NewUserdata(size int, nUV int) interface{} {
-	return nil // placeholder
+// NewUserdata creates a new full userdata with nUV user values and pushes it.
+// Returns the Userdata object. size is ignored (Go manages memory).
+func (L *State) NewUserdata(size int, nUV int) *objectapi.Userdata {
+	ud := &objectapi.Userdata{
+		UserVals: make([]objectapi.TValue, nUV),
+	}
+	// Initialize user values to nil
+	for i := range ud.UserVals {
+		ud.UserVals[i] = objectapi.Nil
+	}
+	L.push(objectapi.TValue{Tt: objectapi.TagUserdata, Val: ud})
+	return ud
 }
 
 // ---------------------------------------------------------------------------
@@ -2215,6 +2228,23 @@ func (L *State) GetSubTable(idx int, fname string) bool {
 	L.SetField(idx, fname) // assign new table to field
 	return false
 }
+
+// NewMetatable creates a new metatable in the registry with the given name.
+// If the registry already has a table with that name, pushes it and returns false.
+// Otherwise creates a new table, stores it in registry[tname], and returns true.
+// Mirrors: luaL_newmetatable in lauxlib.c
+func (L *State) NewMetatable(tname string) bool {
+	if L.GetField(RegistryIndex, tname) != objectapi.TypeNil {
+		// Already exists — it's on the stack
+		return false
+	}
+	L.Pop(1) // remove nil
+	L.NewTable()
+	L.PushValue(-1)                  // dup the table
+	L.SetField(RegistryIndex, tname) // registry[tname] = table
+	return true
+}
+
 
 // GetLClosure returns the LClosure at the given stack index, or nil if not a Lua closure.
 func (L *State) GetLClosure(idx int) *closureapi.LClosure {

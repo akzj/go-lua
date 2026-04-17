@@ -15,19 +15,94 @@ import (
 )
 
 func OpenIO(L *luaapi.State) int {
-	L.NewLib(map[string]luaapi.CFunction{})
+	L.NewLib(map[string]luaapi.CFunction{
+		"write": ioWriteStub,
+		"read":  ioReadStub,
+		"close": ioCloseStub,
+		"input": ioInputStub,
+		"lines": ioLinesStub,
+	})
 
-	// io.stdin / io.stdout / io.stderr — stub file handles.
-	// Use light userdata so rawlen() correctly errors (not tables).
-	// Each gets a unique pointer value for string.format("%p") identity.
-	type ioStub struct{ name string }
+	// Create the FILE* metatable with __name = "FILE*"
+	// This is used by luaT_objtypename to report "FILE*" in error messages.
+	L.NewMetatable("FILE*") // creates/fetches registry["FILE*"]
+	L.PushString("FILE*")
+	L.SetField(-2, "__name")
+	// __gc stub
+	L.PushCFunction(func(L *luaapi.State) int {
+		return 0
+	})
+	L.SetField(-2, "__gc")
+	// __close stub
+	L.PushCFunction(func(L *luaapi.State) int {
+		return 0
+	})
+	L.SetField(-2, "__close")
+	// __tostring stub
+	L.PushCFunction(func(L *luaapi.State) int {
+		L.PushString("file (0x...stub)")
+		return 1
+	})
+	L.SetField(-2, "__tostring")
+	// __index = metatable itself (for method calls)
+	L.PushValue(-1)
+	L.SetField(-2, "__index")
+	fileMT := L.GetTop() // remember the FILE* metatable position
+
+	// io.stdin / io.stdout / io.stderr — full userdata with FILE* metatable.
 	for _, name := range []string{"stdin", "stdout", "stderr"} {
-		L.PushLightUserdata(&ioStub{name})
-		L.SetField(-2, name)
+		L.NewUserdata(0, 1) // allocate full userdata (size=0, 1 user value)
+		L.PushValue(fileMT) // push FILE* metatable
+		L.SetMetatable(-2)  // set it on the userdata
+		L.SetField(-3, name) // io[name] = userdata
 	}
+
+	L.Pop(1) // pop the FILE* metatable
 
 	return 1
 }
+
+// IO stub functions — minimal implementations for error message testing.
+
+func ioWriteStub(L *luaapi.State) int {
+	// io.write(...) — minimal stub that type-checks arguments
+	n := L.GetTop()
+	for i := 1; i <= n; i++ {
+		if !L.IsString(i) && !L.IsNumber(i) {
+			L.ArgError(i, "string expected")
+		}
+	}
+	// Push io file handle as return value
+	L.GetGlobal("io")
+	L.GetField(-1, "stdout")
+	L.Remove(-2)
+	return 1
+}
+
+func ioReadStub(L *luaapi.State) int {
+	L.PushNil()
+	return 1
+}
+
+func ioCloseStub(L *luaapi.State) int {
+	L.PushNil()
+	L.PushString("cannot close standard file")
+	return 2
+}
+
+func ioInputStub(L *luaapi.State) int {
+	// io.input() with no args returns io.stdin
+	L.GetGlobal("io")
+	L.GetField(-1, "stdin")
+	L.Remove(-2)
+	return 1
+}
+
+func ioLinesStub(L *luaapi.State) int {
+	L.PushNil()
+	return 1
+}
+
 
 func OpenOS(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{

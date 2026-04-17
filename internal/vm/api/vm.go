@@ -710,7 +710,7 @@ func opErrorMsg(L *stateapi.LuaState, p1, p2 objectapi.TValue, op string, reg1, 
 	if badReg >= 0 {
 		info = VarInfo(L, badReg)
 	}
-	return "attempt to " + op + " a " + objectapi.TypeNames[badVal.Type()] + " value" + info
+	return "attempt to " + op + " a " + mmapi.ObjTypeName(L.Global, badVal) + " value" + info
 }
 
 // tryBinTM tries a binary metamethod.
@@ -782,7 +782,7 @@ func tryConcatTM(L *stateapi.LuaState) {
 		if p1.IsString() || p1.IsNumber() {
 			errType = p2
 		}
-		RunError(L, "attempt to concatenate a "+objectapi.TypeNames[errType.Type()]+" value")
+		RunError(L, "attempt to concatenate a "+mmapi.ObjTypeName(L.Global, errType)+" value")
 	}
 	result := callTMRes(L, tm, p1, p2)
 	L.Stack[top-2].Val = result
@@ -1007,7 +1007,7 @@ func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
 	default:
 		tm := mmapi.GetTMByObj(L.Global, rb, mmapi.TM_LEN)
 		if tm.IsNil() {
-			RunError(L, "attempt to get length of a "+objectapi.TypeNames[rb.Type()]+" value")
+			RunError(L, "attempt to get length of a "+mmapi.ObjTypeName(L.Global, rb)+" value")
 		}
 		// Ensure L.Top is above ra so callTMRes doesn't clobber live registers
 		if L.Top <= ra {
