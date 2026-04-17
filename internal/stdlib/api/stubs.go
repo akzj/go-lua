@@ -113,6 +113,111 @@ func debugGetmetatable(L *luaapi.State) int {
 
 // debug.traceback([thread,] [message [, level]]) — returns a traceback string
 // Mirrors: luaB_traceback in ldblib.c
+// LEVELS1 is the number of stack levels to show at the top of a truncated traceback.
+const tracebackLEVELS1 = 10
+
+// LEVELS2 is the number of stack levels to show at the bottom of a truncated traceback.
+const tracebackLEVELS2 = 11
+
+// findLastLevel finds the total stack depth using binary search.
+// Mirrors: lastlevel() in lauxlib.c
+func findLastLevel(L1 *luaapi.State) int {
+	li, le := 1, 1
+	// Double until GetStack fails
+	for {
+		_, ok := L1.GetStack(le)
+		if !ok {
+			break
+		}
+		li = le
+		if le > 100000 { // safety
+			break
+		}
+		le *= 2
+	}
+	// Binary search between li and le
+	for le-li > 1 {
+		m := (li + le) / 2
+		_, ok := L1.GetStack(m)
+		if ok {
+			li = m
+		} else {
+			le = m
+		}
+	}
+	return li
+}
+
+// tracebackFrame writes one stack frame to buf.
+// Mirrors: luaL_traceback frame formatting in lauxlib.c
+func tracebackFrame(L1 *luaapi.State, ar *luaapi.DebugInfo, buf *strings.Builder) {
+	L1.GetInfo("Slnt", ar)
+	buf.WriteString("\n\t")
+	buf.WriteString(ar.ShortSrc)
+	if ar.CurrentLine > 0 {
+		buf.WriteString(fmt.Sprintf(":%d", ar.CurrentLine))
+	}
+	buf.WriteString(": in ")
+
+	// Determine frame description
+	if ar.What == "main" {
+		buf.WriteString("main chunk")
+	} else if ar.What == "C" {
+		// Try to get function name for C functions
+		L1.GetInfo("n", ar)
+		if ar.Name != "" {
+			buf.WriteString(fmt.Sprintf("function '%s'", ar.Name))
+		} else {
+			// Try to find function name by searching globals
+			name := ""
+			if L1.PushFuncFromDebug(ar) {
+				funcIdx := L1.GetTop()
+				funcPtr := L1.ToPointer(funcIdx)
+				L1.PushGlobalTable()
+				L1.PushNil()
+				for L1.Next(-2) {
+					if L1.ToPointer(-1) == funcPtr && funcPtr != "" {
+						if s, ok := L1.ToString(-2); ok {
+							name = s
+						}
+						L1.Pop(2)
+						break
+					}
+					L1.Pop(1)
+				}
+				L1.Pop(1) // pop _G
+				L1.Pop(1) // pop function
+			}
+			if name != "" {
+				buf.WriteString(fmt.Sprintf("function '%s'", name))
+			} else {
+				buf.WriteString("?")
+			}
+		}
+	} else {
+		L1.GetInfo("n", ar)
+		if ar.Name != "" {
+			if ar.NameWhat == "metamethod" {
+				buf.WriteString(fmt.Sprintf("metamethod '%s'", ar.Name))
+			} else {
+				buf.WriteString(fmt.Sprintf("%s '%s'", ar.NameWhat, ar.Name))
+			}
+		} else {
+			buf.WriteString("function <")
+			buf.WriteString(ar.ShortSrc)
+			if ar.LineDefined > 0 {
+				buf.WriteString(fmt.Sprintf(":%d", ar.LineDefined))
+			}
+			buf.WriteString(">")
+		}
+	}
+
+	// Tail call marker
+	if ar.IsTailCall {
+		buf.WriteString("\n\t(...tail calls...)")
+	}
+}
+
 func debugTraceback(L *luaapi.State) int {
 	// Handle optional thread argument (mirrors getthread in ldblib.c)
 	arg := 1
@@ -143,6 +248,9 @@ func debugTraceback(L *luaapi.State) int {
 		}
 	}
 
+	// Find total stack depth for LEVELS1/LEVELS2 truncation
+	last := findLastLevel(L1)
+
 	// Build traceback
 	var buf strings.Builder
 	if hasMsg {
@@ -151,79 +259,32 @@ func debugTraceback(L *luaapi.State) int {
 	}
 	buf.WriteString("stack traceback:")
 
-	for level < 200 { // safety limit
+	// Decide whether to truncate: if total visible levels > LEVELS1+LEVELS2
+	totalVisible := last - level + 1
+	limit2show := -1 // negative = show all
+	if totalVisible > tracebackLEVELS1+tracebackLEVELS2 {
+		limit2show = tracebackLEVELS1
+	}
+
+	for {
 		ar, ok := L1.GetStack(level)
 		if !ok {
 			break
 		}
-		L1.GetInfo("Slnt", ar)
-		buf.WriteString("\n\t")
-		buf.WriteString(ar.ShortSrc)
-		if ar.CurrentLine > 0 {
-			buf.WriteString(fmt.Sprintf(":%d", ar.CurrentLine))
-		}
-		buf.WriteString(": in ")
-
-		// Determine frame description
-		if ar.What == "main" {
-			buf.WriteString("main chunk")
-		} else if ar.What == "C" {
-			// Try to get function name for C functions
-			L1.GetInfo("n", ar)
-			if ar.Name != "" {
-				buf.WriteString(fmt.Sprintf("function '%s'", ar.Name))
-			} else {
-				// Try to find function name by searching globals
-				// Mirrors: pushglobalfuncname in lauxlib.c
-				name := ""
-				if L1.PushFuncFromDebug(ar) {
-					funcIdx := L1.GetTop()
-					funcPtr := L1.ToPointer(funcIdx)
-					// Search _G for this function
-					L1.PushGlobalTable()
-					L1.PushNil()
-					for L1.Next(-2) {
-						// Compare using ToPointer for safe function comparison
-						if L1.ToPointer(-1) == funcPtr && funcPtr != "" {
-							if s, ok := L1.ToString(-2); ok {
-								name = s
-							}
-							L1.Pop(2) // pop key and value
-							break
-						}
-						L1.Pop(1) // pop value, keep key
-					}
-					L1.Pop(1) // pop _G
-					L1.Pop(1) // pop function
-				}
-				if name != "" {
-					buf.WriteString(fmt.Sprintf("function '%s'", name))
-				} else {
-					buf.WriteString("?")
-				}
+		if limit2show == 0 {
+			// Truncation point: skip middle levels
+			skip := last - level - tracebackLEVELS2 + 1
+			if skip < 1 {
+				skip = 1
 			}
+			buf.WriteString(fmt.Sprintf("\n\t...\t(skipping %d levels)", skip))
+			level += skip
+			// Continue — limit2show goes negative, which is fine (no more truncation)
 		} else {
-			// Try to get function name
-			L1.GetInfo("n", ar)
-			if ar.Name != "" {
-				if ar.NameWhat == "metamethod" {
-					buf.WriteString(fmt.Sprintf("metamethod '%s'", ar.Name))
-				} else {
-					buf.WriteString(fmt.Sprintf("%s '%s'", ar.NameWhat, ar.Name))
-				}
-			} else {
-				buf.WriteString("function <")
-				buf.WriteString(ar.ShortSrc)
-				if ar.LineDefined > 0 {
-					buf.WriteString(fmt.Sprintf(":%d", ar.LineDefined))
-				}
-				buf.WriteString(">")
-			}
+			tracebackFrame(L1, ar, &buf)
+			level++
 		}
-		level++
-	}
-	if level >= 200 {
-		buf.WriteString("\n\t...")
+		limit2show--
 	}
 
 	L.PushString(buf.String())
