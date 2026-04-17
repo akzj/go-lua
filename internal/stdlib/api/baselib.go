@@ -623,8 +623,24 @@ func luaB_loadfileImpl(L *luaapi.State, fname string) int {
 		return 2
 	}
 
+	// Skip UTF-8 BOM if present
+	src := string(data)
+	if strings.HasPrefix(src, "\xEF\xBB\xBF") {
+		src = src[3:]
+	}
+
+	// Skip first line if it starts with '#' (shebang)
+	if len(src) > 0 && src[0] == '#' {
+		idx := strings.IndexByte(src, '\n')
+		if idx >= 0 {
+			src = src[idx:]  // keep the newline (preserves line numbering)
+		} else {
+			src = "" // single-line shebang, no more content
+		}
+	}
+
 	chunkname := "@" + fname
-	status := L.Load(string(data), chunkname, mode)
+	status := L.Load(src, chunkname, mode)
 	return loadAux(L, status, env)
 }
 
