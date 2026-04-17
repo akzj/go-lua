@@ -818,7 +818,9 @@ func debugGetlocal(L *luaapi.State) int {
 			L.PushNil() // no local found, push nil
 			return 1
 		}
-		L.PushString(name) // push name on top of value
+		// GetLocal pushed the value onto thread's stack — transfer to L
+		thread.XMove(L, 1)
+		L.PushString(name) // push name on L
 		L.Insert(-2)       // move name below value: [name, value]
 		return 2
 	}
@@ -852,6 +854,8 @@ func debugSetlocal(L *luaapi.State) int {
 			L.ArgError(2, "invalid level")
 			return 0
 		}
+		// Transfer value from L to thread's stack
+		L.XMove(thread, 1) // move top value (the new value) to thread
 		name := thread.SetLocal(ar, n)
 		if name == "" {
 			L.PushNil()

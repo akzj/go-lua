@@ -1356,8 +1356,9 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		return nil, false
 	}
 	ar := &DebugInfo{}
-	// Store this CI for GetInfo to use
+	// Store this CI and thread state for GetInfo/GetLocal to use
 	ar.CI = ci
+	ar.ThreadState = ls
 	fval := ls.Stack[ci.Func].Val
 	switch fval.Tt {
 	case objectapi.TagLuaClosure:
