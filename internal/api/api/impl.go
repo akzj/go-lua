@@ -1691,36 +1691,28 @@ func (L *State) SetLocal(ar *DebugInfo, n int) string {
 		return ""
 	}
 	clfn := ls.Stack[ci.Func].Val
-	if clfn.Tt != objectapi.TagLuaClosure {
-		return ""
-	}
-	cl, ok := clfn.Val.(*closureapi.LClosure)
-	if !ok || cl == nil || cl.Proto == nil {
-		return ""
-	}
-	proto := cl.Proto
+	isLua := clfn.Tt == objectapi.TagLuaClosure
 
-	// Negative n: vararg slots
+	var proto *objectapi.Proto
+	if isLua {
+		cl, ok := clfn.Val.(*closureapi.LClosure)
+		if ok && cl != nil && cl.Proto != nil {
+			proto = cl.Proto
+		}
+	}
+
+	// Negative n: vararg slots (Lua functions only)
 	if n < 0 {
-		if !proto.IsVararg() {
-			vmapi.CheckStack(ls, 1)
-			ls.Stack[ls.Top].Val = objectapi.Nil
-			ls.Top++
+		if proto == nil || !proto.IsVararg() {
 			return ""
 		}
 		numExtra := ci.NExtraArgs
 		if numExtra <= 0 {
-			vmapi.CheckStack(ls, 1)
-			ls.Stack[ls.Top].Val = objectapi.Nil
-			ls.Top++
 			return ""
 		}
 		// Same formula as GetLocal: slot = ci.Func - numExtra - n - 1.
 		slot := ci.Func - int(numExtra) - n - 1
 		if slot < ci.Func-int(numExtra) || slot > ci.Func-1 {
-			vmapi.CheckStack(ls, 1)
-			ls.Stack[ls.Top].Val = objectapi.Nil
-			ls.Top++
 			return ""
 		}
 		ls.Stack[slot] = ls.Stack[ls.Top-1]
@@ -1728,35 +1720,61 @@ func (L *State) SetLocal(ar *DebugInfo, n int) string {
 		return "(vararg)"
 	}
 
-	// Positive n: named locals
-	// Inline getLocalName logic (from vm/api/do.go)
-	localNum := n
-	pc := ci.SavedPC - 1
-	if pc < 0 {
-		pc = 0
-	}
+	// Positive n: try named locals first (Lua functions only)
 	name := ""
-	for i := 0; i < len(proto.LocVars) && proto.LocVars[i].StartPC <= pc; i++ {
-		if pc < proto.LocVars[i].EndPC {
-			localNum--
-			if localNum == 0 {
-				if proto.LocVars[i].Name != nil {
-					name = proto.LocVars[i].Name.Data
+	if proto != nil {
+		localNum := n
+		pc := ci.SavedPC - 1
+		if pc < 0 {
+			pc = 0
+		}
+		for i := 0; i < len(proto.LocVars) && proto.LocVars[i].StartPC <= pc; i++ {
+			if pc < proto.LocVars[i].EndPC {
+				localNum--
+				if localNum == 0 {
+					if proto.LocVars[i].Name != nil {
+						name = proto.LocVars[i].Name.Data
+					}
+					break
 				}
-				break
 			}
 		}
 	}
-	if name == "" || name == "?" {
-		return ""
+
+	// If we found a named local, set its value and return
+	if name != "" && name != "?" {
+		slot := ci.Func + n
+		if slot < 0 || slot >= len(ls.Stack) {
+			return ""
+		}
+		ls.Stack[slot] = ls.Stack[ls.Top-1]
+		ls.Top--
+		return name
 	}
-	slot := ci.Func + n
-	if slot < 0 || slot >= len(ls.Stack) {
-		return ""
+
+	// Fallback: check if n is within CI stack range (unnamed slots / temporaries).
+	// Mirrors C Lua's luaG_findlocal fallback.
+	base := ci.Func + 1
+	var limit int
+	if ci == ls.CI {
+		limit = ls.Top
+	} else if ci.Next != nil {
+		limit = ci.Next.Func
+	} else {
+		limit = ls.Top
 	}
-	ls.Stack[slot] = ls.Stack[ls.Top-1]
-	ls.Top--
-	return name
+	if n > 0 && limit-base >= n {
+		slot := base + n - 1
+		if slot >= 0 && slot < len(ls.Stack) {
+			ls.Stack[slot] = ls.Stack[ls.Top-1]
+			ls.Top--
+			if isLua {
+				return "(temporary)"
+			}
+			return "(C temporary)"
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
