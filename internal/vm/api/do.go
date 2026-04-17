@@ -1121,14 +1121,10 @@ func unroll(L *stateapi.LuaState) {
 				}
 			}
 		} else {
-			// If this CI was interrupted during __close (CIST_CLSRET set),
-			// finish the interrupted op before resuming execution.
-			// This backs up savedpc so OP_RETURN/OP_CLOSE re-executes
-			// and continues the close loop.
-			// Mirrors: luaV_finishOp call in ldo.c unroll().
-			if ci.CallStatus&stateapi.CISTClsRet != 0 {
-				FinishOp(L, ci)
-			}
+			// Finish any interrupted op before resuming execution.
+			// Mirrors: luaV_finishOp call in ldo.c unroll() —
+			// called UNCONDITIONALLY for all Lua CIs.
+			FinishOp(L, ci)
 			Execute(L, ci)
 		}
 	}

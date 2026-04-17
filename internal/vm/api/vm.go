@@ -1468,10 +1468,11 @@ func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vata
 // ---------------------------------------------------------------------------
 
 // FinishOp finishes execution of an opcode interrupted by a yield.
-// Called when resuming a Lua CI that was interrupted during __close
-// (CIST_CLSRET is set). For OP_RETURN/OP_CLOSE, backs up savedpc
-// so the instruction re-executes and continues the close loop.
-// Mirrors: luaV_finishOp in lvm.c (subset: only close-related ops).
+// When a metamethod yields (via panic(LuaYield{})), intermediate Go frames
+// (callTMRes, tryBinTM, callOrderTM) are destroyed. This function places
+// the metamethod result into the correct register before Execute resumes.
+// Also handles __close interruption (OP_CLOSE/OP_RETURN).
+// Mirrors: luaV_finishOp in lvm.c:568-618
 func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 	cl := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
 	code := cl.Proto.Code
@@ -1479,17 +1480,64 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 	op := opcodeapi.GetOpCode(inst)
 	base := ci.Func + 1
 	switch op {
+
+	// Category 1: Binary arithmetic metamethods
+	// savedpc-1 = OP_MMBIN/MMBINI/MMBINK (the interrupted instruction)
+	// savedpc-2 = OP_ADD/SUB/etc (the original arithmetic instruction)
+	// Pop TM result from stack top → store in RA of original arith op
+	case opcodeapi.OP_MMBIN, opcodeapi.OP_MMBINI, opcodeapi.OP_MMBINK:
+		L.Top--
+		prevInst := code[ci.SavedPC-2]
+		dest := base + opcodeapi.GetArgA(prevInst)
+		L.Stack[dest].Val = L.Stack[L.Top].Val
+
+	// Category 2: Unary + Table Get
+	// Pop TM result from stack top → store in RA of this instruction
+	case opcodeapi.OP_UNM, opcodeapi.OP_BNOT, opcodeapi.OP_LEN,
+		opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE, opcodeapi.OP_GETI,
+		opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
+		L.Top--
+		dest := base + opcodeapi.GetArgA(inst)
+		L.Stack[dest].Val = L.Stack[L.Top].Val
+
+	// Category 3: Comparisons
+	// Evaluate TM result as boolean, then conditional jump.
+	// savedpc points to the OP_JMP instruction after the comparison.
+	// If res != k, skip the jump (savedpc++).
+	case opcodeapi.OP_LT, opcodeapi.OP_LE,
+		opcodeapi.OP_LTI, opcodeapi.OP_LEI,
+		opcodeapi.OP_GTI, opcodeapi.OP_GEI,
+		opcodeapi.OP_EQ:
+		res := !L.Stack[L.Top-1].Val.IsFalsy()
+		L.Top--
+		if res != (opcodeapi.GetArgK(inst) != 0) {
+			ci.SavedPC++ // skip jump
+		}
+
+	// Category 4: Concat
+	// Reposition TM result, adjust top, continue concat loop
+	case opcodeapi.OP_CONCAT:
+		top := L.Top - 1
+		a := opcodeapi.GetArgA(inst)
+		total := (top - 1) - (base + a)
+		L.Stack[top-2].Val = L.Stack[top].Val // put TM result in proper position
+		L.Top = top - 1
+		if total > 1 {
+			Concat(L, total) // concat remaining (may yield again)
+		}
+
+	// Category 5: Close/Return (already implemented)
 	case opcodeapi.OP_CLOSE:
-		// Yielded closing variables — re-execute to close remaining vars
 		ci.SavedPC--
 	case opcodeapi.OP_RETURN:
-		// Yielded closing variables on return — restore top and re-execute
 		ra := base + opcodeapi.GetArgA(inst)
 		L.Top = ra + ci.NRes
 		ci.SavedPC--
+
 	default:
-		// For other opcodes (OP_CALL, etc.), no adjustment needed.
-		// This shouldn't happen when CIST_CLSRET is set, but be safe.
+		// OP_TFORCALL, OP_CALL, OP_TAILCALL,
+		// OP_SETTABUP, OP_SETTABLE, OP_SETI, OP_SETFIELD
+		// No action needed — results already in correct place or no result needed
 	}
 }
 
