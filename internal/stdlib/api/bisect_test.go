@@ -12,7 +12,6 @@ func TestBisectErrors(t *testing.T) {
 	L.PushBoolean(true)
 	L.SetGlobal("_port")
 	
-	// Run a Lua script that bisects checkmessage calls
 	script := `
 local debug = require"debug"
 
@@ -32,27 +31,33 @@ local tests = {
   {272, "_G.XX=setmetatable({},{__name='My Type'}); return XX < XX", "two My Type values"},
   {273, "_G.XX=setmetatable({},{__name='My Type'}); return {} < XX", "table with My Type"},
   {274, "_G.XX=setmetatable({},{__name='My Type'}); return XX < io.stdin", "My Type with FILE*"},
-  {290, "(io.write or print){}", "io.write"},
-  {291, "(collectgarbage or print){}", "collectgarbage"},
-  {297, "local a,b = load('string x = \"hi\"'); print(a, b); assert(string.find(b, '?:?:'))", "?:?:"},
+  {298, "(io.write or print){}", "io.write"},
+  {299, "(collectgarbage or print){}", "collectgarbage"},
+  {305, nil, nil},  -- placeholder for stripped debug test
   {344, "math.sin('a')", "sin"},
-  {353, "getmetatable(io.stdin).__gc()", "__gc"},
+  {356, "return math.sin('a')", "sin"},
+  {358, 'collectgarbage("nooption")', "invalid option"},
+  {365, "getmetatable(io.stdin).__gc()", "no value"},
 }
 
 for _, t in ipairs(tests) do
   local line, prog, expected = t[1], t[2], t[3]
-  local ok2, m = pcall(doit, prog)
-  if not ok2 then
-    print(string.format("L%d: CRASH - %s", line, tostring(m)))
-  elseif m then
-    local found = string.find(tostring(m), expected, 1, true)
-    if found then
-      print(string.format("L%d: PASS", line))
-    else
-      print(string.format("L%d: WRONG - expected '%s' got '%s'", line, expected, tostring(m)))
-    end
+  if prog == nil then
+    -- skip placeholder
   else
-    print(string.format("L%d: NO_ERROR (code succeeded)", line))
+    local ok2, m = pcall(doit, prog)
+    if not ok2 then
+      print(string.format("L%d: CRASH - %s", line, tostring(m)))
+    elseif m then
+      local found = string.find(tostring(m), expected, 1, true)
+      if found then
+        print(string.format("L%d: PASS", line))
+      else
+        print(string.format("L%d: WRONG - expected '%s' got '%s'", line, expected, tostring(m)))
+      end
+    else
+      print(string.format("L%d: NO_ERROR (code succeeded)", line))
+    end
   end
 end
 `
