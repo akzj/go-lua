@@ -858,6 +858,8 @@ func debugSetlocal(L *luaapi.State) int {
 		L.XMove(thread, 1) // move top value (the new value) to thread
 		name := thread.SetLocal(ar, n)
 		if name == "" {
+			// SetLocal didn't consume the value — pop it from thread
+			thread.Pop(1)
 			L.PushNil()
 		} else {
 			L.PushString(name)
