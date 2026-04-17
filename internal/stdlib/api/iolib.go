@@ -476,9 +476,15 @@ const maxLenNum = 200 // maximum length of a numeral being read
 // first is the stack index of the first format argument.
 func gRead(L *luaapi.State, f *os.File, first int) int {
 	nargs := L.GetTop() - first + 1
+	var ioErr error // track I/O errors
+
 	if nargs == 0 {
 		// No arguments: read a line (chopping newline)
-		ok := readLine(L, f, true)
+		ok, err := readLine(L, f, true)
+		if err != nil {
+			L.Pop(1)
+			return pushFileResult(L, false, "", err)
+		}
 		if !ok {
 			L.Pop(1) // remove result
 			L.PushFail()
@@ -494,7 +500,12 @@ func gRead(L *luaapi.State, f *os.File, first int) int {
 			if count == 0 {
 				success = testEOF(L, f)
 			} else {
-				success = readChars(L, f, int(count))
+				var err error
+				success, err = readChars(L, f, int(count))
+				if err != nil {
+					ioErr = err
+					break
+				}
 			}
 		} else {
 			p := L.CheckString(n)
@@ -509,12 +520,23 @@ func gRead(L *luaapi.State, f *os.File, first int) int {
 			case 'n':
 				success = readNumber(L, f)
 			case 'l':
-				success = readLine(L, f, true) // chop newline
+				var err error
+				success, err = readLine(L, f, true) // chop newline
+				if err != nil {
+					ioErr = err
+				}
 			case 'L':
-				success = readLine(L, f, false) // keep newline
+				var err error
+				success, err = readLine(L, f, false) // keep newline
+				if err != nil {
+					ioErr = err
+				}
 			case 'a':
-				readAll(L, f)
-				success = true // always succeeds
+				err := readAll(L, f)
+				if err != nil {
+					ioErr = err
+				}
+				success = true // always succeeds (may push empty string)
 			default:
 				L.ArgError(n, "invalid format")
 				return 0
@@ -523,9 +545,11 @@ func gRead(L *luaapi.State, f *os.File, first int) int {
 		n++
 	}
 
-	// Check for file error
-	// (Go doesn't have ferror equivalent directly, but read errors
-	// would have been caught in individual read functions)
+	// If we got an I/O error, return nil, errmsg, errno
+	if ioErr != nil {
+		L.SetTop(first - 1) // clear all results
+		return pushFileResult(L, false, "", ioErr)
+	}
 
 	if !success {
 		L.Pop(1)     // remove last result
@@ -553,7 +577,7 @@ func testEOF(L *luaapi.State, f *os.File) bool {
 }
 
 // readLine reads a line from f. If chop is true, strips the trailing newline.
-func readLine(L *luaapi.State, f *os.File, chop bool) bool {
+func readLine(L *luaapi.State, f *os.File, chop bool) (bool, error) {
 	var buf strings.Builder
 	b := make([]byte, 1)
 	for {
@@ -564,43 +588,61 @@ func readLine(L *luaapi.State, f *os.File, chop bool) bool {
 					buf.WriteByte('\n')
 				}
 				L.PushString(buf.String())
-				return true
+				return true, nil
 			}
 			buf.WriteByte(b[0])
 		}
 		if err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			// Real I/O error
+			L.PushString("")
+			return false, err
 		}
 	}
-	// EOF or error
+	// EOF
 	s := buf.String()
 	L.PushString(s)
-	return len(s) > 0
+	return len(s) > 0, nil
 }
 
 // readAll reads the entire remaining file content.
-func readAll(L *luaapi.State, f *os.File) {
-	data, _ := io.ReadAll(f)
+func readAll(L *luaapi.State, f *os.File) error {
+	data, err := io.ReadAll(f)
 	L.PushString(string(data))
+	if err != nil && err != io.EOF {
+		return err
+	}
+	return nil
 }
 
 // readChars reads exactly n bytes from f.
-func readChars(L *luaapi.State, f *os.File, n int) bool {
+func readChars(L *luaapi.State, f *os.File, n int) (bool, error) {
 	buf := make([]byte, n)
 	total := 0
 	for total < n {
 		nr, err := f.Read(buf[total:])
 		total += nr
 		if err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			// Real I/O error
+			if total > 0 {
+				L.PushString(string(buf[:total]))
+				return true, nil
+			}
+			L.PushString("")
+			return false, err
 		}
 	}
 	if total > 0 {
 		L.PushString(string(buf[:total]))
-		return true
+		return true, nil
 	}
 	L.PushString("")
-	return false
+	return false, nil
 }
 
 // readNumber reads a number from the file (mirrors read_number in liolib.c).
