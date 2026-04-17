@@ -8,6 +8,8 @@
 package api
 
 import (
+	"sync"
+
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
 
@@ -214,6 +216,13 @@ type GlobalState struct {
 	// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
 	// Monotonically increasing — Go's GC handles actual freeing.
 	GCTotalBytes int64
+
+	// __gc finalizer support: tables/userdata with __gc metamethod are
+	// enqueued here by Go's runtime.SetFinalizer callback, then drained
+	// synchronously by collectgarbage("collect").
+	GCFinalizerMu    sync.Mutex
+	GCFinalizerQueue []any // pending *tableapi.Table or *objectapi.Userdata for __gc
+	GCClosed         bool  // set true when state is closing — blocks further enqueuing
 }
 
 // ---------------------------------------------------------------------------
