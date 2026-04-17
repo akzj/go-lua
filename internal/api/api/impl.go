@@ -1321,8 +1321,31 @@ func (L *State) OptNumber(idx int, def float64) float64 {
 }
 
 // ArgError raises an error for argument arg.
+// Mirrors: luaL_argerror in lauxlib.c
 func (L *State) ArgError(arg int, extraMsg string) int {
-	msg := fmt.Sprintf("bad argument #%d (%s)", arg, extraMsg)
+	ar, ok := L.GetStack(0)
+	if !ok {
+		// No stack frame
+		msg := fmt.Sprintf("bad argument #%d (%s)", arg, extraMsg)
+		L.PushString(msg)
+		L.Error()
+		return 0
+	}
+	L.GetInfo("n", ar)
+	if ar.NameWhat == "method" {
+		arg-- // do not count 'self'
+		if arg == 0 {
+			msg := fmt.Sprintf("calling '%s' on bad self (%s)", ar.Name, extraMsg)
+			L.PushString(msg)
+			L.Error()
+			return 0
+		}
+	}
+	name := ar.Name
+	if name == "" {
+		name = "?"
+	}
+	msg := fmt.Sprintf("bad argument #%d to '%s' (%s)", arg, name, extraMsg)
 	L.PushString(msg)
 	L.Error()
 	return 0
