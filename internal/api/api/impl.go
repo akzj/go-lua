@@ -1400,7 +1400,11 @@ func (L *State) Where(level int) {
 			if cl.Proto.Source != nil {
 				srcName = vmapi.ShortSrc(cl.Proto.Source.Data)
 			}
-			L.PushString(fmt.Sprintf("%s:%d: ", srcName, line))
+			if line <= 0 {
+				L.PushString(fmt.Sprintf("%s:?: ", srcName))
+			} else {
+				L.PushString(fmt.Sprintf("%s:%d: ", srcName, line))
+			}
 			return
 		}
 	}
