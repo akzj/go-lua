@@ -91,7 +91,15 @@ func ioCloseStub(L *luaapi.State) int {
 }
 
 func ioInputStub(L *luaapi.State) int {
-	// io.input() with no args returns io.stdin
+	// Mirrors: g_iofile in liolib.c
+	if !L.IsNoneOrNil(1) {
+		// If arg is a string, we'd open a file — but stub doesn't support that.
+		// If arg is not a string, check it's a valid FILE* handle.
+		if _, ok := L.ToString(1); !ok {
+			L.CheckUdata(1, "FILE*") // errors if not FILE* userdata
+		}
+	}
+	// Return current default input (io.stdin)
 	L.GetGlobal("io")
 	L.GetField(-1, "stdin")
 	L.Remove(-2)
