@@ -1454,7 +1454,7 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 			ar.Source = p.Source.Data
 			ar.ShortSrc = shortSrc(p.Source.Data)
 		} else {
-			ar.Source = "?"
+			ar.Source = "=?"
 			ar.ShortSrc = "?"
 		}
 		ar.LineDefined = p.LineDefined
@@ -1682,7 +1682,7 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 		cl := v.Val.(*closureapi.LClosure)
 		p := cl.Proto
 		if p != nil {
-			src := "?"
+			src := "=?"
 			ssrc := "?"
 			if p.Source != nil {
 				src = p.Source.String()
