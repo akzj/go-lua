@@ -2456,11 +2456,12 @@ startfunc:
 			AdjustVarargs(L, ci, cl.Proto)
 			// Update base after adjustment
 			base = ci.Func + 1
-			// Set OldPC past VARARGPREP so the next instruction is seen as a
-			// "new" line. Mirrors: OP_VARARGPREP in lvm.c sets L->oldpc = 1.
-			// The call hook was already fired by PreCall/CallHook.
+			// Fire call hook AFTER adjustment (deferred from PreCall).
+			// Mirrors: OP_VARARGPREP in lvm.c calls luaD_hookcall after
+			// luaT_adjustvarargs, so debug.getlocal sees correct params.
 			if L.HookMask != 0 {
-				L.OldPC = 1
+				CallHook(L, ci)
+				L.OldPC = 1 // next opcode seen as "new" line
 			}
 
 		// ===== Table construction =====

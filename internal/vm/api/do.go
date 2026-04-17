@@ -332,8 +332,12 @@ retry:
 			L.Stack[L.Top].Val = objectapi.Nil
 			L.Top++
 		}
-		// Fire call hook if active
-		if L.HookMask != 0 {
+		// Fire call hook if active.
+		// For vararg functions (PF_VAHID), defer the call hook to OP_VARARGPREP
+		// (after AdjustVarargs shifts the stack). This matches C Lua where
+		// luaG_tracecall returns 0 for vararg functions, and the hook fires
+		// inside OP_VARARGPREP instead.
+		if L.HookMask != 0 && !p.IsVararg() {
 			CallHook(L, ci)
 		}
 		return ci
