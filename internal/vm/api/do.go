@@ -449,7 +449,24 @@ func hookDispatch(L *stateapi.LuaState, event string, line int) {
 // retHook fires the return hook if set.
 // Mirrors: rethook in ldo.c
 func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
+	// For vararg functions, ci.Func has already been moved back by OP_RETURN.
+	// Temporarily restore it to the "virtual func" position (after OP_VARARGPREP)
+	// so that debug.getlocal sees the correct locals during the return hook.
+	// Mirrors: rethook in ldo.c
+	delta := 0
+	if ci.IsLua() {
+		cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+		if ok && cl.Proto != nil && cl.Proto.IsVararg() {
+			delta = ci.NExtraArgs + int(cl.Proto.NumParams) + 1
+		}
+	}
+	if delta != 0 {
+		ci.Func += delta // back to virtual 'func'
+	}
 	hookDispatch(L, "return", -1)
+	if delta != 0 {
+		ci.Func -= delta // restore
+	}
 }
 
 // CallHook fires the call hook for a new function call.
