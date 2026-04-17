@@ -2238,12 +2238,20 @@ func (L *State) DrainGCFinalizers() {
 				continue
 			}
 
+			// Save stack top before the call.
+			// On error, PCall leaves an error object on the stack
+			// (SetErrorObj sets Top = oldTop + 1). We must restore
+			// the stack to prevent overflow from repeated __gc errors.
+			// Mirrors C Lua's GCTM: L->top.p = oldtop after luaD_pcall.
+			oldTop := L.GetTop()
 			// Push the __gc function and the table as argument
 			L.push(gcTM)
 			L.push(objectapi.TValue{Val: tbl, Tt: objectapi.TagTable})
 			// Protected call: 1 arg, 0 results, no error handler
 			// Discard errors (like C Lua's GCTM)
 			L.PCall(1, 0, 0)
+			// Restore stack — discard any leftover error object
+			L.SetTop(oldTop)
 		}
 	}
 }
