@@ -554,7 +554,7 @@ func loadAux(L *luaapi.State, status, env int) int {
 	if status == luaapi.StatusOK {
 		if env != 0 {
 			L.PushValue(env) // push env table
-			if L.SetUpvalue(-2, 1) == "" {
+			if _, ok := L.SetUpvalue(-2, 1); !ok {
 				L.Pop(1) // remove 'env' if not used (no upvalue to set)
 			}
 		}

@@ -1025,54 +1025,57 @@ func (L *State) NewUserdata(size int, nUV int) interface{} {
 // ---------------------------------------------------------------------------
 
 // GetUpvalue pushes the value of upvalue n of the closure at funcIdx.
-func (L *State) GetUpvalue(funcIdx, n int) string {
+// Returns (name, true) if upvalue exists, ("", false) if not.
+// C closure upvalues are always named "" (empty string).
+func (L *State) GetUpvalue(funcIdx, n int) (string, bool) {
 	v := L.index2val(funcIdx)
 	if v == nil {
-		return ""
+		return "", false
 	}
 	switch v.Tt {
 	case objectapi.TagLuaClosure:
 		cl := v.Val.(*closureapi.LClosure)
 		if n < 1 || n > len(cl.UpVals) {
-			return ""
+			return "", false
 		}
 		uv := cl.UpVals[n-1]
 		if uv == nil {
-			return ""
+			return "", false
 		}
 		val := uv.Get(L.ls().Stack)
 		L.push(val)
 		// Return the name from Proto.Upvalues debug info
 		if n-1 < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[n-1].Name != nil {
-			return cl.Proto.Upvalues[n-1].Name.String()
+			return cl.Proto.Upvalues[n-1].Name.String(), true
 		}
-		return ""
+		return "", true
 	case objectapi.TagCClosure:
 		cc := v.Val.(*closureapi.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
-			return ""
+			return "", false
 		}
 		L.push(cc.UpVals[n-1])
-		return "" // C closures have no upvalue names
+		return "", true // C closures have no upvalue names — always ""
 	}
-	return ""
+	return "", false
 }
 
 // SetUpvalue sets upvalue n of the closure at funcIdx from the top value.
-func (L *State) SetUpvalue(funcIdx, n int) string {
+// Returns (name, true) if upvalue exists, ("", false) if not.
+func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 	v := L.index2val(funcIdx)
 	if v == nil {
-		return ""
+		return "", false
 	}
 	switch v.Tt {
 	case objectapi.TagLuaClosure:
 		cl := v.Val.(*closureapi.LClosure)
 		if n < 1 || n > len(cl.UpVals) {
-			return ""
+			return "", false
 		}
 		uv := cl.UpVals[n-1]
 		if uv == nil {
-			return ""
+			return "", false
 		}
 		val := L.index2val(-1)
 		if val != nil {
@@ -1080,22 +1083,22 @@ func (L *State) SetUpvalue(funcIdx, n int) string {
 		}
 		L.Pop(1)
 		if n-1 < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[n-1].Name != nil {
-			return cl.Proto.Upvalues[n-1].Name.String()
+			return cl.Proto.Upvalues[n-1].Name.String(), true
 		}
-		return ""
+		return "", true
 	case objectapi.TagCClosure:
 		cc := v.Val.(*closureapi.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
-			return ""
+			return "", false
 		}
 		val := L.index2val(-1)
 		if val != nil {
 			cc.UpVals[n-1] = *val
 		}
 		L.Pop(1)
-		return ""
+		return "", true
 	}
-	return ""
+	return "", false
 }
 
 // ---------------------------------------------------------------------------
