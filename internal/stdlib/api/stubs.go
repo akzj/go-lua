@@ -158,7 +158,13 @@ func debugTraceback(L *luaapi.State) int {
 		if ar.What == "main" {
 			buf.WriteString("main chunk")
 		} else if ar.What == "C" {
-			buf.WriteString("?")
+			// Try to get function name for C functions
+			L.GetInfo("n", ar)
+			if ar.Name != "" {
+				buf.WriteString(fmt.Sprintf("function '%s'", ar.Name))
+			} else {
+				buf.WriteString("?")
+			}
 		} else {
 			// Try to get function name
 			L.GetInfo("n", ar)
