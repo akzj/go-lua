@@ -368,6 +368,14 @@ func debugGetinfo(L *luaapi.State) int {
 	L.PushInteger(int64(ar.ExtraArgs))
 	L.SetField(-2, "extraargs")
 
+	// Handle "r" (transfer info for call/return hooks)
+	if strings.Contains(what, "r") {
+		L.PushInteger(int64(ar.FTransfer))
+		L.SetField(-2, "ftransfer")
+		L.PushInteger(int64(ar.NTransfer))
+		L.SetField(-2, "ntransfer")
+	}
+
 	// Handle "f" (push function) and "L" (activelines) for stack-level path
 	if strings.Contains(what, "f") || strings.Contains(what, "L") {
 		if L.PushFuncFromDebug(ar) {

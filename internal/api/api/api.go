@@ -106,6 +106,8 @@ type DebugInfo struct {
 	IsVararg        bool   // is a vararg function
 	IsTailCall      bool   // is a tail call
 	ExtraArgs       int    // number of extra arguments (vararg)
+	FTransfer       int    // index of first transferred value (for call/return hooks)
+	NTransfer       int    // number of transferred values (for call/return hooks)
 	CI              interface{} // internal: *stateapi.CallInfo
 	ThreadState     interface{} // internal: *stateapi.LuaState (set by GetStack)
 }

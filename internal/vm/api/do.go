@@ -392,7 +392,8 @@ func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 // Mirrors: luaD_hook in ldo.c
 // event: "call", "return", "line", "count", "tail call"
 // line: line number for line hooks, -1 otherwise
-func hookDispatch(L *stateapi.LuaState, event string, line int) {
+// ftransfer/ntransfer: parameter/return value transfer info (0 if N/A)
+func hookDispatch(L *stateapi.LuaState, event string, line int, ftransfer int, ntransfer int) {
 	hookVal, ok := L.Hook.(objectapi.TValue)
 	if !ok || hookVal.Tt == objectapi.TagNil || hookVal.Val == nil {
 		return
@@ -407,6 +408,10 @@ func hookDispatch(L *stateapi.LuaState, event string, line int) {
 	savedAllowHook := L.AllowHook
 	L.AllowHook = false // cannot call hooks inside a hook
 	ci.CallStatus |= stateapi.CISTHooked // mark caller as hook frame
+
+	// Set transfer info for debug.getinfo "r" flag
+	L.FTransfer = ftransfer
+	L.NTransfer = ntransfer
 
 	// Protect entire activation register (mirrors luaD_hook in ldo.c)
 	// For Lua functions, L.Top may be below ci.Top. Push hook args above ci.Top
@@ -463,7 +468,8 @@ func retHook(L *stateapi.LuaState, ci *stateapi.CallInfo, nres int) {
 	if delta != 0 {
 		ci.Func += delta // back to virtual 'func'
 	}
-	hookDispatch(L, "return", -1)
+	ftransfer := (L.Top - nres) - ci.Func
+	hookDispatch(L, "return", -1, ftransfer, nres)
 	if delta != 0 {
 		ci.Func -= delta // restore
 	}
@@ -481,11 +487,22 @@ func CallHook(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 		event = "tail call"
 	}
 	if ci.IsLua() {
+		// ftransfer=1 (first param), ntransfer=numparams
+		numparams := 0
+		cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+		if ok && cl.Proto != nil {
+			numparams = int(cl.Proto.NumParams)
+		}
 		ci.SavedPC++ // hooks assume 'pc' is already incremented
-		hookDispatch(L, event, -1)
+		hookDispatch(L, event, -1, 1, numparams)
 		ci.SavedPC-- // correct 'pc'
 	} else {
-		hookDispatch(L, event, -1)
+		// For C functions: ftransfer=1, ntransfer=narg (top - func - 1)
+		narg := L.Top - ci.Func - 1
+		if narg < 0 {
+			narg = 0
+		}
+		hookDispatch(L, event, -1, 1, narg)
 	}
 }
 
@@ -518,7 +535,7 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 	}
 
 	if countHook {
-		hookDispatch(L, "count", -1)
+		hookDispatch(L, "count", -1, 0, 0)
 	}
 
 	if mask&stateapi.MaskLine != 0 {
@@ -543,7 +560,7 @@ func TraceExec(L *stateapi.LuaState, ci *stateapi.CallInfo) bool {
 		if npci <= oldpc || GetFuncLine(p, oldpc) != GetFuncLine(p, npci) {
 			newline := GetFuncLine(p, npci)
 			if newline >= 0 {
-				hookDispatch(L, "line", newline)
+				hookDispatch(L, "line", newline, 0, 0)
 			}
 		}
 		L.OldPC = npci
