@@ -65,17 +65,19 @@ func osTime(L *luaapi.State) int {
 	L.CheckType(1, 5) // TypeTable = 5
 	L.SetTop(1)
 
-	year := getTimeField(L, "year", -1, 0)
-	month := getTimeField(L, "month", -1, 0)
+	year := getTimeField(L, "year", -1, 1900)
+	month := getTimeField(L, "month", -1, 1)
 	day := getTimeField(L, "day", -1, 0)
 	hour := getTimeField(L, "hour", 12, 0)
 	min := getTimeField(L, "min", 0, 0)
 	sec := getTimeField(L, "sec", 0, 0)
 	isdst := getBoolField(L, "isdst")
 
-	// Build a time.Time in local timezone
+	// Build a time.Time in local timezone.
+	// getTimeField returns C struct tm values (year-1900, month-1, etc.)
+	// Go's time.Date expects actual year, 1-based month.
 	loc := time.Local
-	t := time.Date(year, time.Month(month), day, hour, min, sec, 0, loc)
+	t := time.Date(year+1900, time.Month(month+1), day, hour, min, sec, 0, loc)
 
 	// Handle DST: if isdst is explicitly false but the time is in DST,
 	// or vice versa, we may need to adjust. For simplicity, we just use
@@ -89,9 +91,16 @@ func osTime(L *luaapi.State) int {
 	return 1
 }
 
+// int32 limits — C Lua's struct tm uses int (32-bit) for date fields.
+const (
+	int32Max = 0x7fffffff  // 2147483647
+	int32Min = -0x80000000 // -2147483648
+)
+
 // getTimeField reads an integer field from the table at stack top.
-// If the field is nil and d >= 0, returns d+delta. If nil and d < 0, errors.
-// Otherwise returns the field value - delta.
+// If the field is nil and d >= 0, returns d. If nil and d < 0, errors.
+// Otherwise returns the field value - delta, checking that the result
+// fits in a 32-bit int (matching C Lua's struct tm field constraints).
 func getTimeField(L *luaapi.State, key string, d int, delta int) int {
 	tp := L.GetField(-1, key) // pushes field value
 	if tp == 0 {              // LUA_TNIL
@@ -100,7 +109,7 @@ func getTimeField(L *luaapi.State, key string, d int, delta int) int {
 			L.Errorf("field '%s' missing in date table", key)
 			return 0
 		}
-		return d + delta
+		return d
 	}
 	res, ok := L.ToInteger(-1)
 	if !ok {
@@ -115,13 +124,21 @@ func getTimeField(L *luaapi.State, key string, d int, delta int) int {
 		return 0
 	}
 	L.Pop(1)
-	// Check overflow: the result after subtracting delta must fit in int32
-	r := int(res) - delta
-	if int64(r)+int64(delta) != res {
-		L.Errorf("field '%s' is out-of-bound", key)
-		return 0
+	// Check overflow: the result after subtracting delta must fit in int32.
+	// This mirrors C Lua's check in getfield (loslib.c):
+	//   if (!(res >= 0 ? res - delta <= INT_MAX : INT_MIN + delta <= res))
+	if res >= 0 {
+		if res-int64(delta) > int32Max {
+			L.Errorf("field '%s' is out-of-bound", key)
+			return 0
+		}
+	} else {
+		if int64(int32Min)+int64(delta) > res {
+			L.Errorf("field '%s' is out-of-bound", key)
+			return 0
+		}
 	}
-	return r
+	return int(res) - delta
 }
 
 // getBoolField reads a boolean field from the table at stack top.
