@@ -8,7 +8,6 @@ package api
 
 import (
 	"math"
-	"reflect"
 	"strings"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
@@ -583,8 +582,8 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 	case objectapi.TagLuaClosure, objectapi.TagCClosure:
 		return t1.Val == t2.Val // pointer comparison — struct pointers are comparable
 	case objectapi.TagLightCFunc:
-		// Go func values are not comparable with ==; use reflect to compare pointers
-		return reflect.ValueOf(t1.Val).Pointer() == reflect.ValueOf(t2.Val).Pointer()
+		// Use interface data word for unique closure identity (reflect.Pointer is shared)
+		return objectapi.LightCFuncEqual(t1.Val, t2.Val)
 	default:
 		if t1.Tt == objectapi.TagLightCFunc || t2.Tt == objectapi.TagLightCFunc {
 			return false // different tags already checked above
@@ -637,7 +636,7 @@ func RawEqualObj(t1, t2 objectapi.TValue) bool {
 	case objectapi.TagLuaClosure, objectapi.TagCClosure:
 		return t1.Val == t2.Val // pointer comparison
 	case objectapi.TagLightCFunc:
-		return reflect.ValueOf(t1.Val).Pointer() == reflect.ValueOf(t2.Val).Pointer()
+		return objectapi.LightCFuncEqual(t1.Val, t2.Val)
 	default:
 		return t1.Val == t2.Val
 	}

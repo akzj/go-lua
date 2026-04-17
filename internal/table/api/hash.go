@@ -7,7 +7,6 @@ package api
 import (
 	"math"
 	"math/bits"
-	"reflect"
 
 	obj "github.com/akzj/go-lua/internal/object/api"
 )
@@ -75,6 +74,10 @@ func mainPosition(t *Table, key obj.TValue) int {
 		return 0 & hmask
 	case obj.TagTrue:
 		return 1 & hmask
+	case obj.TagLightCFunc:
+		// Use interface data word (unique per closure instance) for hashing.
+		ptr := obj.FuncDataPtr(key.Val)
+		return hashInt(int64(ptr), hmask)
 	default:
 		// For other types, use tag as hash (simple but correct).
 		return int(key.Tt) & hmask
@@ -149,7 +152,7 @@ func equalKey(k1 obj.TValue, n2 *Node, deadOk bool) bool {
 			// Dead key: compare by value identity for collectable types
 			// Go func values are not comparable; use reflect for those.
 			if k1.Tt == obj.TagLightCFunc {
-				return reflect.ValueOf(k1.Val).Pointer() == reflect.ValueOf(n2.KeyVal).Pointer()
+				return obj.LightCFuncEqual(k1.Val, n2.KeyVal)
 			}
 			return k1.Val == n2.KeyVal
 		}
@@ -176,7 +179,7 @@ func equalKey(k1 obj.TValue, n2 *Node, deadOk bool) bool {
 	default:
 		// Go func values are not comparable with ==; use reflect for those.
 		if n2.KeyTT == obj.TagLightCFunc {
-			return reflect.ValueOf(k1.Val).Pointer() == reflect.ValueOf(n2.KeyVal).Pointer()
+			return obj.LightCFuncEqual(k1.Val, n2.KeyVal)
 		}
 		return k1.Val == n2.KeyVal // identity for GC objects (pointers)
 	}
