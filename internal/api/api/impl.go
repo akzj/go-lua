@@ -2093,25 +2093,75 @@ func (L *State) Status() int {
 // Userdata API (stubs)
 // ---------------------------------------------------------------------------
 
-func (L *State) ToUserdata(idx int) interface{}              { return nil }
+func (L *State) ToUserdata(idx int) interface{} {
+	v := L.index2val(idx)
+	if v == nil {
+		return nil
+	}
+	switch v.Tt {
+	case objectapi.TagUserdata:
+		ud, ok := v.Val.(*objectapi.Userdata)
+		if ok {
+			return ud.Data
+		}
+		return nil
+	case objectapi.TagLightUserdata:
+		return v.Val
+	default:
+		return nil
+	}
+}
+
+// GetUserdataObj returns the full Userdata struct at idx, or nil if not userdata.
+func (L *State) GetUserdataObj(idx int) *objectapi.Userdata {
+	v := L.index2val(idx)
+	if v == nil || v.Tt != objectapi.TagUserdata {
+		return nil
+	}
+	ud, ok := v.Val.(*objectapi.Userdata)
+	if !ok {
+		return nil
+	}
+	return ud
+}
 // GetIUserValue pushes the n-th user value of the userdata at idx onto the stack.
 // Returns the type of the pushed value, or TypeNone if invalid.
 // For non-full-userdata or invalid n, pushes nil and returns TypeNone.
 // Mirrors: lua_getiuservalue in lapi.c
 func (L *State) GetIUserValue(idx int, n int) objectapi.Type {
 	ls := L.ls()
-	// Always push something (nil for failure cases)
 	vmapi.CheckStack(ls, 1)
+	v := L.index2val(idx)
+	if v != nil && v.Tt == objectapi.TagUserdata {
+		ud, ok := v.Val.(*objectapi.Userdata)
+		if ok && n >= 1 && n <= len(ud.UserVals) {
+			val := ud.UserVals[n-1]
+			ls.Stack[ls.Top].Val = val
+			ls.Top++
+			return objectapi.Type(val.Tt & 0x0F)
+		}
+	}
+	// Push nil for failure
 	ls.Stack[ls.Top].Val = objectapi.Nil
 	ls.Top++
 	return objectapi.TypeNone
 }
 
 // SetIUserValue sets the n-th user value of the userdata at idx to the value
-// at the top of the stack. Returns false if the operation fails (e.g. not full userdata).
-// Note: unlike C Lua's lua_setiuservalue, this stub does NOT pop the value.
-// The caller (debugSetuservalue) manages the stack.
+// at the top of the stack. Pops the value. Returns false if the operation fails.
+// Mirrors: lua_setiuservalue in lapi.c
 func (L *State) SetIUserValue(idx int, n int) bool {
+	ls := L.ls()
+	v := L.index2val(idx)
+	if v != nil && v.Tt == objectapi.TagUserdata {
+		ud, ok := v.Val.(*objectapi.Userdata)
+		if ok && n >= 1 && n <= len(ud.UserVals) {
+			ls.Top--
+			ud.UserVals[n-1] = ls.Stack[ls.Top].Val
+			return true
+		}
+	}
+	ls.Top-- // pop even on failure
 	return false
 }
 func (L *State) ToPointer(idx int) string {
