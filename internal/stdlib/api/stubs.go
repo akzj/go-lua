@@ -163,7 +163,34 @@ func debugTraceback(L *luaapi.State) int {
 			if ar.Name != "" {
 				buf.WriteString(fmt.Sprintf("function '%s'", ar.Name))
 			} else {
-				buf.WriteString("?")
+				// Try to find function name by searching globals
+				// Mirrors: pushglobalfuncname in lauxlib.c
+				name := ""
+				if L.PushFuncFromDebug(ar) {
+					funcIdx := L.GetTop()
+					funcPtr := L.ToPointer(funcIdx)
+					// Search _G for this function
+					L.PushGlobalTable()
+					L.PushNil()
+					for L.Next(-2) {
+						// Compare using ToPointer for safe function comparison
+						if L.ToPointer(-1) == funcPtr && funcPtr != "" {
+							if s, ok := L.ToString(-2); ok {
+								name = s
+							}
+							L.Pop(2) // pop key and value
+							break
+						}
+						L.Pop(1) // pop value, keep key
+					}
+					L.Pop(1) // pop _G
+					L.Pop(1) // pop function
+				}
+				if name != "" {
+					buf.WriteString(fmt.Sprintf("function '%s'", name))
+				} else {
+					buf.WriteString("?")
+				}
 			}
 		} else {
 			// Try to get function name
