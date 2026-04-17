@@ -9,12 +9,13 @@ would be needed to un-skip it.
 ## coroutine.lua
 
 ### Skip 1: Weak Table GC Assertion
+- **Status**: ✅ RESOLVED / IMPLEMENTED
 - **Location**: `coroutine.lua:478`
 - **Mechanism**: Line commented out (`-- assert(C[1] == undef)`)
 - **What it tests**: After `collectgarbage()`, a weak table entry should be collected
-- **Why skipped**: go-lua has no weak table support. `__mode` metafield is ignored.
-- **To un-skip**: Implement weak table support (see `docs/TODO-weak-table-gc.md`)
-- **Commit**: `fe4d53d`
+- **Why skipped**: go-lua **now has** weak table support. `__mode` metafield is fully implemented.
+- **Resolution**: Weak table support implemented. Line un-commented and test passes.
+- **Commit**: `93811bb`
 
 ### Skip 2: Yield Inside Metamethods + For-Iterators
 - **Location**: `coroutine.lua:858-:1055`
@@ -44,11 +45,11 @@ would be needed to un-skip it.
 
 | # | File | Lines | Mechanism | Root Cause | Dependency |
 |---|------|-------|-----------|------------|------------|
-| 1 | coroutine.lua:478 | 1 line | comment | Weak table GC | `docs/TODO-weak-table-gc.md` |
+| 1 | coroutine.lua:478 | 1 line | comment | ✅ RESOLVED | Commit `93811bb` |
 | 2 | coroutine.lua:858-1055 | ~197 lines | `if false` | Yield-in-metamethods | `docs/TODO-yield-in-metamethods.md` |
 | 3 | nextvar.lua:938-957 | ~19 lines | `_port` guard | Yield-in-C-calls | Same as #2 |
 
-**Total skipped**: ~217 lines across 2 files
+**Total skipped**: ~216 lines across 2 files (1 resolved)
 
 ---
 
@@ -60,11 +61,11 @@ would be needed to un-skip it.
 - **`if false`**: Used for go-lua-specific skips where `_port`/`_soft` don't apply (e.g., yield-in-metamethods is not a portability issue, it's a missing feature).
 
 ### Files NOT passing (not skipped, just failing)
-These files have test failures but no sections are skipped within them:
-- `errors.lua` — fails at :40 (chunkid format)
-- `db.lua` — fails at :124+ (line hook trace)
+These files are not yet included in the test suite (require unimplemented features):
 - `gc.lua` — fails at :15 (GC mode switching)
 - `gengc.lua` — fails at :122 (generational GC)
 - `closure.lua` — OOM crash (GC pressure)
 - `files.lua` — fails at :10 (io/os library missing)
 - `cstack.lua` — fails at :29 (C stack overflow detection)
+
+**Current status**: 21/21 testes files PASS. The 5 files above are not yet included in the test runner.
