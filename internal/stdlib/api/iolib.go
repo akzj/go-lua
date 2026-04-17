@@ -745,16 +745,24 @@ func isXDigit(c byte) bool { return isDigit(c) || (c >= 'a' && c <= 'f') || (c >
 
 // gWrite is the core write function (mirrors g_write in liolib.c).
 func gWrite(L *luaapi.State, f *os.File, arg int) int {
-	nargs := L.GetTop() - arg + 1
+	nargs := L.GetTop() - arg // matches C Lua: excludes file handle at top
 	for i := 0; i < nargs; i++ {
 		idx := arg + i
 		if L.IsNumber(idx) {
-			// Convert number to string
-			s := L.TolString(idx)
-			_, err := f.WriteString(s)
-			L.Pop(1) // pop the tolstring result
-			if err != nil {
-				return pushFileResult(L, false, "", err)
+			// Format number as string (like C Lua's lua_numbertocstring)
+			if v, ok := L.ToInteger(idx); ok && float64(v) == func() float64 { f, _ := L.ToNumber(idx); return f }() {
+				s := fmt.Sprintf("%d", v)
+				_, err := f.WriteString(s)
+				if err != nil {
+					return pushFileResult(L, false, "", err)
+				}
+			} else {
+				v, _ := L.ToNumber(idx)
+				s := fmt.Sprintf("%.14g", v)
+				_, err := f.WriteString(s)
+				if err != nil {
+					return pushFileResult(L, false, "", err)
+				}
 			}
 		} else {
 			s := L.CheckString(idx)
@@ -764,8 +772,7 @@ func gWrite(L *luaapi.State, f *os.File, arg int) int {
 			}
 		}
 	}
-	// Return file handle (already at stack position 1 for f:write,
-	// or we need to push io.stdout for io.write)
+	// File handle is already at stack top (pushed by caller)
 	return 1
 }
 
@@ -780,20 +787,30 @@ func fRead(L *luaapi.State) int {
 }
 
 // io.write(...)
+// io.write(...) — matches C Lua's io_write
 func ioWrite(L *luaapi.State) int {
-	f := getIOFile(L, ioOutput)
-	L.GetField(luaapi.RegistryIndex, ioOutput) // push file handle for return
-	L.Insert(1)                                  // move it to position 1
-	return gWrite(L, f, 2)
+	// getIOFile pushes the file handle userdata to the stack top and leaves it there
+	L.GetField(luaapi.RegistryIndex, ioOutput) // push file handle (for return)
+	ud := L.GetUserdataObj(-1)
+	if ud == nil {
+		L.Errorf("default %s file is closed", "output")
+		return 0
+	}
+	s, ok := ud.Data.(*ioStream)
+	if !ok || s.isClosed() {
+		L.Errorf("default %s file is closed", "output")
+		return 0
+	}
+	// Stack: [arg1, arg2, ..., filehandle]
+	// gWrite processes args 1..N (the original args), file handle stays at top
+	return gWrite(L, s.f, 1)
 }
 
-// f:write(...)
+// f:write(...) — matches C Lua's f_write
 func fWrite(L *luaapi.State) int {
 	f := toFile(L, 1)
-	L.PushValue(1) // push file handle for return (at top)
-	L.Insert(1)    // no, file handle is already at 1
-	// Actually for f:write, file handle is already at position 1
-	// gWrite starts from arg=2
+	L.PushValue(1) // push copy of file handle to top (for return)
+	// Stack: [filehandle, arg2, arg3, ..., filehandle_copy]
 	return gWrite(L, f, 2)
 }
 
