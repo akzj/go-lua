@@ -991,8 +991,36 @@ func (L *State) Concat(n int) {
 
 // Arith performs an arithmetic operation.
 func (L *State) Arith(op ArithOp) {
-	// Simplified: just for basic operations on top-of-stack values
-	// Full implementation would use objectapi.RawArith + metamethods
+	ls := L.ls()
+	// For unary ops (UNM, BNOT), both operands are the same (top of stack).
+	// For binary ops, operands are top-2 and top-1.
+	var p1, p2 objectapi.TValue
+	if op == OpUnm || op == OpBNot {
+		// Unary: operand is at top of stack
+		p1 = ls.Stack[ls.Top-1].Val
+		p2 = p1
+	} else {
+		// Binary: operands at top-2 and top-1
+		p1 = ls.Stack[ls.Top-2].Val
+		p2 = ls.Stack[ls.Top-1].Val
+	}
+
+	// Try raw arithmetic (includes string→number coercion via ToNumber)
+	result, ok := objectapi.RawArith(int(op), p1, p2)
+	if !ok {
+		// Raw arithmetic failed — error (metamethods should have been tried
+		// before reaching lua_arith in the string metamethod path)
+		vmapi.RunError(ls, "attempt to perform arithmetic on incompatible types")
+	}
+
+	// Pop operands and push result
+	if op == OpUnm || op == OpBNot {
+		ls.Top--
+	} else {
+		ls.Top -= 2
+	}
+	ls.Stack[ls.Top].Val = result
+	ls.Top++
 }
 
 // ---------------------------------------------------------------------------

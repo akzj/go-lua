@@ -1684,6 +1684,67 @@ func str_dump(L *luaapi.State) int {
 	return 1
 }
 
+// ---------------------------------------------------------------------------
+// String arithmetic metamethods
+// Reference: lua-master/lstrlib.c — tonum, trymt, arith, stringmetamethods
+//
+// In C Lua, strings have arithmetic metamethods (__add, __sub, etc.) that
+// convert string operands to numbers and then perform the operation.
+// The VM fast path (tonumberns) rejects strings, so they fall through to
+// OP_MMBIN which finds these metamethods on the string metatable.
+// ---------------------------------------------------------------------------
+
+// strToNum converts the stack value at idx to a number if it's a string.
+// If already a number, pushes a copy. Returns true if conversion succeeded.
+// Mirrors C Lua's tonum() in lstrlib.c.
+func strToNum(L *luaapi.State, idx int) bool {
+	if L.Type(idx) == objectapi.TypeNumber {
+		L.PushValue(idx)
+		return true
+	}
+	s, ok := L.ToString(idx)
+	if !ok {
+		return false
+	}
+	return L.StringToNumber(s) != 0
+}
+
+// strTryMT tries the metamethod of the second operand when the string
+// metamethod can't handle the operation (e.g., the other operand is not
+// a number or string). Mirrors C Lua's trymt() in lstrlib.c.
+func strTryMT(L *luaapi.State, mtkey string, opname string) {
+	L.SetTop(2) // back to original arguments
+	// If second operand is a string, it shares our metatable — no point retrying.
+	// Otherwise, try the second operand's metamethod.
+	if L.Type(2) == objectapi.TypeString || !L.GetMetafield(2, mtkey) {
+		L.Errorf("attempt to %s a '%s' with a '%s'", opname,
+			L.TypeName(L.Type(1)), L.TypeName(L.Type(2)))
+	}
+	L.Insert(-3) // put metamethod before arguments
+	L.Call(2, 1) // call metamethod
+}
+
+// strArith implements the common pattern for string arithmetic metamethods.
+// Tries to convert both operands to numbers and perform the operation.
+// If that fails, tries the second operand's metamethod.
+func strArith(L *luaapi.State, op luaapi.ArithOp, mtname string) int {
+	if strToNum(L, 1) && strToNum(L, 2) {
+		L.Arith(op)
+	} else {
+		strTryMT(L, mtname, mtname[2:]) // skip "__" prefix for error message
+	}
+	return 1
+}
+
+func str_arith_add(L *luaapi.State) int  { return strArith(L, luaapi.OpAdd, "__add") }
+func str_arith_sub(L *luaapi.State) int  { return strArith(L, luaapi.OpSub, "__sub") }
+func str_arith_mul(L *luaapi.State) int  { return strArith(L, luaapi.OpMul, "__mul") }
+func str_arith_mod(L *luaapi.State) int  { return strArith(L, luaapi.OpMod, "__mod") }
+func str_arith_pow(L *luaapi.State) int  { return strArith(L, luaapi.OpPow, "__pow") }
+func str_arith_div(L *luaapi.State) int  { return strArith(L, luaapi.OpDiv, "__div") }
+func str_arith_idiv(L *luaapi.State) int { return strArith(L, luaapi.OpIDiv, "__idiv") }
+func str_arith_unm(L *luaapi.State) int  { return strArith(L, luaapi.OpUnm, "__unm") }
+
 // OpenString opens the string library.
 func OpenString(L *luaapi.State) int {
 	strFuncs := map[string]luaapi.CFunction{
@@ -1708,9 +1769,28 @@ func OpenString(L *luaapi.State) int {
 	L.NewLib(strFuncs)
 
 	// Set string metatable so methods work on string values
-	L.CreateTable(0, 1)
-	L.PushValue(-2) // push string library table
+	// Includes arithmetic metamethods for string→number coercion
+	// (mirrors C Lua's stringmetamethods[] in lstrlib.c)
+	L.CreateTable(0, 9) // __index + 8 arithmetic metamethods
+	L.PushValue(-2)     // push string library table
 	L.SetField(-2, "__index")
+
+	// Register arithmetic metamethods on the string metatable
+	arithMMs := map[string]luaapi.CFunction{
+		"__add":  str_arith_add,
+		"__sub":  str_arith_sub,
+		"__mul":  str_arith_mul,
+		"__mod":  str_arith_mod,
+		"__pow":  str_arith_pow,
+		"__div":  str_arith_div,
+		"__idiv": str_arith_idiv,
+		"__unm":  str_arith_unm,
+	}
+	for name, fn := range arithMMs {
+		L.PushCFunction(fn)
+		L.SetField(-2, name)
+	}
+
 	L.PushString("") // push a string to get its metatable slot
 	L.PushValue(-2)  // push the metatable
 	L.SetMetatable(-2)
