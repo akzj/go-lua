@@ -123,6 +123,10 @@ type LexState struct {
 	// Uses any to avoid circular import with parse module.
 	FuncState any // current FuncState (set by parser)
 	DynData   any // shared dynamic data (set by parser)
+
+	// Parser nesting depth counter (mirrors C Lua's L->nCcalls)
+	NestLevel    int // current nesting depth
+	MaxNestLevel int // maximum allowed nesting (default 200)
 }
 
 // LexReader is the interface for reading source characters.
