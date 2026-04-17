@@ -1134,7 +1134,7 @@ func (L *State) GetUpvalue(funcIdx, n int) (string, bool) {
 		if n-1 < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[n-1].Name != nil {
 			return cl.Proto.Upvalues[n-1].Name.String(), true
 		}
-		return "", true
+		return "(no name)", true
 	case objectapi.TagCClosure:
 		cc := v.Val.(*closureapi.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
@@ -1171,7 +1171,7 @@ func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 		if n-1 < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[n-1].Name != nil {
 			return cl.Proto.Upvalues[n-1].Name.String(), true
 		}
-		return "", true
+		return "(no name)", true
 	case objectapi.TagCClosure:
 		cc := v.Val.(*closureapi.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
@@ -1453,6 +1453,9 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		if p.Source != nil {
 			ar.Source = p.Source.Data
 			ar.ShortSrc = shortSrc(p.Source.Data)
+		} else {
+			ar.Source = "?"
+			ar.ShortSrc = "?"
 		}
 		ar.LineDefined = p.LineDefined
 		ar.LastLineDefined = p.LastLine
@@ -1679,15 +1682,17 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 		cl := v.Val.(*closureapi.LClosure)
 		p := cl.Proto
 		if p != nil {
-			src := ""
+			src := "?"
+			ssrc := "?"
 			if p.Source != nil {
 				src = p.Source.String()
+				ssrc = shortSrcStr(src)
 			}
 			w := "Lua"
 			if p.LineDefined == 0 {
 				w = "main"
 			}
-			return src, shortSrcStr(src), w, p.LineDefined, p.LastLine, len(cl.UpVals), int(p.NumParams), p.IsVararg(), true
+			return src, ssrc, w, p.LineDefined, p.LastLine, len(cl.UpVals), int(p.NumParams), p.IsVararg(), true
 		}
 	}
 	if v.Tt == objectapi.TagCClosure {
