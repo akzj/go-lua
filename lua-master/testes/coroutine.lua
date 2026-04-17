@@ -475,7 +475,7 @@ local f = x()
 assert(f() == 21 and x()() == 32 and x() == f)
 x = nil
 collectgarbage()
--- assert(C[1] == undef)  -- go-lua: weak table GC not implemented
+assert(C[1] == undef)
 assert(f() == 43 and f() == 53)
 
 
