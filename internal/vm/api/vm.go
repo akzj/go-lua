@@ -1496,6 +1496,16 @@ startfunc:
 	code := cl.Proto.Code
 	base := ci.Func + 1
 
+	// Mirrors: luaG_tracecall in ldebug.c — fire call hook at function entry.
+	// For tail calls, PreTailCall sets CISTTail and savedpc=0, then jumps here.
+	// The call hook for non-tail calls is already fired by PreCall (non-vararg)
+	// or OP_VARARGPREP (vararg). Only tail calls need this path.
+	// For vararg tail calls, defer to OP_VARARGPREP.
+	if L.HookMask != 0 && ci.CallStatus&stateapi.CISTTail != 0 &&
+		ci.SavedPC == 0 && !cl.Proto.IsVararg() {
+		CallHook(L, ci)
+	}
+
 	for {
 		inst := code[ci.SavedPC]
 		ci.SavedPC++ // increment BEFORE hook check — mirrors C Lua vmfetch
