@@ -926,6 +926,17 @@ func (L *State) RawEqual(idx1, idx2 int) bool {
 	if v1.Tt != v2.Tt {
 		return false
 	}
+	// For types that are not comparable with ==  (e.g. functions), use
+	// pointer/interface identity via reflect.
+	if v1.Val == nil && v2.Val == nil {
+		return true
+	}
+	rv1 := reflect.ValueOf(v1.Val)
+	rv2 := reflect.ValueOf(v2.Val)
+	if rv1.Kind() == reflect.Func || rv2.Kind() == reflect.Func {
+		// Functions: compare by pointer
+		return rv1.Pointer() == rv2.Pointer()
+	}
 	return v1.Val == v2.Val
 }
 
