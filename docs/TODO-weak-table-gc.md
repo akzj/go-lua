@@ -1,48 +1,83 @@
-# TODO: Weak Table GC Support
+# Weak Table GC Support — IMPLEMENTED
 
-## 跳过位置
-- `coroutine.lua:478` — `assert(C[1] == undef)` — 弱引用 collectgarbage 后应被回收
+## Status: ✅ Implemented
 
-## 现状
-go-lua **完全不支持** weak table。`__mode` metafield 被忽略，不会影响 table 的 GC 行为。
+Weak tables with `__mode="k"/"v"/"kv"` are now fully supported.
+`coroutine.lua:478` assertion is enabled and passes.
 
-## 影响范围
-| 文件 | 行号 | 影响 |
-|------|------|------|
-| coroutine.lua | :478 | 弱表断言（已跳过） |
-| gc.lua | 多处 | 弱表测试（gc.lua 本身未通过） |
-| closure.lua | 多处 | upvalue 弱引用测试 |
-| 用户代码 | — | `setmetatable(t, {__mode="kv"})` 静默无效 |
+## Architecture
 
-## 实现方案
+### Two-Phase Sweep Approach
 
-### 核心思路：利用 Go `runtime` 的 GC
-Go 1.24+ 提供 `weak.Pointer[T]`，可以直接利用 Go 的 GC 来实现 Lua 弱引用语义。
+Unlike C Lua which integrates weak table clearing into its mark-and-sweep GC,
+go-lua uses Go's GC via `weak.Pointer[T]` (Go 1.24+). The implementation uses
+a **two-phase sweep** triggered by `collectgarbage()`:
 
-### 步骤
-1. **Table 结构添加 `WeakMode` 字段**（byte: bit 0 = weak values, bit 1 = weak keys）
-2. **`setmetatable` 钩子**：设置 metatable 时解析 `__mode` 字段（"k"/"v"/"kv"），设置 `WeakMode`
-3. **弱值存储**：weak value 条目用 `weak.Pointer` 包装
-4. **`collectgarbage("collect")`**：调用 `runtime.GC()` 后扫描所有注册的弱表，清除已回收的条目
-5. **弱表注册表**：全局维护一个弱表列表（或在 GC 时扫描所有 table）
+**Phase 1 (before GC):** For each registered weak table, scan all entries.
+For pointer-backed values/keys, create a `weak.Pointer[T]` and nil out the
+strong reference in the table. Non-pointer values (int64, float64, bool,
+strings) are left in place — they persist forever (matches C Lua semantics).
 
-### 预估工作量
-- 200-400 行代码
-- 2-4 天工作量
+**Phase 2 (after GC):** Check each `weak.Pointer`. If `.Value()` returns
+non-nil, the object is still alive — restore it. If nil, the object was
+collected — leave the entry as nil.
 
-### 需要修改的文件
-| 文件 | 修改内容 |
-|------|----------|
-| `internal/table/api/table.go` | WeakMode 字段，Get/Set/Next 检查弱模式 |
-| `internal/state/api/state.go` | 弱表注册表 |
-| `internal/stdlib/api/baselib.go` | collectgarbage 扫描弱表 |
-| `internal/vm/api/vm.go` | setmetatable 钩子解析 __mode |
+### Key Design Decisions
 
-## C Lua 参考
-- `lgc.c:596` — `getmode()` 读取 `__mode`
-- `lgc.c:808` — `clearbyvalues()` 清除未标记的弱值条目
-- `lgc.c:789` — `clearbykeys()` 清除未标记的弱键条目
-- `lgc.c:1542` — `atomic()` 阶段调用清除函数
+1. **Callback pattern for circular import avoidance**: `table/api` cannot
+   import `closure/api` or `state/api` (dependency cycle). Instead, `table/api`
+   defines `WeakRefMake`/`WeakRefCheck` function variables that the API layer
+   (`internal/api/api/weak.go`) registers at init time with concrete type
+   handlers for all 5 pointer-backed types.
 
-## 优先级
-**中等** — gc.lua 推进需要此功能，但不阻塞其他 testes。
+2. **No Get/Set interception**: Values are stored normally (strong refs) in
+   the table. Weak behavior only manifests during `collectgarbage()` sweep.
+   This avoids modifying the hot Get/Set/Next paths.
+
+3. **Non-pointer types persist forever**: Integers, floats, booleans, and
+   strings cannot use `weak.Pointer` and are never collected from weak tables.
+   This matches C Lua behavior where non-collectable values survive in weak
+   tables.
+
+4. **No strong refs in sweep closures**: The `PrepareWeakSweep` closure
+   captures only weak refs (containing `weak.Pointer`) and non-pointer values.
+   No TValues holding GC-collectable pointers are captured — this is critical
+   for the GC to actually collect unreferenced objects during the sweep.
+
+### Pointer-Backed Types (can be weak)
+| Type | Tag | Go Type |
+|------|-----|---------|
+| Table | 0x05 | `*tableapi.Table` |
+| Lua Closure | 0x06 | `*closureapi.LClosure` |
+| C Closure | 0x26 | `*closureapi.CClosure` |
+| Userdata | 0x07 | `*objectapi.Userdata` |
+| Thread | 0x08 | `*stateapi.LuaState` |
+
+### Non-Pointer Types (persist forever)
+- `int64`, `float64`, `bool`, `nil`
+- `*objectapi.LuaString` (interned, value-semantic)
+- Light C functions (`stateapi.CFunction`)
+
+## Files Modified
+
+| File | Changes |
+|------|---------|
+| `internal/table/api/api.go` | `WeakMode byte` field, `WeakKey`/`WeakValue` constants, `HasWeakKeys()`/`HasWeakValues()` helpers, `WeakArrayRefs`/`WeakKeyRefs`/`WeakValRefs` parallel storage |
+| `internal/table/api/weak.go` | **NEW** — `WeakRefMake`/`WeakRefCheck` callback vars, `PrepareWeakSweep()` two-phase sweep |
+| `internal/api/api/weak.go` | **NEW** — Registers callbacks with concrete `weak.Pointer[T]` handlers, `SweepWeakTables()` method |
+| `internal/api/api/impl.go` | `SetMetatable()` now parses `__mode` from metatable, sets `WeakMode`, registers in `GlobalState.WeakTables` |
+| `internal/state/api/api.go` | `WeakTables []any` field on `GlobalState` |
+| `internal/state/api/state.go` | `RegisterWeakTable()` method |
+| `internal/stdlib/api/baselib.go` | `collectgarbage("collect"/"step")` calls `L.SweepWeakTables()` |
+| `lua-master/testes/coroutine.lua` | Line 478: un-skipped `assert(C[1] == undef)` |
+
+## C Lua Reference
+- `lgc.c:596` — `getmode()` reads `__mode`
+- `lgc.c:808` — `clearbyvalues()` clears unmarked weak value entries
+- `lgc.c:789` — `clearbykeys()` clears unmarked weak key entries
+- `lgc.c:1542` — `atomic()` phase calls clear functions
+
+## Test Coverage
+- `internal/stdlib/api/weak_test.go` — Go tests for weak values, weak keys, weak kv
+- `lua-master/testes/coroutine.lua:478` — Lua test for weak table with coroutine wrap
+- All 21 testes pass (regression verified)
