@@ -871,6 +871,29 @@ func (L *State) SetMetatable(idx int) {
 				})
 			}
 		}
+		// Parse __mode from metatable for weak table support
+		if mt != nil {
+			modeName := ls.Global.TMNames[metamethodapi.TM_MODE]
+			modeVal, found := mt.GetStr(modeName)
+			if found && (modeVal.Tt == objectapi.TagShortStr || modeVal.Tt == objectapi.TagLongStr) {
+				modeStr := modeVal.Val.(*objectapi.LuaString).Data
+				var mode byte
+				for _, c := range modeStr {
+					if c == 'k' {
+						mode |= tableapi.WeakKey
+					}
+					if c == 'v' {
+						mode |= tableapi.WeakValue
+					}
+				}
+				tbl.WeakMode = mode
+				if mode != 0 {
+					ls.Global.RegisterWeakTable(tbl)
+				}
+			}
+		} else {
+			tbl.WeakMode = 0
+		}
 	case objectapi.TagUserdata:
 		if ud, ok := v.Val.(*objectapi.Userdata); ok {
 			ud.MetaTable = mt

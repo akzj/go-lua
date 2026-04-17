@@ -344,3 +344,18 @@ func CloseState(L *LuaState) {
 	L.OpenUpval = nil
 	L.Global = nil
 }
+
+// ---------------------------------------------------------------------------
+// Weak table registry
+// ---------------------------------------------------------------------------
+
+// RegisterWeakTable adds a table to the global weak table registry.
+// Called when setmetatable sets a non-zero __mode on a table.
+func (g *GlobalState) RegisterWeakTable(t *tableapi.Table) {
+	for _, wt := range g.WeakTables {
+		if wt == t {
+			return // already registered
+		}
+	}
+	g.WeakTables = append(g.WeakTables, t)
+}
