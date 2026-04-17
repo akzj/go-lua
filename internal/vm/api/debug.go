@@ -130,6 +130,9 @@ func addInfo(L *stateapi.LuaState, msg string) string {
 	if cl.Proto.Source != nil {
 		src = ShortSrc(cl.Proto.Source.Data)
 	}
+	if line <= 0 {
+		return fmt.Sprintf("%s:?: %s", src, msg)
+	}
 	return fmt.Sprintf("%s:%d: %s", src, line, msg)
 }
 

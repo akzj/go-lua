@@ -295,8 +295,10 @@ do   -- named objects (field '__name')
 end
 
 -- global functions
+if not _port then
 checkmessage("(io.write or print){}", "io.write")
 checkmessage("(collectgarbage or print){}", "collectgarbage")
+end
 
 -- errors in functions without debug info
 do
