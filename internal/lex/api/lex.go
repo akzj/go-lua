@@ -97,13 +97,14 @@ func Token2Str(token TokenType) string {
 // NewLexState creates a new lexer state from a reader and source name.
 func NewLexState(reader LexReader, source string) *LexState {
 	ls := &LexState{
-		Reader:    reader,
-		Source:    source,
-		Line:      1,
-		LastLine:  1,
-		EnvName:   "_ENV",
-		BreakName: "break",
-		Buf:       make([]byte, 0, 64),
+		Reader:       reader,
+		Source:       source,
+		Line:         1,
+		LastLine:     1,
+		EnvName:      "_ENV",
+		BreakName:    "break",
+		Buf:          make([]byte, 0, 64),
+		MaxNestLevel: 200, // LUAI_MAXCCALLS
 	}
 	ls.Lookahead.Type = TK_EOS
 	return ls

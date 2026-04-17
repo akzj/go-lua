@@ -1146,8 +1146,23 @@ var priority = [...]struct{ left, right int }{
 	{2, 2}, {1, 1}, // and or
 }
 
+// enterLevel increments parser nesting depth and checks for overflow.
+// Mirrors: luaY_checklimit with nCcalls in C Lua's lparser.c
+func enterLevel(ls *lexapi.LexState) {
+	ls.NestLevel++
+	if ls.NestLevel > ls.MaxNestLevel {
+		lexapi.LexError(ls, "chunk has too many syntax levels", 0)
+	}
+}
+
+// leaveLevel decrements parser nesting depth.
+func leaveLevel(ls *lexapi.LexState) {
+	ls.NestLevel--
+}
+
 func subexpr(ls *lexapi.LexState, v *ExpDesc, limit int) BinOpr {
-	// enterlevel — we track recursion depth via Go stack
+	enterLevel(ls)
+	defer leaveLevel(ls)
 	uop := getUnOpr(ls.Token.Type)
 	if uop != OPR_NOUNOPR {
 		line := ls.Line
@@ -1776,7 +1791,8 @@ func globalStatFunc(ls *lexapi.LexState, line int) {
 
 func statement(ls *lexapi.LexState) {
 	line := ls.Line
-	// enterlevel
+	enterLevel(ls)
+	defer leaveLevel(ls)
 	switch ls.Token.Type {
 	case ';':
 		lexapi.Next(ls)
