@@ -22,15 +22,16 @@ func init() {
 	tableapi.WeakRefCheck = weakRefCheck
 }
 
-// weakRef holds a weak.Pointer[T] (as any) plus the original tag and value.
-// We store the original TValue so we can restore it if the ref is still alive.
+// weakRef holds ONLY a weak.Pointer[T] (as any) plus the tag.
+// It must NOT store the original TValue — that would be a strong reference
+// that prevents Go GC from ever collecting the object.
 type weakRef struct {
 	tag objectapi.Tag
-	ptr any          // weak.Pointer[T] for some concrete T
-	val objectapi.TValue // original value for restoration
+	ptr any // weak.Pointer[T] for some concrete T — NO strong reference
 }
 
 // weakRefMake creates a weak reference for a pointer-backed TValue.
+// The returned weakRef holds only a weak.Pointer (no strong ref).
 func weakRefMake(v objectapi.TValue) (any, bool) {
 	var ptr any
 	switch v.Tt {
@@ -52,40 +53,41 @@ func weakRefMake(v objectapi.TValue) (any, bool) {
 	default:
 		return nil, false // non-pointer type
 	}
-	return &weakRef{tag: v.Tt, ptr: ptr, val: v}, true
+	return &weakRef{tag: v.Tt, ptr: ptr}, true
 }
 
 // weakRefCheck checks if a weak reference is still alive.
-// Returns the original TValue if alive, or (Nil, false) if collected.
+// If alive, reconstructs the TValue from the weak pointer's .Value() result.
+// Returns (Nil, false) if the object was collected.
 func weakRefCheck(ref any) (objectapi.TValue, bool) {
 	wr := ref.(*weakRef)
 	switch wr.tag {
 	case objectapi.TagTable:
-		if wr.ptr.(weak.Pointer[tableapi.Table]).Value() != nil {
-			return wr.val, true
+		if p := wr.ptr.(weak.Pointer[tableapi.Table]).Value(); p != nil {
+			return objectapi.TValue{Tt: wr.tag, Val: p}, true
 		}
 	case objectapi.TagLuaClosure:
-		if wr.ptr.(weak.Pointer[closureapi.LClosure]).Value() != nil {
-			return wr.val, true
+		if p := wr.ptr.(weak.Pointer[closureapi.LClosure]).Value(); p != nil {
+			return objectapi.TValue{Tt: wr.tag, Val: p}, true
 		}
 	case objectapi.TagCClosure:
-		if wr.ptr.(weak.Pointer[closureapi.CClosure]).Value() != nil {
-			return wr.val, true
+		if p := wr.ptr.(weak.Pointer[closureapi.CClosure]).Value(); p != nil {
+			return objectapi.TValue{Tt: wr.tag, Val: p}, true
 		}
 	case objectapi.TagUserdata:
-		if wr.ptr.(weak.Pointer[objectapi.Userdata]).Value() != nil {
-			return wr.val, true
+		if p := wr.ptr.(weak.Pointer[objectapi.Userdata]).Value(); p != nil {
+			return objectapi.TValue{Tt: wr.tag, Val: p}, true
 		}
 	case objectapi.TagThread:
-		if wr.ptr.(weak.Pointer[stateapi.LuaState]).Value() != nil {
-			return wr.val, true
+		if p := wr.ptr.(weak.Pointer[stateapi.LuaState]).Value(); p != nil {
+			return objectapi.TValue{Tt: wr.tag, Val: p}, true
 		}
 	}
 	return objectapi.Nil, false
 }
 
 // SweepWeakTables performs the two-phase weak table sweep:
-// Phase 1: create weak refs, nil out strong refs
+// Phase 1: create weak refs, nil out strong refs in tables
 // Phase 2: GC, then check weak refs and restore/clear
 func (L *State) SweepWeakTables() {
 	gs := L.ls().Global
