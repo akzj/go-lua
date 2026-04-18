@@ -551,7 +551,10 @@ func debugUpvalueid(L *luaapi.State) int {
 		return 1
 	}
 	if n < 1 || n > len(f.UpVals) {
-		L.ArgError(2, "invalid upvalue index")
+		// C Lua: db_upvalueid calls checkupval with pnup=NULL,
+		// which returns NULL for invalid index → pushfail (false)
+		L.PushBoolean(false)
+		return 1
 	}
 	uv := f.UpVals[n-1]
 	if uv == nil {
