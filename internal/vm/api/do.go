@@ -843,6 +843,12 @@ func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int {
 		// Restore state (mirrors C Lua luaD_pcall order)
 		L.CI = oldCI
 		L.AllowHook = oldAllowHook
+		// Close open upvalues at or above oldTop.
+		// C Lua: luaF_close first calls luaF_closeupval before handling TBC.
+		// Without this, upvalues captured by closures created inside the
+		// pcall'd function would still point at abandoned stack slots,
+		// causing them to read nil after the stack is reused.
+		closureapi.CloseUpvals(L, oldTop)
 		// Close TBC vars created inside the pcall'd function.
 		// C Lua: status = luaD_closeprotected(L, old_top, status)
 		if L.TBCList >= oldTop {
