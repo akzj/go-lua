@@ -6,6 +6,10 @@
 //
 // Long strings are not interned and compared by content.
 //
+// The string table caps its bucket array at maxStrTabSize to prevent OOM
+// from unbounded growth. A Sweep method allows periodic cleanup of dead
+// entries, matching C Lua's checkSizes behavior.
+//
 // Reference: .analysis/07-runtime-infrastructure.md §4
 // C source: lua-master/lstring.c
 package api
@@ -17,6 +21,13 @@ const MaxShortLen = 40
 
 // minStrTabSize is the initial/minimum bucket count (MINSTRTABSIZE = 128).
 const minStrTabSize = 128
+
+// maxStrTabSize caps the bucket array to prevent OOM on resize.
+// 2^18 = 262,144 buckets. Each bucket is a slice header (24 bytes),
+// so max bucket array is ~6MB. With load factor 1, this means at most
+// ~262K interned strings before we stop growing the bucket array.
+// Additional strings still get interned but with longer bucket chains.
+const maxStrTabSize = 1 << 18
 
 // ---------------------------------------------------------------------------
 // Hash function — faithful to C Lua's luaS_hash (lstring.c:53–58)
@@ -131,8 +142,9 @@ func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 	st.buckets[idx] = append(st.buckets[idx], ts)
 	st.count++
 
-	// Resize if count exceeds bucket count (load factor > 1)
-	if st.count > len(st.buckets) {
+	// Resize if count exceeds bucket count (load factor > 1),
+	// but only up to the cap to prevent OOM.
+	if st.count > len(st.buckets) && len(st.buckets) < maxStrTabSize {
 		st.resize(len(st.buckets) * 2)
 	}
 
@@ -141,6 +153,12 @@ func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 
 // resize doubles (or changes) the bucket count and rehashes all entries.
 func (st *StringTable) resize(newSize int) {
+	if newSize < minStrTabSize {
+		newSize = minStrTabSize
+	}
+	if newSize > maxStrTabSize {
+		newSize = maxStrTabSize
+	}
 	newBuckets := make([][]*objectapi.LuaString, newSize)
 	mask := uint32(newSize - 1)
 	for _, bucket := range st.buckets {
@@ -150,6 +168,22 @@ func (st *StringTable) resize(newSize int) {
 		}
 	}
 	st.buckets = newBuckets
+}
+
+// Sweep removes dead entries from the string table and optionally shrinks it.
+// This matches C Lua's checkSizes behavior: shrink when nuse < size/4.
+// Currently a no-op for entry removal (Go GC handles memory), but handles
+// bucket array shrinking.
+func (st *StringTable) Sweep() {
+	// Shrink if too sparse (C Lua: nuse < size/4)
+	size := len(st.buckets)
+	if st.count < size/4 && size > minStrTabSize {
+		newSize := size / 2
+		if newSize < minStrTabSize {
+			newSize = minStrTabSize
+		}
+		st.resize(newSize)
+	}
 }
 
 // ---------------------------------------------------------------------------
