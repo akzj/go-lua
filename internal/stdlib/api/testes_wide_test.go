@@ -79,15 +79,7 @@ func TestTestesWide(t *testing.T) {
 					return
 				}
 				src := string(data)
-				// Patch 1: wrap yield-in-dofile in _port guard (needs CallK)
-				src = strings.Replace(src,
-					"-- test yielding during 'dofile'\n",
-					"if not _port then  -- skip: needs CallK for yield across dofile\n-- test yielding during 'dofile'\n",
-					1)
-				src = strings.Replace(src,
-					"assert(f(200) == 100 + 200 * 101)\nassert(os.remove(file))\n",
-					"assert(f(200) == 100 + 200 * 101)\nassert(os.remove(file))\nend  -- _port guard\n",
-					1)
+				// Patch 1: REMOVED — CallK now supports yield across dofile
 				// Patch 3: wrap binary chunk loading in _port guard (no string.dump support)
 				src = strings.Replace(src,
 					"-- loading binary file with initial comment\n",
@@ -224,6 +216,35 @@ func TestTestesWide(t *testing.T) {
 				src = strings.Replace(src,
 					"assert(B.g == 19)\n",
 					"assert(B.g == 19)\nend  -- _port weak table guard\n",
+					1)
+				status := L.Load(src, "@"+f, "bt")
+				if status != 0 {
+					msg, _ := L.ToString(-1)
+					fmt.Printf("  %-20s FAIL: %v\n", f, msg)
+					t.Skipf("%s: %v", f, msg)
+					return
+				}
+				pcallStatus := L.PCall(0, 0, 0)
+				if pcallStatus != 0 {
+					msg, _ := L.ToString(-1)
+					err = fmt.Errorf("%s", msg)
+				}
+			} else if f == "nextvar.lua" {
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Skipf("cannot read %s: %v", path, readErr)
+					return
+				}
+				src := string(data)
+				// Remove _port guard around yield-in-__pairs test (lines 938-958).
+				// pairs() now uses CallK, so yield across __pairs works.
+				src = strings.Replace(src,
+					"if not _port then\ndo\n  local t = setmetatable({10, 20, 30}, {__pairs = function (t)\n",
+					"do\ndo\n  local t = setmetatable({10, 20, 30}, {__pairs = function (t)\n",
+					1)
+				src = strings.Replace(src,
+					"end\nend   -- if not _port\n",
+					"end\nend\n",
 					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
