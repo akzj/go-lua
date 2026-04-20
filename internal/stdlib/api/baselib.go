@@ -648,7 +648,21 @@ func luaB_collectgarbage(L *luaapi.State) int {
 	opts := []string{"stop", "restart", "collect", "count", "step", "isrunning", "generational", "incremental", "param"}
 	o := L.CheckOption(1, "collect", opts)
 	switch o {
+	case 0: // stop
+		L.SetGCStopped(true)
+		L.PushInteger(0)
+		return 1
+	case 1: // restart
+		L.SetGCStopped(false)
+		L.PushInteger(0)
+		return 1
 	case 2: // collect
+		// Explicit collect always runs, even if GCStopped.
+		// But if we're inside a __gc finalizer, just return false (C Lua behavior).
+		if L.IsGCInFinalizer() {
+			L.PushInteger(0)
+			return 1
+		}
 		runtime.GC()
 		runtime.GC() // second pass ensures finalizers from first GC have run
 		L.DrainGCFinalizers()
@@ -656,7 +670,9 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushInteger(0)
 		return 1
 	case 3: // count
-		kb := float64(L.GCTotalBytes()) / 1024.0
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		kb := float64(ms.HeapAlloc) / 1024.0
 		L.PushNumber(kb)
 		return 1
 	case 4: // step
@@ -667,7 +683,7 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushBoolean(true)
 		return 1
 	case 5: // isrunning
-		L.PushBoolean(true)
+		L.PushBoolean(L.IsGCRunning())
 		return 1
 	case 6: // generational
 		prev := L.SetGCMode("generational")
