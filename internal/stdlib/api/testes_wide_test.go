@@ -238,6 +238,12 @@ func TestTestesWide(t *testing.T) {
 					"if not _port then   -- test inf, -inf, NaN, and -0.0\n",
 					"do   -- test inf, -inf, NaN, and -0.0\n",
 					1)
+				// Remove _port guard around locale tests (line 427).
+				// The test gracefully skips if no locale is found.
+				src = strings.Replace(src,
+					"if not _port then\n\n  local locales",
+					"do\n\n  local locales",
+					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)
