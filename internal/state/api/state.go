@@ -337,12 +337,18 @@ func NewThread(L *LuaState) *LuaState {
 // LinkGC links a new collectable object into the allgc chain and sets its
 // initial white mark. This is the Go equivalent of C Lua's luaC_newobj.
 // Must be called for every new collectable object immediately after creation.
+//
+// NOTE: Currently a no-op. The allgc chain roots all objects, preventing
+// Go's GC from collecting them. Re-enable once full mark/sweep is
+// implemented (Phase 2b) so that sweep can unlink dead objects.
 // ---------------------------------------------------------------------------
 func (g *GlobalState) LinkGC(obj objectapi.GCObject) {
-	h := obj.GC()
-	h.Marked = g.CurrentWhite // mark as current white
-	h.Next = g.Allgc          // link into allgc chain
-	g.Allgc = obj
+	// V5 TODO: Re-enable when mark/sweep is implemented.
+	// h := obj.GC()
+	// h.Marked = g.CurrentWhite
+	// h.Next = g.Allgc
+	// g.Allgc = obj
+	_ = obj
 }
 
 // ---------------------------------------------------------------------------
