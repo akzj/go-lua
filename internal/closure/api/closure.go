@@ -40,6 +40,7 @@ func FindUpval(L *stateapi.LuaState, level int) *UpVal {
 		Next:     p,     // link to rest of list (lower levels)
 		Stack:    &L.Stack, // reference to owning thread's stack for cross-thread access
 	}
+	L.Global.LinkGC(uv) // V5: register in allgc chain
 
 	// Insert into the list
 	if prev == nil {
@@ -97,6 +98,8 @@ func CloseUpvals(L *stateapi.LuaState, level int) {
 // ---------------------------------------------------------------------------
 
 // InitUpvals fills all nil upvalue slots in the closure with new closed upvalues.
+// TODO(v5-gc): These upvalues are not yet linked into allgc. Either pass
+// GlobalState through, or have the caller link them after InitUpvals returns.
 func InitUpvals(cl *LClosure) {
 	for i := range cl.UpVals {
 		if cl.UpVals[i] == nil {

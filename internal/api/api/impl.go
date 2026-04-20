@@ -363,6 +363,7 @@ func (L *State) PushCClosure(f CFunction, n int) {
 	ls := L.ls()
 	wrapped := wrapCFunctionStatic(f)
 	cc := closureapi.NewCClosure(wrapped, n)
+	ls.Global.LinkGC(cc) // V5: register in allgc chain
 	// Pop n upvalues from stack into the closure
 	for i := n; i >= 1; i-- {
 		ls.Top--
@@ -789,6 +790,7 @@ func (L *State) RawSetI(idx int, n int64) {
 // CreateTable pushes a new table with pre-allocated space.
 func (L *State) CreateTable(nArr, nRec int) {
 	t := tableapi.New(nArr, nRec)
+	L.ls().Global.LinkGC(t) // V5: register in allgc chain
 	size := t.EstimateBytes()
 	L.TrackAlloc(size)
 	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
@@ -1265,6 +1267,7 @@ func (L *State) NewUserdata(size int, nUV int) *objectapi.Userdata {
 	for i := range ud.UserVals {
 		ud.UserVals[i] = objectapi.Nil
 	}
+	L.ls().Global.LinkGC(ud) // V5: register in allgc chain
 	L.push(objectapi.TValue{Tt: objectapi.TagUserdata, Val: ud})
 	return ud
 }

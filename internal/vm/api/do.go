@@ -909,8 +909,12 @@ func FParser(L *stateapi.LuaState, reader lexapi.LexReader, source string) {
 	// Table lookups require proper hashes for correct bucket placement.
 	internProtoStrings(L, proto)
 
+	// V5: register all protos in the tree into the allgc chain
+	linkProtoTree(L.Global, proto)
+
 	// Create an LClosure wrapping the proto
 	cl := closureapi.NewLClosure(proto, len(proto.Upvalues))
+	L.Global.LinkGC(cl) // V5: register in allgc chain
 
 	// Push the closure on the stack
 	stateapi.PushValue(L, objectapi.TValue{
@@ -1177,6 +1181,16 @@ func GetGlobalTable(L *stateapi.LuaState) *tableapi.Table {
 // The parser creates LuaString with Hash_=0 (state-independent parsing).
 // Table hash lookups require matching hashes for correct bucket placement.
 // ---------------------------------------------------------------------------
+
+// linkProtoTree recursively links all Protos in a parsed proto tree
+// into the allgc chain. Called after parsing, since the parser doesn't
+// have access to GlobalState.
+func linkProtoTree(g *stateapi.GlobalState, p *objectapi.Proto) {
+	g.LinkGC(p)
+	for _, child := range p.Protos {
+		linkProtoTree(g, child)
+	}
+}
 
 func internProtoStrings(L *stateapi.LuaState, p *objectapi.Proto) {
 	st := L.Global.StringTable.(*luastringapi.StringTable)

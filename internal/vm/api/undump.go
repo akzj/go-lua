@@ -37,12 +37,14 @@ func UndumpProto(L *stateapi.LuaState, data []byte, name string) (*closureapi.LC
 	if s.err != nil {
 		return nil, fmt.Errorf("%s: %s", name, s.err.Error())
 	}
+	L.Global.LinkGC(p) // V5: register proto in allgc chain
 
 	if nupvals != len(p.Upvalues) {
 		return nil, fmt.Errorf("%s: bad binary format (corrupted chunk)", name)
 	}
 
 	cl := closureapi.NewLClosure(p, nupvals)
+	L.Global.LinkGC(cl) // V5: register closure in allgc chain
 	closureapi.InitUpvals(cl)
 	return cl, nil
 }
@@ -231,6 +233,7 @@ func (s *loadState) loadProtos(p *objectapi.Proto) {
 	for i := 0; i < n; i++ {
 		p.Protos[i] = &objectapi.Proto{}
 		s.loadFunction(p.Protos[i])
+		s.L.Global.LinkGC(p.Protos[i]) // V5: register nested proto in allgc chain
 	}
 }
 

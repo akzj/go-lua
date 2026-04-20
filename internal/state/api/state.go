@@ -26,8 +26,17 @@ func NewState() *LuaState {
 	// Random hash seed
 	g.Seed = rand.Uint32()
 
+	// Initialize V5 GC state (before any objects are created)
+	g.CurrentWhite = objectapi.WhiteBit0
+	g.GCState = objectapi.GCSpause
+	g.GCStepMul = 100
+	g.GCPauseMul = 200
+
 	// String table
 	strtab := luastringapi.NewStringTable(g.Seed)
+	strtab.OnCreate = func(obj objectapi.GCObject) {
+		g.LinkGC(obj) // V5: register new strings in allgc chain
+	}
 	g.StringTable = strtab
 
 	// Pre-init thread fields (mirrors preinit_thread)
@@ -44,8 +53,9 @@ func NewState() *LuaState {
 	// Initialize stack (mirrors stack_init)
 	stackInit(L)
 
-	// Set main thread
+	// Set main thread and link into GC chain
 	g.MainThread = L
+	g.LinkGC(L)
 
 	// Initialize registry (mirrors init_registry)
 	initRegistry(L, g)
@@ -317,7 +327,22 @@ func NewThread(L *LuaState) *LuaState {
 	// Initialize stack
 	stackInit(L1)
 
+	// Link new thread into GC chain
+	g.LinkGC(L1)
+
 	return L1
+}
+
+// ---------------------------------------------------------------------------
+// LinkGC links a new collectable object into the allgc chain and sets its
+// initial white mark. This is the Go equivalent of C Lua's luaC_newobj.
+// Must be called for every new collectable object immediately after creation.
+// ---------------------------------------------------------------------------
+func (g *GlobalState) LinkGC(obj objectapi.GCObject) {
+	h := obj.GC()
+	h.Marked = g.CurrentWhite // mark as current white
+	h.Next = g.Allgc          // link into allgc chain
+	g.Allgc = obj
 }
 
 // ---------------------------------------------------------------------------
