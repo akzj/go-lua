@@ -1818,7 +1818,7 @@ startfunc:
 			// V5 GC handles __gc via finobj list.
 			if g := L.Global; !g.GCStopped {
 				g.GCAllocCount++
-				if g.GCAllocCount%100 == 0 && g.GCStepFn != nil {
+				if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
 					g.GCStepFn(L)
 				}
 			}
@@ -2233,7 +2233,7 @@ startfunc:
 			// Periodic GC: string concatenation allocates new strings.
 			if g := L.Global; !g.GCStopped {
 				g.GCAllocCount++
-				if g.GCAllocCount%100 == 0 && g.GCStepFn != nil {
+				if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
 					g.GCStepFn(L)
 				}
 			}
@@ -2556,7 +2556,7 @@ startfunc:
 			// Periodic GC: closures are heap-allocated objects.
 			if g := L.Global; !g.GCStopped {
 				g.GCAllocCount++
-				if g.GCAllocCount%100 == 0 && g.GCStepFn != nil {
+				if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
 					g.GCStepFn(L)
 				}
 			}
