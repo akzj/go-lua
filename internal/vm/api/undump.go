@@ -46,6 +46,12 @@ func UndumpProto(L *stateapi.LuaState, data []byte, name string) (*closureapi.LC
 	cl := closureapi.NewLClosure(p, nupvals)
 	L.Global.LinkGC(cl) // V5: register closure in allgc chain
 	closureapi.InitUpvals(cl)
+	// Link newly created upvalues to allgc for proper GC tracking
+	for _, uv := range cl.UpVals {
+		if uv != nil {
+			L.Global.LinkGC(uv)
+		}
+	}
 	return cl, nil
 }
 
