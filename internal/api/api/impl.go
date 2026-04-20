@@ -142,11 +142,16 @@ func NewState() *State {
 
 	// GCStepFn: expensive — triggers full GC cycle + drain. Called rarely.
 	ls.Global.GCStepFn = func(thread *stateapi.LuaState) {
-		// Clear ALL stale stack slots above Top on the main thread AND
-		// the current thread so Go GC can collect objects that Lua has
-		// "popped" (Top decremented but slots not zeroed).
+		// Clear stale stack slots above the current call frame's Top
+		// on the main thread AND the current thread so Go GC can collect
+		// objects that Lua has "popped". Use CI.Top (not thread.Top)
+		// because for-loop internal variables live above Top but below CI.Top.
 		clearThread := func(t *stateapi.LuaState) {
-			for i := t.Top; i < len(t.Stack); i++ {
+			clearFrom := t.Top
+			if t.CI != nil && t.CI.Top > clearFrom {
+				clearFrom = t.CI.Top
+			}
+			for i := clearFrom; i < len(t.Stack); i++ {
 				t.Stack[i].Val = objectapi.Nil
 			}
 		}
@@ -793,8 +798,14 @@ func (L *State) CreateTable(nArr, nRec int) {
 			L.DrainGCFinalizers() // cheap: just drain queue
 		}
 		if n%100 == 0 {
-			// Clear stale stack slots above Top before GC
-			for i := ls.Top; i < len(ls.Stack); i++ {
+			// Clear stale stack slots above the current call frame's Top
+			// before GC. Use CI.Top (not ls.Top) because for-loop internal
+			// variables live above ls.Top but below CI.Top.
+			clearFrom := ls.Top
+			if ls.CI != nil && ls.CI.Top > clearFrom {
+				clearFrom = ls.CI.Top
+			}
+			for i := clearFrom; i < len(ls.Stack); i++ {
 				ls.Stack[i].Val = objectapi.Nil
 			}
 			runtime.GC()
