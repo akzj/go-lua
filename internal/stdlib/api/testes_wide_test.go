@@ -127,48 +127,13 @@ func TestTestesWide(t *testing.T) {
 					return
 				}
 				src := string(data)
-				// Patch 0: skip weak table collection count — Go GC may not
-				// collect all weak refs in a single collectgarbage() call
-				src = strings.Replace(src,
-					"assert(i == 4)\n",
-					"if not _port then assert(i == 4) end\n",
-					1)
-				src = strings.Replace(src,
-					"assert(next(a) == string.rep('$', 11))\n",
-					"if not _port then assert(next(a) == string.rep('$', 11)) end\n",
-					1)
-				// Patch 0b: REMOVED — Phase B weak table mark integration fixed
-				// __gc + weak table timing; "bug in 5.1" section now passes.
-				// Patch 1: ephemeron — Go GC doesn't clear all weak refs in one pass.
-				src = strings.Replace(src,
-					"for i = 1, 4 do assert(a[i][1] == i * 10); a[i] = undef end\nassert(next(a) == nil)\n",
-					"for i = 1, 4 do assert(a[i][1] == i * 10); a[i] = undef end\nif not _port then assert(next(a) == nil) end\n",
-					1)
-				// Patch 2: skip __gc x weak tables section (Go GC doesn't
-				// collect weak metatable values before running __gc finalizers,
-				// causing os.exit(1) to fire when it shouldn't)
-				src = strings.Replace(src,
-					"-- __gc x weak tables\n",
-					"if not _port then  -- skip: Go GC fires __gc before weak metatable values are collected\n-- __gc x weak tables\n",
-					1)
-				src = strings.Replace(src,
-					"assert(m==10)\n\ndo   -- tests for string keys in weak tables\n",
-					"assert(m==10)\nend  -- _port __gc x weak tables guard\n\nif not _port then  -- skip: Go GC weak string key collection\ndo   -- tests for string keys in weak tables\n",
-					1)
-				src = strings.Replace(src,
-					"  assert(collectgarbage(\"count\") <= m + 1)   -- everything collected\nend\n\n\n-- errors during collection\n",
-					"  assert(collectgarbage(\"count\") <= m + 1)   -- everything collected\nend\nend  -- _port string keys guard\n\n\n-- errors during collection\n",
-					1)
-				// Patch 3: skip coroutine __gc collection test (Go's runtime.SetFinalizer
-				// doesn't finalize coroutine-held tables synchronously in collectgarbage())
-				src = strings.Replace(src,
-					"-- Create a closure (function inside 'f') with an upvalue ('param') that\n",
-					"if not _port then  -- skip: Go GC doesn't finalize coroutine-held tables synchronously\n-- Create a closure (function inside 'f') with an upvalue ('param') that\n",
-					1)
-				src = strings.Replace(src,
-					"  collectgarbage(\"restart\")\nend\n\n\ndo\n",
-					"  collectgarbage(\"restart\")\nend\nend  -- _port coroutine __gc guard\n\n\ndo\n",
-					1)
+				// All gc.lua patches REMOVED — V5 GC handles weak tables natively:
+				// - clearByValues/clearByKeys in atomic phase
+				// - convergeEphemerons for ephemeron tables
+				// - clearDeadKeysAllEphemerons walks allgc for dead-key clearing
+				// - SweepWeakTables() disabled in GCCollect()
+				// Previously: Patch 0 (weak count), 0b (bug in 5.1), 1 (ephemeron),
+				// 2 (__gc x weak tables + string keys), 3 (coroutine __gc)
 
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {

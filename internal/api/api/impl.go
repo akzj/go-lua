@@ -158,18 +158,18 @@ func NewState() *State {
 		if debt > 0 {
 			atomic.AddInt64(&g.GCTotalBytes, -debt)
 		}
-		// Clear stale stack slots above the highest active frame.
-		// This ensures traverseThread (which marks all stack slots)
-		// doesn't mark dead references left in unused slots.
-		clearStaleStack(thread)
+		// NOTE: No clearStaleStack for periodic GC — traverseThread uses
+		// maxTop (conservative) which limits marking to active frames.
+		// clearStaleStack is only needed for explicit GC (collectgarbage()).
 		gcapi.FullGC(g, thread)
 		g.GCRunning = false
 		// Drain pending finalizers — objects moved to tobefnz by
 		// separateTobeFnz in FullGC need their __gc called.
 		wrapper := &State{Internal: thread}
 		wrapper.callAllPendingFinalizers()
-		// Sweep weak tables (Go weak.Pointer-based clearing)
-		wrapper.SweepWeakTables()
+		// SweepWeakTables DISABLED — V5 GC handles weak tables natively
+		// via clearByValues/clearByKeys in the atomic phase.
+		// wrapper.SweepWeakTables()
 	}
 
 	// GCDrainFn: just drain pending finalizers.
@@ -1402,13 +1402,20 @@ func (L *State) gcMarkSweep() {
 // Mirrors C Lua's luaC_fullgc + callallpendingfinalizers.
 // NOT safe to call during VM execution — use gcMarkSweep for periodic GC.
 func (L *State) GCCollect() {
+	// Mark as explicit GC — traverseThread uses th.Top (precise marking)
+	// so weak tables can collect dead locals in registers above Top.
+	g := L.ls().Global
+	g.GCExplicit = true
+	defer func() { g.GCExplicit = false }()
 	// Mark and sweep (with re-entrancy guard)
 	L.gcMarkSweep()
 	// Call all pending finalizers (objects moved to tobefnz by separateTobeFnz).
 	// This runs Lua code via PCall, so must NOT be called during VM execution.
 	L.callAllPendingFinalizers()
-	// Sweep weak tables using Go weak.Pointer (until Phase B replaces with Lua GC)
-	L.SweepWeakTables()
+	// SweepWeakTables DISABLED — V5 GC's clearByValues/clearByKeys handles
+	// weak table clearing during the atomic phase. The Go weak.Pointer approach
+	// was restoring entries that the Lua GC had already correctly cleared.
+	// L.SweepWeakTables()
 }
 
 // clearStaleStack nils out stack slots above the highest active frame boundary.

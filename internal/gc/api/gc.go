@@ -11,6 +11,8 @@
 package api
 
 import (
+	"sync/atomic"
+
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 	stateapi "github.com/akzj/go-lua/internal/state/api"
@@ -365,13 +367,32 @@ func traverseProto(g *stateapi.GlobalState, p *objectapi.Proto) {
 }
 
 // traverseThread marks all live stack values and open upvalues.
+// Marks up to maxTop (highest of Top and all CI.Top values).
+// This is conservative enough for periodic GC (live registers are within
+// active frames) while not marking the entire allocated stack (which would
+// prevent weak tables from collecting dead locals above all active frames).
 func traverseThread(g *stateapi.GlobalState, th *stateapi.LuaState) {
-	// Mark ALL allocated stack slots. During VM execution, registers
-	// above L.Top or CI.Top may hold live values that haven't been
-	// cleared yet (e.g., a table just assigned to register ra before
-	// periodic GC fires). Marking the full stack is safe because
-	// unused slots are nil (markValue skips nil TValues).
-	for i := 0; i < len(th.Stack); i++ {
+	var top int
+	if g.GCExplicit {
+		// Explicit GC (collectgarbage()): precise — only up to th.Top.
+		// Dead locals above Top in caller frames are NOT marked, allowing
+		// weak tables to properly collect them.
+		top = th.Top
+	} else {
+		// Periodic GC (during VM execution): conservative — mark all
+		// registers in active frames. The VM may have live values in
+		// registers above Top that haven't been pushed yet.
+		top = th.Top
+		for ci := th.CI; ci != nil; ci = ci.Prev {
+			if ci.Top > top {
+				top = ci.Top
+			}
+		}
+	}
+	if top > len(th.Stack) {
+		top = len(th.Stack)
+	}
+	for i := 0; i < top; i++ {
 		markValue(g, th.Stack[i].Val)
 	}
 
@@ -453,9 +474,13 @@ func sweepList(g *stateapi.GlobalState, p *objectapi.GCObject) int {
 		marked := h.Marked
 
 		if isDeadMark(otherwhite, marked) {
-			// Dead — unlink from chain
+			// Dead — unlink from chain and decrement GCTotalBytes
 			*p = h.Next
 			h.Next = nil // help Go GC
+			// Decrement byte counter for known object types
+			if t, ok := obj.(*tableapi.Table); ok {
+				atomic.AddInt64(&g.GCTotalBytes, -t.EstimateBytes())
+			}
 			freed++
 		} else {
 			// Alive — reset to current white for next cycle
@@ -566,6 +591,39 @@ func Udata2Finalize(g *stateapi.GlobalState) objectapi.GCObject {
 // clearByKeys clears entries with unmarked keys from weak-key tables.
 // Walks the given GC list (linked via GCList/gclist field).
 // Mirrors C Lua's clearbykeys.
+// clearDeadKeysAllEphemerons walks allgc and finobj lists to find ALL tables
+// with WeakKey mode and clears their dead key entries. This is needed because
+// convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
+// so clearByKeys(g, g.Ephemeron) would operate on an empty list.
+func clearDeadKeysAllEphemerons(g *stateapi.GlobalState) {
+	clearDeadKeysInList(g, g.Allgc)
+	clearDeadKeysInList(g, g.FinObj)
+}
+
+// clearDeadKeysInList walks a GC object list and clears dead keys from any
+// table with WeakKey mode set.
+func clearDeadKeysInList(g *stateapi.GlobalState, list objectapi.GCObject) {
+	for obj := list; obj != nil; obj = obj.GC().Next {
+		t, ok := obj.(*tableapi.Table)
+		if !ok || t.WeakMode&tableapi.WeakKey == 0 {
+			continue
+		}
+		nodes := t.Nodes
+		for i := range nodes {
+			n := &nodes[i]
+			if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
+				continue
+			}
+			if keyObj, ok := n.KeyVal.(objectapi.GCObject); ok {
+				if isCleared(g, keyObj) {
+					n.KeyTT = objectapi.TagDeadKey
+					n.Val = objectapi.Nil
+				}
+			}
+		}
+	}
+}
+
 func clearByKeys(g *stateapi.GlobalState, l objectapi.GCObject) {
 	for l != nil {
 		t := l.(*tableapi.Table)
@@ -580,13 +638,11 @@ func clearByKeys(g *stateapi.GlobalState, l objectapi.GCObject) {
 			// Check if key is a dead GC object
 			if keyObj, ok := n.KeyVal.(objectapi.GCObject); ok {
 				if isCleared(g, keyObj) {
-					// Dead key — clear the entry
+					// Dead key — mark as dead and clear value
+					// Mirrors C Lua's setdeadkey(n)
+					n.KeyTT = objectapi.TagDeadKey
 					n.Val = objectapi.Nil
 				}
-			}
-			// If entry is now empty, clear the key too
-			if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
-				n.KeyVal = nil
 			}
 		}
 	}
@@ -617,11 +673,11 @@ func clearByValues(g *stateapi.GlobalState, l objectapi.GCObject, f objectapi.GC
 			}
 			if vObj, ok := n.Val.Val.(objectapi.GCObject); ok {
 				if isCleared(g, vObj) {
+					// Dead value — mark key as dead and clear value.
+					// Must NOT nil KeyVal — hash chain probing depends on it.
+					n.KeyTT = objectapi.TagDeadKey
 					n.Val = objectapi.Nil
 				}
-			}
-			if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
-				n.KeyVal = nil
 			}
 		}
 	}
@@ -728,7 +784,9 @@ func FullGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
 
 	// At this point, all resurrected objects are marked.
 	// Clear dead keys from ephemeron and allweak tables
-	clearByKeys(g, g.Ephemeron)
+	// NOTE: convergeEphemerons empties g.Ephemeron (marks tables black).
+	// Walk allgc+finobj to find ALL ephemeron tables for dead-key clearing.
+	clearDeadKeysAllEphemerons(g)
 	clearByKeys(g, g.AllWeak)
 	// Clear values from resurrected weak tables (only new entries since origWeak)
 	clearByValues(g, g.Weak, origWeak)
