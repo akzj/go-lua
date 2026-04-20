@@ -714,12 +714,17 @@ func quoteString(s string) string {
 // Pattern matching engine — Lua patterns (NOT regex)
 // ---------------------------------------------------------------------------
 
+// maxPatternDepth is the recursion depth limit for pattern matching.
+// Mirrors C Lua's use of MAXCCALLS (~200) to detect "pattern too complex".
+const maxPatternDepth = 200
+
 // matchState holds pattern matching state
 type matchState struct {
 	L       *luaapi.State
 	src     string
 	pat     string
 	level   int // number of active captures
+	depth   int // current recursion depth
 	capture [32]captureInfo
 }
 
@@ -884,6 +889,11 @@ func (ms *matchState) matchBalance(si, pi int) int {
 }
 
 func (ms *matchState) match(si, pi int) int {
+	ms.depth++
+	if ms.depth > maxPatternDepth {
+		ms.L.Errorf("pattern too complex")
+	}
+	defer func() { ms.depth-- }()
 	for pi < len(ms.pat) {
 		switch ms.pat[pi] {
 		case '(':
