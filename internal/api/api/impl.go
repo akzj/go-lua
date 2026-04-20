@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
@@ -787,8 +788,18 @@ func (L *State) RawSetI(idx int, n int64) {
 // CreateTable pushes a new table with pre-allocated space.
 func (L *State) CreateTable(nArr, nRec int) {
 	t := tableapi.New(nArr, nRec)
-	L.TrackAlloc(t.EstimateBytes())
+	size := t.EstimateBytes()
+	L.TrackAlloc(size)
 	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
+
+	// Register dealloc cleanup — decrements GCTotalBytes when Go GC collects the table.
+	// Uses AddCleanup (not SetFinalizer) so it coexists with __gc finalizers
+	// registered later by SetMetatable. AddCleanup supports multiple cleanups
+	// per object and doesn't conflict with SetFinalizer.
+	gcTotalBytes := &L.ls().Global.GCTotalBytes
+	runtime.AddCleanup(t, func(size int64) {
+		atomic.AddInt64(gcTotalBytes, -size)
+	}, size)
 
 	// Periodic GC: fire __gc finalizers during tight allocation loops.
 	ls := L.ls()
@@ -868,7 +879,9 @@ func (L *State) SetMetatable(idx int) {
 	case objectapi.TagTable:
 		tbl := v.Val.(*tableapi.Table)
 		tbl.SetMetatable(mt)
-		// Register __gc finalizer if metatable has __gc
+		// Register __gc finalizer if metatable has __gc.
+		// Dealloc tracking is handled separately via AddCleanup (registered in
+		// CreateTable/VM), which coexists with SetFinalizer.
 		if mt != nil {
 			g := ls.Global
 			tmName := g.TMNames[metamethodapi.TM_GC]
@@ -1324,13 +1337,21 @@ func (L *State) GC(what GCWhat, args ...int) int {
 
 // GCTotalBytes returns the Lua-level allocation counter (bytes).
 // Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
+// Uses atomic load since finalizers may concurrently modify the counter.
 func (L *State) GCTotalBytes() int64 {
-	return L.ls().Global.GCTotalBytes
+	return atomic.LoadInt64(&L.ls().Global.GCTotalBytes)
 }
 
 // TrackAlloc adds n bytes to the Lua-level allocation counter.
+// Uses atomic add since finalizers may concurrently modify the counter.
 func (L *State) TrackAlloc(n int64) {
-	L.ls().Global.GCTotalBytes += n
+	atomic.AddInt64(&L.ls().Global.GCTotalBytes, n)
+}
+
+// TrackDealloc subtracts n bytes from the Lua-level allocation counter.
+// Called from finalizers (which run in arbitrary goroutines), so uses atomic.
+func (L *State) TrackDealloc(n int64) {
+	atomic.AddInt64(&L.ls().Global.GCTotalBytes, -n)
 }
 
 // GetGCMode returns the current GC mode string ("incremental" or "generational").

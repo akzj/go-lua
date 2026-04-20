@@ -8,7 +8,9 @@ package api
 
 import (
 	"math"
+	"runtime"
 	"strings"
+	"sync/atomic"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
 	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
@@ -1385,7 +1387,13 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		// Mirrors: luaT_adjustvarargs + createvarargtab in ltm.c
 		CheckStack(L, int(p.MaxStackSize)+1)
 		t := tableapi.New(nextra, 1)
-		L.Global.GCTotalBytes += t.EstimateBytes()
+		size := t.EstimateBytes()
+		atomic.AddInt64(&L.Global.GCTotalBytes, size)
+		// Register dealloc cleanup (coexists with any __gc SetFinalizer)
+		gcTotalBytes := &L.Global.GCTotalBytes
+		runtime.AddCleanup(t, func(sz int64) {
+			atomic.AddInt64(gcTotalBytes, -sz)
+		}, size)
 		// Set t.n = nextra
 		st := L.Global.StringTable.(*luastringapi.StringTable)
 		nKey := objectapi.MakeString(st.Intern("n"))
@@ -1796,7 +1804,13 @@ startfunc:
 			}
 			ci.SavedPC++ // skip extra arg
 			t := tableapi.New(c, b)
-			L.Global.GCTotalBytes += t.EstimateBytes()
+			size := t.EstimateBytes()
+			atomic.AddInt64(&L.Global.GCTotalBytes, size)
+			// Register dealloc cleanup (coexists with any __gc SetFinalizer)
+			gcTotalBytes := &L.Global.GCTotalBytes
+			runtime.AddCleanup(t, func(sz int64) {
+				atomic.AddInt64(gcTotalBytes, -sz)
+			}, size)
 			L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
 
 			// Periodic GC: fire __gc finalizers during tight allocation loops.
