@@ -18,7 +18,7 @@ func NewStringReader(s string) *StringReader {
 	return &StringReader{data: s}
 }
 
-func (r *StringReader) ReadByte() int {
+func (r *StringReader) NextByte() int {
 	if r.pos >= len(r.data) {
 		return EOZ
 	}

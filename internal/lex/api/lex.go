@@ -113,7 +113,7 @@ func NewLexState(reader LexReader, source string) *LexState {
 
 // SetInput reads the first character and prepares the lexer for scanning.
 func SetInput(ls *LexState) {
-	ls.Current = ls.Reader.ReadByte()
+	ls.Current = ls.Reader.NextByte()
 }
 
 // SkipShebang skips a Unix shebang line (#! or # comment) at the start of
@@ -136,7 +136,7 @@ func SkipShebang(ls *LexState) {
 // ---------------------------------------------------------------------------
 
 func next(ls *LexState) {
-	ls.Current = ls.Reader.ReadByte()
+	ls.Current = ls.Reader.NextByte()
 }
 
 func save(ls *LexState, c int) {

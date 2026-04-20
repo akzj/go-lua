@@ -224,7 +224,7 @@ func (st *StringTable) resize(newSize int) {
 // optionally shrinks the bucket array. This matches C Lua's
 // sweepstringtable() + checkSizes behavior.
 //
-// Should be called periodically from the GC path (alongside SweepWeakTables).
+// Should be called periodically from the GC path.
 func (st *StringTable) SweepStrings() {
 	alive := 0
 	for i := range st.buckets {

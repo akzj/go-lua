@@ -34,10 +34,7 @@ type Table struct {
 	Metatable *Table             // metatable or nil
 
 	// Weak table support (__mode metafield)
-	WeakMode      byte           // bit 0 = weak keys, bit 1 = weak values
-	WeakArrayRefs []any          // parallel to Array: weak.Pointer[T] for weak values (nil = not weak)
-	WeakKeyRefs   map[int]any    // node index → weak.Pointer[T] for weak keys
-	WeakValRefs   map[int]any    // node index → weak.Pointer[T] for weak values
+	WeakMode byte // bit 0 = weak keys, bit 1 = weak values
 }
 
 // GC returns the GC header for this table.
