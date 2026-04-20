@@ -2597,6 +2597,13 @@ func (L *State) DrainGCFinalizers() {
 	if g == nil {
 		return
 	}
+	// Reentrancy guard: if __gc calls collectgarbage(), prevent nested drain.
+	// Mirrors C Lua's GCTM check for gcrunning.
+	if g.GCInFinalizer {
+		return
+	}
+	g.GCInFinalizer = true
+	defer func() { g.GCInFinalizer = false }()
 
 	for {
 		// Atomically grab the queue
