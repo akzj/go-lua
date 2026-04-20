@@ -213,12 +213,8 @@ func TestTestesWide(t *testing.T) {
 				// Patch 2 removed: ErrorMsg now clears ErrFunc before calling handler,
 				// preventing recursive handler invocation and correctly producing
 				// "error in error handling" on handler failure.
-				// Patch 3: skip "too complex" pattern matching test
-				// (Go pattern matcher doesn't have recursion depth limit yet)
-				src = strings.Replace(src,
-					"  checkerror(\"too complex\", f, 2000)\nend\n",
-					"  if not _port then checkerror(\"too complex\", f, 2000) end\nend\n",
-					1)
+				// Patch 3 removed: pattern matcher now has recursion depth limit
+				// (maxPatternDepth=200) that produces "pattern too complex" error.
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)
