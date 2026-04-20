@@ -1,4 +1,17 @@
-# TODO: Yield in Metamethods & For-Iterators
+# ~~TODO~~: Yield in Metamethods & For-Iterators
+
+## STATUS: DONE ✅
+
+Yield-in-metamethods and yield-in-for-iterators are **fully implemented**.
+The CallK continuation mechanism was added in commits `9276786` and `6037484`.
+All coroutine.lua yield-in-metamethod tests pass. The `_port` guards around
+yield-in-`__pairs` (nextvar.lua) have been removed.
+
+This document is retained for historical reference only.
+
+---
+
+*Original analysis below (kept for reference):*
 
 ## 跳过位置
 - `coroutine.lua:856-:1052` — "yields inside metamethods" + "yields inside for iterators"
