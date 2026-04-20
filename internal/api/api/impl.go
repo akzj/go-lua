@@ -800,6 +800,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 			runtime.GC()
 			runtime.Gosched()
 			L.DrainGCFinalizers()
+			L.SweepWeakTables() // clear collected weak table entries
 		}
 	}
 }
