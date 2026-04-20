@@ -142,39 +142,32 @@ func NewState() *State {
 	// Wire up GC step functions so the VM can trigger periodic GC
 	// without importing this package.
 
-	// GCStepFn: expensive — triggers full GC cycle + drain. Called rarely.
+	// GCStepFn: periodic GC during VM allocation loops.
+	// Uses runtime.GC() to clear Go weak pointers (for weak tables),
+	// then drains any pending Lua finalizers. Does NOT run FullGC —
+	// FullGC during VM execution causes premature collection.
 	ls.Global.GCStepFn = func(thread *stateapi.LuaState) {
-		// Clear stale stack slots above the current call frame's Top
-		// on the main thread AND the current thread so Go GC can collect
-		// objects that Lua has "popped". Use CI.Top (not thread.Top)
-		// because for-loop internal variables live above Top but below CI.Top.
-		clearThread := func(t *stateapi.LuaState) {
-			clearFrom := t.Top
-			if t.CI != nil && t.CI.Top > clearFrom {
-				clearFrom = t.CI.Top
-			}
-			for i := clearFrom; i < len(t.Stack); i++ {
-				t.Stack[i].Val = objectapi.Nil
-			}
+		g := thread.Global
+		if g.GCRunning || g.GCRunningFinalizer {
+			return
 		}
-		clearThread(thread)
-		if g := thread.Global; g != nil && g.MainThread != nil && g.MainThread != thread {
-			clearThread(g.MainThread)
+		// Apply dealloc debt
+		debt := atomic.SwapInt64(&g.GCDeallocDebt, 0)
+		if debt > 0 {
+			atomic.AddInt64(&g.GCTotalBytes, -debt)
 		}
-		wrapper := &State{Internal: thread}
+		// Run Go GC to clear weak.Pointer entries (weak tables)
 		runtime.GC()
-		runtime.Gosched() // let finalizer goroutine enqueue callbacks
-		runtime.GC()      // second pass to sweep finalized objects
-		runtime.Gosched()
-		wrapper.DrainGCFinalizers()
-		wrapper.SweepWeakTables() // clear collected weak table entries
-		wrapper.SweepStrings()    // remove collected interned strings
+		// Sweep weak tables + drain finalizers
+		wrapper := &State{Internal: thread}
+		wrapper.SweepWeakTables()
+		wrapper.callAllPendingFinalizers()
 	}
 
-	// GCDrainFn: cheap — just drains the finalizer queue. Called frequently.
+	// GCDrainFn: just drain pending finalizers.
 	ls.Global.GCDrainFn = func(thread *stateapi.LuaState) {
 		wrapper := &State{Internal: thread}
-		wrapper.DrainGCFinalizers()
+		wrapper.callAllPendingFinalizers()
 	}
 
 	return L
@@ -796,41 +789,18 @@ func (L *State) CreateTable(nArr, nRec int) {
 	L.TrackAlloc(size)
 	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
 
-	// Register dealloc cleanup — decrements GCTotalBytes when Go GC collects the table.
-	// Uses AddCleanup (not SetFinalizer) so it coexists with __gc finalizers
-	// registered later by SetMetatable. AddCleanup supports multiple cleanups
-	// per object and doesn't conflict with SetFinalizer.
-	gcTotalBytes := &L.ls().Global.GCTotalBytes
+	// Register dealloc cleanup — accumulates freed bytes in GCDeallocDebt.
+	// These are only applied to GCTotalBytes during Lua GC cycles (GCCollect),
+	// ensuring gcinfo() is stable between cycles (matches C Lua behavior).
+	gcDeallocDebt := &L.ls().Global.GCDeallocDebt
 	runtime.AddCleanup(t, func(size int64) {
-		atomic.AddInt64(gcTotalBytes, -size)
+		atomic.AddInt64(gcDeallocDebt, size)
 	}, size)
 
-	// Periodic GC: fire __gc finalizers during tight allocation loops.
-	ls := L.ls()
-	if g := ls.Global; g.GCHasFinalizers && !g.GCStopped {
-		g.GCAllocCount++
-		n := g.GCAllocCount
-		if n%10 == 0 {
-			L.DrainGCFinalizers() // cheap: just drain queue
-		}
-		if n%100 == 0 {
-			// Clear stale stack slots above the current call frame's Top
-			// before GC. Use CI.Top (not ls.Top) because for-loop internal
-			// variables live above ls.Top but below CI.Top.
-			clearFrom := ls.Top
-			if ls.CI != nil && ls.CI.Top > clearFrom {
-				clearFrom = ls.CI.Top
-			}
-			for i := clearFrom; i < len(ls.Stack); i++ {
-				ls.Stack[i].Val = objectapi.Nil
-			}
-			runtime.GC()
-			runtime.Gosched()
-			L.DrainGCFinalizers()
-			L.SweepWeakTables() // clear collected weak table entries
-			L.strtab().SweepStrings() // remove collected interned strings
-		}
-	}
+	// Periodic GC: disabled for now — clearStaleStack during VM execution
+	// corrupts for-loop control variables. Phase D will implement safe
+	// incremental GC steps that don't clear the stack.
+	// TODO(Phase D): implement luaC_checkGC with incremental steps
 }
 
 // NewTable pushes a new empty table.
@@ -883,23 +853,15 @@ func (L *State) SetMetatable(idx int) {
 	case objectapi.TagTable:
 		tbl := v.Val.(*tableapi.Table)
 		tbl.SetMetatable(mt)
-		// Register __gc finalizer if metatable has __gc.
+		// V5 GC: Move object from allgc to finobj if __gc detected.
 		// Dealloc tracking is handled separately via AddCleanup (registered in
-		// CreateTable/VM), which coexists with SetFinalizer.
+		// CreateTable/VM), which is independent of finalization.
 		if mt != nil {
 			g := ls.Global
 			tmName := g.TMNames[metamethodapi.TM_GC]
 			gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
 			if !gcTM.IsNil() {
-				g.GCHasFinalizers = true // enable periodic GC in allocation loops
-				runtime.SetFinalizer(tbl, func(t *tableapi.Table) {
-					g.GCFinalizerMu.Lock()
-					defer g.GCFinalizerMu.Unlock()
-					if g.GCClosed {
-						return
-					}
-					g.GCFinalizerQueue = append(g.GCFinalizerQueue, t)
-				})
+				gcapi.CheckFinalizer(g, tbl)
 			}
 		}
 		// Parse __mode from metatable for weak table support
@@ -928,21 +890,13 @@ func (L *State) SetMetatable(idx int) {
 	case objectapi.TagUserdata:
 		if ud, ok := v.Val.(*objectapi.Userdata); ok {
 			ud.MetaTable = mt
-			// Register __gc finalizer if metatable has __gc (mirrors TagTable case)
+			// V5 GC: Move object from allgc to finobj if __gc detected.
 			if mt != nil {
 				g := ls.Global
 				tmName := g.TMNames[metamethodapi.TM_GC]
 				gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
 				if !gcTM.IsNil() {
-					g.GCHasFinalizers = true
-					runtime.SetFinalizer(ud, func(u *objectapi.Userdata) {
-						g.GCFinalizerMu.Lock()
-						defer g.GCFinalizerMu.Unlock()
-						if g.GCClosed {
-							return
-						}
-						g.GCFinalizerQueue = append(g.GCFinalizerQueue, u)
-					})
+					gcapi.CheckFinalizer(g, ud)
 				}
 			}
 		}
@@ -1410,16 +1364,136 @@ func (L *State) IsGCRunning() bool {
 	return !L.ls().Global.GCStopped
 }
 
-// IsGCInFinalizer returns true if DrainGCFinalizers is currently executing.
+// IsGCInFinalizer returns true if a __gc finalizer is currently executing.
 func (L *State) IsGCInFinalizer() bool {
-	return L.ls().Global.GCInFinalizer
+	return L.ls().Global.GCRunningFinalizer
 }
 
-// GCCollect runs a full Lua mark-and-sweep GC cycle.
-// This is the V5 GC entry point — replaces runtime.GC() for Lua objects.
-func (L *State) GCCollect() {
+// gcMarkSweep runs mark/sweep only — no finalizers, no weak table sweep.
+// Safe to call during VM execution (periodic GC from CreateTable).
+func (L *State) gcMarkSweep() {
 	ls := L.ls()
-	gcapi.FullGC(ls.Global, ls)
+	g := ls.Global
+	if g.GCRunning {
+		return
+	}
+	g.GCRunning = true
+	defer func() { g.GCRunning = false }()
+	// Apply dealloc debt accumulated by Go GC (runtime.AddCleanup callbacks)
+	debt := atomic.SwapInt64(&g.GCDeallocDebt, 0)
+	if debt > 0 {
+		atomic.AddInt64(&g.GCTotalBytes, -debt)
+	}
+	gcapi.FullGC(g, ls)
+}
+
+// GCCollect runs a full Lua mark-and-sweep GC cycle, then calls all
+// pending __gc finalizers. This is the V5 GC entry point.
+// Mirrors C Lua's luaC_fullgc + callallpendingfinalizers.
+// NOT safe to call during VM execution — use gcMarkSweep for periodic GC.
+func (L *State) GCCollect() {
+	// Mark and sweep (with re-entrancy guard)
+	L.gcMarkSweep()
+	// Call all pending finalizers (objects moved to tobefnz by separateTobeFnz).
+	// This runs Lua code via PCall, so must NOT be called during VM execution.
+	L.callAllPendingFinalizers()
+	// Sweep weak tables using Go weak.Pointer (until Phase B replaces with Lua GC)
+	L.SweepWeakTables()
+}
+
+// clearStaleStack nils out stack slots above the highest active frame boundary.
+// This ensures the Lua GC doesn't mark stale references left behind when
+// Lua locals go out of scope.
+// We find the maximum of all CI.Top values and ls.Top, then nil everything above.
+func clearStaleStack(ls *stateapi.LuaState) {
+	if len(ls.Stack) == 0 {
+		return
+	}
+	// Find the highest stack position used by any active call frame
+	maxTop := ls.Top
+	for ci := ls.CI; ci != nil; ci = ci.Prev {
+		if ci.Top > maxTop {
+			maxTop = ci.Top
+		}
+	}
+	// Clear everything above the highest active frame boundary
+	for i := maxTop; i < len(ls.Stack); i++ {
+		ls.Stack[i].Val = objectapi.Nil
+	}
+}
+
+// callAllPendingFinalizers drains the tobefnz list, calling each object's
+// __gc metamethod via a protected call. Errors are silently discarded.
+// Mirrors C Lua's callallpendingfinalizers + GCTM.
+func (L *State) callAllPendingFinalizers() {
+	ls := L.ls()
+	g := ls.Global
+	if g.GCRunningFinalizer {
+		return // prevent reentrant finalization
+	}
+	g.GCRunningFinalizer = true
+	for g.TobeFnz != nil {
+		L.callOneGCTM(ls, g)
+	}
+	g.GCRunningFinalizer = false
+}
+
+// callOneGCTM removes one object from tobefnz, links it back to allgc
+// (resurrection), and calls its __gc metamethod via PCall.
+// Mirrors C Lua's GCTM.
+func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
+	// Pop object from tobefnz and link back to allgc
+	obj := gcapi.Udata2Finalize(g)
+	if obj == nil {
+		return
+	}
+
+	// Find the __gc metamethod
+	var mt *tableapi.Table
+	var objVal objectapi.TValue
+	switch v := obj.(type) {
+	case *tableapi.Table:
+		mt = v.GetMetatable()
+		objVal = objectapi.TValue{Val: v, Tt: objectapi.TagTable}
+	case *objectapi.Userdata:
+		if v.MetaTable != nil {
+			mt, _ = v.MetaTable.(*tableapi.Table)
+		}
+		objVal = objectapi.TValue{Val: v, Tt: objectapi.TagUserdata}
+	default:
+		return
+	}
+	if mt == nil {
+		return
+	}
+	tmName := g.TMNames[metamethodapi.TM_GC]
+	gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+	if gcTM.IsNil() {
+		return
+	}
+
+	// Save state
+	oldTop := L.GetTop()
+	oldAllowHook := ls.AllowHook
+
+	// Suppress hooks and GC during finalizer (mirrors C Lua's GCTM)
+	ls.AllowHook = false
+
+	// Push __gc function and object as argument
+	L.push(gcTM)
+	L.push(objVal)
+
+	// Mark CI as running a finalizer for debug.getinfo
+	ls.CI.CallStatus |= stateapi.CISTFin
+
+	// Protected call: 1 arg, 0 results, no error handler
+	L.PCall(1, 0, 0)
+
+	ls.CI.CallStatus &^= stateapi.CISTFin
+	ls.AllowHook = oldAllowHook
+
+	// Restore stack — discard any leftover error object
+	L.SetTop(oldTop)
 }
 
 // SweepStrings removes collected (dead) interned strings from the string table.
@@ -2734,87 +2808,9 @@ func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// DrainGCFinalizers — run pending __gc metamethods for collected objects.
-//
-// Called synchronously from collectgarbage("collect") and CloseState.
-// Objects are enqueued by runtime.SetFinalizer callbacks (in arbitrary
-// goroutines) and drained here in the calling goroutine where it is safe
-// to call Lua functions.
-//
-// Mirrors: GCTM() in lgc.c — runs one finalizer per call.
-// ---------------------------------------------------------------------------
-
-// DrainGCFinalizers drains the GC finalizer queue, calling each object's
-// __gc metamethod via a protected call. Errors are silently discarded
-// (matching C Lua behavior).
+// DrainGCFinalizers is a no-op kept for API compatibility.
+// With V5 GC, __gc finalizers are called via callAllPendingFinalizers
+// after FullGC (mark/sweep) identifies dead objects in the finobj list.
 func (L *State) DrainGCFinalizers() {
-	ls := L.ls()
-	g := ls.Global
-	if g == nil {
-		return
-	}
-	// Reentrancy guard: if __gc calls collectgarbage(), prevent nested drain.
-	// Mirrors C Lua's GCTM check for gcrunning.
-	if g.GCInFinalizer {
-		return
-	}
-	g.GCInFinalizer = true
-	defer func() { g.GCInFinalizer = false }()
-
-	for {
-		// Atomically grab the queue
-		g.GCFinalizerMu.Lock()
-		queue := g.GCFinalizerQueue
-		g.GCFinalizerQueue = nil
-		g.GCFinalizerMu.Unlock()
-
-		if len(queue) == 0 {
-			break
-		}
-
-		for _, obj := range queue {
-			var mt *tableapi.Table
-			var objVal objectapi.TValue
-			switch v := obj.(type) {
-			case *tableapi.Table:
-				mt = v.GetMetatable()
-				objVal = objectapi.TValue{Val: v, Tt: objectapi.TagTable}
-			case *objectapi.Userdata:
-				if v.MetaTable != nil {
-					mt, _ = v.MetaTable.(*tableapi.Table)
-				}
-				objVal = objectapi.TValue{Val: v, Tt: objectapi.TagUserdata}
-			default:
-				continue
-			}
-			if mt == nil {
-				continue
-			}
-			tmName := g.TMNames[metamethodapi.TM_GC]
-			gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
-			if gcTM.IsNil() {
-				continue
-			}
-
-			// Save stack top before the call.
-			// On error, PCall leaves an error object on the stack
-			// (SetErrorObj sets Top = oldTop + 1). We must restore
-			// the stack to prevent overflow from repeated __gc errors.
-			// Mirrors C Lua's GCTM: L->top.p = oldtop after luaD_pcall.
-			oldTop := L.GetTop()
-			// Push the __gc function and the object as argument
-			L.push(gcTM)
-			L.push(objVal)
-			// Mark current CI as running a finalizer so debug.getinfo
-			// returns name="__gc", namewhat="metamethod" (mirrors C Lua's GCTM).
-			ls.CI.CallStatus |= stateapi.CISTFin
-			// Protected call: 1 arg, 0 results, no error handler
-			// Discard errors (like C Lua's GCTM)
-			L.PCall(1, 0, 0)
-			ls.CI.CallStatus &^= stateapi.CISTFin
-			// Restore stack — discard any leftover error object
-			L.SetTop(oldTop)
-		}
-	}
+	// No-op: V5 GC handles finalization via GCCollect -> callAllPendingFinalizers
 }

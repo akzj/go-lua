@@ -352,20 +352,18 @@ func (g *GlobalState) LinkGC(obj objectapi.GCObject) {
 
 // CloseState cleans up a Lua state. In Go, most cleanup is handled by GC,
 // but we nil out references to help the collector.
+// Mirrors C Lua's close_state: runs all pending __gc finalizers before closing.
 func CloseState(L *LuaState) {
-	// Drain pending __gc finalizers before closing (mirrors C Lua's
-	// callallpendingfinalizers in close_state). Use the GCStepFn callback
-	// which triggers runtime.GC() + DrainGCFinalizers without importing
-	// the api/api package.
+	// Run a full GC cycle + call all pending __gc finalizers.
+	// Uses GCStepFn callback which runs GCCollect (mark/sweep + GCTM)
+	// without importing the api/api package.
 	if L.Global != nil && L.Global.GCStepFn != nil {
 		L.Global.GCStepFn(L)
 	}
 
-	// Prevent Go finalizer callbacks from enqueuing after close
+	// Mark state as closed
 	if L.Global != nil {
-		L.Global.GCFinalizerMu.Lock()
 		L.Global.GCClosed = true
-		L.Global.GCFinalizerMu.Unlock()
 	}
 
 	// Reset CI chain
