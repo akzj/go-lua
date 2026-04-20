@@ -3,7 +3,6 @@ package api
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 	"unicode"
 
@@ -31,121 +30,91 @@ func luaB_print(L *luaapi.State) int {
 	return 0
 }
 
-// luaB_require — require with file-based Lua module loading.
-// 1. Check package.loaded (registry "_LOADED")
-// 2. If not found, search package.path for a .lua file
-// 3. Load and execute it, store result in _LOADED
+// luaB_require — Lua 5.5 require() using package.searchers.
+// Mirrors ll_require in C Lua loadlib.c:
+// 1. Check package.loaded[modname] — if truthy, return it
+// 2. Call findloader to iterate package.searchers
+// 3. Call the loader with (modname, extra)
+// 4. Store result in package.loaded[modname]
+// 5. Return (result, extra)
 func luaB_require(L *luaapi.State) int {
 	name := L.CheckString(1)
+	L.SetTop(1) // ensure clean stack: [name] at index 1
 
-	// Step 1: Check _LOADED
-	L.GetField(luaapi.RegistryIndex, "_LOADED")
-	tp := L.GetField(-1, name) // _LOADED[name]
-	if tp != objectapi.TypeNil {
-		L.Remove(-2) // remove _LOADED, keep module
+	// Push _LOADED table at index 2
+	L.GetField(luaapi.RegistryIndex, "_LOADED") // stack: [name, _LOADED]
+	tp := L.GetField(2, name)                   // stack: [name, _LOADED, _LOADED[name]]
+	if L.ToBoolean(3) {
+		// Already loaded — return the value (only 1 return for cached modules)
 		return 1
 	}
-	L.Pop(1) // pop nil, keep _LOADED on stack (index -1)
+	L.Pop(1) // pop nil/false result; stack: [name, _LOADED]
 
-	// Step 1.5: Check package.preload[name]
-	L.GetGlobal("package")
-	if L.GetField(-1, "preload") == objectapi.TypeTable {
-		if L.GetField(-1, name) == objectapi.TypeFunction {
-			// Call the preload function with module name as argument
-			L.PushString(name)
-			status := L.PCall(1, 1, 0)
-			if status != luaapi.StatusOK {
-				msg, _ := L.ToString(-1)
-				L.Pop(4) // pop error + preload + package + _LOADED
-				L.Errorf("error running preload function for '%s':\n\t%s", name, msg)
-				return 0
+	// findloader: iterate package.searchers to find a loader
+	// Get package.searchers
+	L.GetGlobal("package")                       // stack: [name, _LOADED, package]
+	tp = L.GetField(-1, "searchers")             // stack: [name, _LOADED, package, searchers]
+	if tp != objectapi.TypeTable {
+		L.Errorf("'package.searchers' must be a table")
+		return 0
+	}
+	L.Remove(-2) // remove package; stack: [name, _LOADED, searchers] (searchers at index 3)
+
+	// Build error message from searcher failures
+	var errMsgs strings.Builder
+
+	for i := int64(1); ; i++ {
+		tp = L.RawGetI(3, i) // stack: [name, _LOADED, searchers, searcher_i]
+		if tp == objectapi.TypeNil {
+			// No more searchers — build error and fail
+			L.Pop(1) // pop nil
+			L.Errorf("module '%s' not found:%s", name, errMsgs.String())
+			return 0
+		}
+
+		// Call searcher(name) → (loader_or_msg, extra)
+		L.PushString(name)
+		L.Call(1, 2) // stack: [name, _LOADED, searchers, result1, result2]
+
+		if L.IsFunction(-2) {
+			// Found a loader! Stack: [..., loader, extra]
+			// Rearrange: we need loader below extra for the call
+			// C Lua: lua_rotate(L, -2, 1) swaps loader<->extra
+			L.Rotate(-2, 1) // stack: [..., extra, loader]
+			L.PushValue(1)  // push modname as 1st arg
+			L.PushValue(-3) // push extra as 2nd arg; stack: [..., extra, loader, name, extra]
+			L.Call(2, 1)    // call loader(name, extra); stack: [..., extra, result]
+
+			// Store in _LOADED if non-nil
+			if !L.IsNil(-1) {
+				L.PushValue(-1)
+				L.SetField(2, name) // _LOADED[name] = result
+			} else {
+				L.Pop(1) // pop nil result
 			}
-			// If module returned nil/nothing, use true as the loaded value
-			if L.IsNil(-1) {
-				L.Pop(1)
+
+			// Check if _LOADED[name] is set (module may have set it itself)
+			if L.GetField(2, name) == objectapi.TypeNil {
+				// Module set no value — use true
+				L.Pop(1) // pop nil
 				L.PushBoolean(true)
+				L.PushValue(-1)
+				L.SetField(2, name) // _LOADED[name] = true
 			}
-			// Store in _LOADED
-			L.PushValue(-1)      // dup result
-			L.SetField(-5, name) // _LOADED[name] = result (_LOADED is at index -5: result, preload, package, _LOADED)
-			L.Remove(-2)         // remove preload
-			L.Remove(-2)         // remove package
-			L.Remove(-2)         // remove _LOADED, keep result
-			return 1
+			// Stack: [..., extra, loaded_result]
+			// Swap so result is first, extra second
+			L.Rotate(-2, 1) // stack: [..., loaded_result, extra]
+			return 2
 		}
-		L.Pop(1) // pop non-function value
-	}
-	L.Pop(2) // pop preload (or nil) + package
 
-	// Step 2: Search package.path for a .lua file
-	pathStr := getPackageField(L, "path")
-	filename, pathTried := searchPath(name, pathStr)
-	if filename == "" {
-		// Also search package.cpath
-		cpathStr := getPackageField(L, "cpath")
-		_, cpathTried := searchPath(name, cpathStr)
-
-		// Build full error message like C Lua
-		var msg strings.Builder
-		msg.WriteString("module '")
-		msg.WriteString(name)
-		msg.WriteString("' not found:\n\tno field package.preload['")
-		msg.WriteString(name)
-		msg.WriteString("']")
-		for _, t := range pathTried {
-			msg.WriteString("\n\tno file '")
-			msg.WriteString(t)
-			msg.WriteByte('\'')
+		if L.IsString(-2) {
+			// Searcher returned error string
+			s, _ := L.ToString(-2)
+			errMsgs.WriteString("\n\t")
+			errMsgs.WriteString(s)
 		}
-		for _, t := range cpathTried {
-			msg.WriteString("\n\tno file '")
-			msg.WriteString(t)
-			msg.WriteByte('\'')
-		}
-		L.Pop(1) // pop _LOADED
-		L.Errorf("%s", msg.String())
-		return 0
+		L.Pop(2) // pop both returns, continue to next searcher
 	}
-
-	// Step 3: Load and execute the file
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		L.Pop(1) // pop _LOADED
-		L.Errorf("cannot read '%s': %v", filename, err)
-		return 0
-	}
-	code := string(data)
-	source := "@" + filename
-	status := L.Load(code, source, "t")
-	if status != luaapi.StatusOK {
-		msg, _ := L.ToString(-1)
-		L.Pop(2) // pop error + _LOADED
-		L.Errorf("error loading module '%s' from file '%s':\n\t%s", name, filename, msg)
-		return 0
-	}
-
-	// Push module name as argument (Lua convention)
-	L.PushString(name)
-	// PCall(1 arg, 1 result)
-	status = L.PCall(1, 1, 0)
-	if status != luaapi.StatusOK {
-		msg, _ := L.ToString(-1)
-		L.Pop(2) // pop error + _LOADED
-		L.Errorf("error running module '%s':\n\t%s", name, msg)
-		return 0
-	}
-
-	// If module returned nil/nothing, use true as the loaded value
-	if L.IsNil(-1) {
-		L.Pop(1)
-		L.PushBoolean(true)
-	}
-
-	// Store in _LOADED: _LOADED[name] = result
-	L.PushValue(-1)           // dup result
-	L.SetField(-3, name)      // _LOADED[name] = result
-	L.Remove(-2)              // remove _LOADED, keep result
-	return 1
 }
 
 // searchPackagePath searches package.path for a file matching the module name.
@@ -675,19 +644,8 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushInteger(0)
 		return 1
 	case 2: // collect
-		// Explicit collect always runs, even if GCStopped.
-		// But if we're inside a __gc finalizer, just return false (C Lua behavior).
-		if L.IsGCInFinalizer() {
-			L.PushBoolean(false)
-			return 1
-		}
-		// V5: Run Lua mark-and-sweep GC cycle
+		// V5: Run Lua mark-and-sweep GC cycle (includes calling __gc finalizers)
 		L.GCCollect()
-		// Also run Go GC + old mechanisms (still needed during transition)
-		runtime.GC()
-		runtime.GC()
-		L.DrainGCFinalizers()
-		L.SweepWeakTables()
 		L.SweepStrings()
 		L.PushInteger(0)
 		return 1
@@ -698,10 +656,6 @@ func luaB_collectgarbage(L *luaapi.State) int {
 	case 4: // step
 		// V5: Run Lua mark-and-sweep GC step
 		L.GCCollect()
-		runtime.GC()
-		runtime.GC()
-		L.DrainGCFinalizers()
-		L.SweepWeakTables()
 		L.SweepStrings()
 		L.PushBoolean(true)
 		return 1
