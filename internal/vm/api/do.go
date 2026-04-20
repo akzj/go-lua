@@ -104,14 +104,19 @@ func ErrorMsg(L *stateapi.LuaState) {
 		L.Stack[L.Top].Val = L.Stack[L.Top-1].Val // copy errmsg up
 		L.Stack[L.Top-1].Val = errFunc             // put handler below
 		L.Top++
-		// Do NOT reset NCCalls here. C Lua's luaG_errormsg does not
-		// reset nCcalls — the error handler inherits the current
-		// (high) nCcalls value, so if it tries to recurse deeply,
-		// it will hit the C stack overflow limit quickly.
-		// RunProtected will save/restore NCCalls on error.
+		// Clear ErrFunc while running the handler to prevent recursive
+		// ErrorMsg calls from re-invoking the handler. In C Lua this
+		// recursion is naturally bounded by the C stack; in Go the
+		// RunProtected/recover mechanism allows unbounded recursion.
+		// Clearing ErrFunc ensures that if the handler itself errors,
+		// the nested ErrorMsg throws directly (no handler), and our
+		// RunProtected catches it with a non-OK status.
+		savedErrFunc := L.ErrFunc
+		L.ErrFunc = 0
 		status := RunProtected(L, func() {
 			CallNoYield(L, L.Top-2, 1)
 		})
+		L.ErrFunc = savedErrFunc
 		if status != stateapi.StatusOK {
 			// Error in error handler
 			ErrorErr(L)
