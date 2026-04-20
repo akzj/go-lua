@@ -158,12 +158,18 @@ func NewState() *State {
 		if debt > 0 {
 			atomic.AddInt64(&g.GCTotalBytes, -debt)
 		}
+		// Clear stale stack slots above the highest active frame.
+		// This ensures traverseThread (which marks all stack slots)
+		// doesn't mark dead references left in unused slots.
+		clearStaleStack(thread)
 		gcapi.FullGC(g, thread)
 		g.GCRunning = false
 		// Drain pending finalizers — objects moved to tobefnz by
 		// separateTobeFnz in FullGC need their __gc called.
 		wrapper := &State{Internal: thread}
 		wrapper.callAllPendingFinalizers()
+		// Sweep weak tables (Go weak.Pointer-based clearing)
+		wrapper.SweepWeakTables()
 	}
 
 	// GCDrainFn: just drain pending finalizers.
@@ -1386,6 +1392,8 @@ func (L *State) gcMarkSweep() {
 	if debt > 0 {
 		atomic.AddInt64(&g.GCTotalBytes, -debt)
 	}
+	// Clear stale stack slots so traverseThread doesn't mark dead references
+	clearStaleStack(ls)
 	gcapi.FullGC(g, ls)
 }
 
