@@ -186,12 +186,8 @@ func TestTestesWide(t *testing.T) {
 					"if not _port then  -- skip: Go GC doesn't finalize coroutine-held tables synchronously\n-- Create a closure (function inside 'f') with an upvalue ('param') that\n",
 					1)
 				src = strings.Replace(src,
-					"  collectgarbage(\"restart\")\nend\n\n\ndo\n  collectgarbage()\n  collectgarbage\"stop\"\n",
-					"  collectgarbage(\"restart\")\nend\nend  -- _port coroutine __gc guard\n\nif not _port then  -- skip: Go GC stop/step semantics differ\ndo\n  collectgarbage()\n  collectgarbage\"stop\"\n",
-					1)
-				src = strings.Replace(src,
-					"  collectgarbage\"restart\"\n  _ENV.a = nil\nend\n\n\nif T then",
-					"  collectgarbage\"restart\"\n  _ENV.a = nil\nend\nend  -- _port stop/step guard\n\n\nif T then",
+					"  collectgarbage(\"restart\")\nend\n\n\ndo\n",
+					"  collectgarbage(\"restart\")\nend\nend  -- _port coroutine __gc guard\n\n\ndo\n",
 					1)
 				// Patch 5: skip closing-state __gc and reentrant __gc tests
 				// (Go finalizers don't run synchronously during state close or
