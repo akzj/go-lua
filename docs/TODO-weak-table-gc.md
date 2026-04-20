@@ -1,83 +1,122 @@
-# Weak Table GC Support — IMPLEMENTED
+# Weak Table GC Support — V5 Architecture
 
-## Status: ✅ Implemented
+## Status: ✅ Complete (V5 Native Weak Table Clearing)
 
-Weak tables with `__mode="k"/"v"/"kv"` are now fully supported.
-`coroutine.lua:478` assertion is enabled and passes.
+Weak tables with `__mode="k"/"v"/"kv"` are fully supported via the V5
+mark-and-sweep GC. Weak table clearing happens natively during the GC's
+atomic phase — no Go `weak.Pointer` involvement.
 
-## Architecture
+## Architecture: Native Mark-and-Sweep Clearing
 
-### Two-Phase Sweep Approach
+The V5 GC handles weak tables as part of its atomic phase in `FullGC()`,
+mirroring C Lua's `lgc.c` approach:
 
-Unlike C Lua which integrates weak table clearing into its mark-and-sweep GC,
-go-lua uses Go's GC via `weak.Pointer[T]` (Go 1.24+). The implementation uses
-a **two-phase sweep** triggered by `collectgarbage()`:
+```
+FullGC atomic phase:
+  1. markRoots → propagateAll        (mark all reachable objects)
+  2. Process grayagain list          (deferred weak tables from propagate)
+  3. convergeEphemerons              (weak-key table convergence)
+  4. clearByValues(Weak, AllWeak)    (clear unmarked values from weak-value tables)
+  5. separateTobeFnz + markBeingFnz (finalization — may resurrect objects)
+  6. convergeEphemerons (2nd pass)   (for resurrected objects)
+  7. clearDeadKeysAllEphemerons      (clear dead keys from ephemeron tables)
+  8. clearByKeys(AllWeak)            (clear dead keys from weak-key tables)
+  9. clearByValues (2nd pass)        (clear values from newly-added weak tables)
+  10. sweepList                      (remove dead objects from allgc)
+```
 
-**Phase 1 (before GC):** For each registered weak table, scan all entries.
-For pointer-backed values/keys, create a `weak.Pointer[T]` and nil out the
-strong reference in the table. Non-pointer values (int64, float64, bool,
-strings) are left in place — they persist forever (matches C Lua semantics).
+### Key Functions
 
-**Phase 2 (after GC):** Check each `weak.Pointer`. If `.Value()` returns
-non-nil, the object is still alive — restore it. If nil, the object was
-collected — leave the entry as nil.
+| Function | File | Purpose |
+|----------|------|---------|
+| `clearByValues` | `gc/api/gc.go:654` | Clears unmarked values from weak-value tables |
+| `clearByKeys` | `gc/api/gc.go:627` | Clears unmarked keys from weak-key tables |
+| `convergeEphemerons` | `gc/api/gc.go:691` | Iterative convergence for ephemeron tables |
+| `clearDeadKeysAllEphemerons` | `gc/api/gc.go` | Clears dead keys + uses `TagDeadKey` sentinel |
+| `traverseWeakValue` | `gc/api/gc.go` | Links weak-value tables to `g.Weak` list |
+| `traverseEphemeron` | `gc/api/gc.go` | Links ephemeron tables to `g.Ephemeron` list |
 
-### Key Design Decisions
+### Weak Table Classification (during traversal)
 
-1. **Callback pattern for circular import avoidance**: `table/api` cannot
-   import `closure/api` or `state/api` (dependency cycle). Instead, `table/api`
-   defines `WeakRefMake`/`WeakRefCheck` function variables that the API layer
-   (`internal/api/api/weak.go`) registers at init time with concrete type
-   handlers for all 5 pointer-backed types.
+| `__mode` | Classification | GC List | Clearing |
+|----------|---------------|---------|----------|
+| `"v"` | Weak-value | `g.Weak` | `clearByValues` |
+| `"k"` | Ephemeron | `g.Ephemeron` | `convergeEphemerons` + `clearByKeys` |
+| `"kv"` | All-weak | `g.AllWeak` | Both `clearByValues` + `clearByKeys` |
 
-2. **No Get/Set interception**: Values are stored normally (strong refs) in
-   the table. Weak behavior only manifests during `collectgarbage()` sweep.
-   This avoids modifying the hot Get/Set/Next paths.
+### Dead Key Handling
 
-3. **Non-pointer types persist forever**: Integers, floats, booleans, and
-   strings cannot use `weak.Pointer` and are never collected from weak tables.
-   This matches C Lua behavior where non-collectable values survive in weak
-   tables.
+When a key in a weak-key table is collected, the key is replaced with a
+`TagDeadKey` sentinel (not simply removed). This preserves hash chain
+integrity — other entries in the same chain remain findable. The sentinel
+is a special tag value that:
+- Cannot match any lookup (dead keys are never found)
+- Preserves the hash chain structure
+- Gets cleaned up during table resize
 
-4. **No strong refs in sweep closures**: The `PrepareWeakSweep` closure
-   captures only weak refs (containing `weak.Pointer`) and non-pointer values.
-   No TValues holding GC-collectable pointers are captured — this is critical
-   for the GC to actually collect unreferenced objects during the sweep.
+This mirrors C Lua's `setdeadkey()` / `keyisdead()` mechanism.
 
-### Pointer-Backed Types (can be weak)
-| Type | Tag | Go Type |
-|------|-----|---------|
-| Table | 0x05 | `*tableapi.Table` |
-| Lua Closure | 0x06 | `*closureapi.LClosure` |
-| C Closure | 0x26 | `*closureapi.CClosure` |
-| Userdata | 0x07 | `*objectapi.Userdata` |
-| Thread | 0x08 | `*stateapi.LuaState` |
+### Ephemeron Convergence
 
-### Non-Pointer Types (persist forever)
-- `int64`, `float64`, `bool`, `nil`
-- `*objectapi.LuaString` (interned, value-semantic)
-- Light C functions (`stateapi.CFunction`)
+Ephemeron tables (weak-key tables where values may reference keys) require
+iterative convergence:
 
-## Files Modified
+1. First pass: for each entry, if the key is marked, mark the value
+2. If any new objects were marked, repeat (values may make other keys reachable)
+3. Converge until no new marks in a pass
+4. After convergence, any remaining unmarked keys are dead
 
-| File | Changes |
+This runs twice in `FullGC`: once before finalization, once after (to handle
+resurrected objects).
+
+## Design Decisions
+
+### Why native clearing (not Go `weak.Pointer`)?
+
+The original implementation used Go's `weak.Pointer[T]` with a two-phase
+prepare/sweep approach. This was replaced because:
+
+1. **Ordering**: V5 GC controls the exact order of clearing vs finalization
+2. **Ephemerons**: Go has no ephemeron concept; native GC implements convergence
+3. **Correctness**: `weak.Pointer` was restoring entries that the Lua GC had
+   already correctly cleared (the two systems fought each other)
+4. **Simplicity**: One GC system instead of two
+
+`SweepWeakTables()` is now disabled in `GCCollect()` — the V5 GC's
+`clearByValues`/`clearByKeys` handles everything during the atomic phase.
+
+### Non-collectable types persist forever
+
+Integers, floats, booleans, and strings are not GC-managed objects and persist
+in weak tables indefinitely. This matches C Lua behavior.
+
+## Pointer-Backed Types (can be weak-collected)
+
+| Type | Go Type |
 |------|---------|
-| `internal/table/api/api.go` | `WeakMode byte` field, `WeakKey`/`WeakValue` constants, `HasWeakKeys()`/`HasWeakValues()` helpers, `WeakArrayRefs`/`WeakKeyRefs`/`WeakValRefs` parallel storage |
-| `internal/table/api/weak.go` | **NEW** — `WeakRefMake`/`WeakRefCheck` callback vars, `PrepareWeakSweep()` two-phase sweep |
-| `internal/api/api/weak.go` | **NEW** — Registers callbacks with concrete `weak.Pointer[T]` handlers, `SweepWeakTables()` method |
-| `internal/api/api/impl.go` | `SetMetatable()` now parses `__mode` from metatable, sets `WeakMode`, registers in `GlobalState.WeakTables` |
-| `internal/state/api/api.go` | `WeakTables []any` field on `GlobalState` |
-| `internal/state/api/state.go` | `RegisterWeakTable()` method |
-| `internal/stdlib/api/baselib.go` | `collectgarbage("collect"/"step")` calls `L.SweepWeakTables()` |
-| `lua-master/testes/coroutine.lua` | Line 478: un-skipped `assert(C[1] == undef)` |
+| Table | `*tableapi.Table` |
+| Lua Closure | `*closureapi.LClosure` |
+| C Closure | `*closureapi.CClosure` |
+| Userdata | `*objectapi.Userdata` |
+| Thread | `*stateapi.LuaState` |
 
 ## C Lua Reference
+
 - `lgc.c:596` — `getmode()` reads `__mode`
 - `lgc.c:808` — `clearbyvalues()` clears unmarked weak value entries
 - `lgc.c:789` — `clearbykeys()` clears unmarked weak key entries
+- `lgc.c:530-570` — ephemeron convergence
 - `lgc.c:1542` — `atomic()` phase calls clear functions
 
 ## Test Coverage
-- `internal/stdlib/api/weak_test.go` — Go tests for weak values, weak keys, weak kv
-- `lua-master/testes/coroutine.lua:478` — Lua test for weak table with coroutine wrap
-- All 21 testes pass (regression verified)
+
+- `testes/gc.lua` — passes unpatched (all 4 patches removed)
+- `testes/coroutine.lua:478` — weak table + coroutine wrap assertion
+- All 26 Lua test suites pass with zero patches
+
+## Historical Note
+
+The original implementation (pre-V5) used Go's `weak.Pointer[T]` (Go 1.24+)
+with a two-phase sweep: Phase 1 created weak pointers and nil'd strong refs,
+Phase 2 (after `runtime.GC()`) checked which pointers survived. This was
+replaced by the V5 native mark-and-sweep approach.
