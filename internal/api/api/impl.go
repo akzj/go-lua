@@ -994,16 +994,14 @@ func (L *State) RawEqual(idx1, idx2 int) bool {
 	if v1.Tt != v2.Tt {
 		return false
 	}
-	// For types that are not comparable with ==  (e.g. functions), use
-	// pointer/interface identity via reflect.
 	if v1.Val == nil && v2.Val == nil {
 		return true
 	}
-	rv1 := reflect.ValueOf(v1.Val)
-	rv2 := reflect.ValueOf(v2.Val)
-	if rv1.Kind() == reflect.Func || rv2.Kind() == reflect.Func {
-		// Functions: compare by pointer
-		return rv1.Pointer() == rv2.Pointer()
+	// Light C functions: use interface data-word comparison (unique per
+	// closure instance). reflect.Pointer returns the shared code address
+	// which is identical for all closures of the same function literal.
+	if v1.Tt == objectapi.TagLightCFunc {
+		return objectapi.LightCFuncEqual(v1.Val, v2.Val)
 	}
 	return v1.Val == v2.Val
 }
@@ -1559,24 +1557,96 @@ func (L *State) ArgError(arg int, extraMsg string) int {
 		L.Error()
 		return 0
 	}
-	L.GetInfo("n", ar)
-	if ar.NameWhat == "method" {
-		arg-- // do not count 'self'
-		if arg == 0 {
-			msg := fmt.Sprintf("calling '%s' on bad self (%s)", ar.Name, extraMsg)
-			L.PushString(msg)
-			L.Error()
-			return 0
+	L.GetInfo("nt", ar)
+	argword := "argument"
+	if arg <= ar.ExtraArgs {
+		argword = "extra argument"
+	} else {
+		arg -= ar.ExtraArgs // do not count extra arguments
+		if ar.NameWhat == "method" {
+			arg-- // do not count 'self'
+			if arg == 0 {
+				msg := fmt.Sprintf("calling '%s' on bad self (%s)", ar.Name, extraMsg)
+				L.PushString(msg)
+				L.Error()
+				return 0
+			}
 		}
 	}
 	name := ar.Name
 	if name == "" {
-		name = "?"
+		// Fallback: search loaded modules for the function name.
+		// Mirrors pushglobalfuncname in lauxlib.c.
+		if gname := L.pushGlobalFuncName(ar); gname != "" {
+			name = gname
+		} else {
+			name = "?"
+		}
 	}
-	msg := fmt.Sprintf("bad argument #%d to '%s' (%s)", arg, name, extraMsg)
+	msg := fmt.Sprintf("bad %s #%d to '%s' (%s)", argword, arg, name, extraMsg)
 	L.PushString(msg)
 	L.Error()
 	return 0
+}
+
+// pushGlobalFuncName searches all loaded modules for the function at ar's
+// call frame and returns its dotted name (e.g. "io.write"), or "" if not found.
+// Mirrors: pushglobalfuncname + findfield in lauxlib.c.
+func (L *State) pushGlobalFuncName(ar *DebugInfo) string {
+	top := L.GetTop()
+	// Push the function value from the debug info's call frame
+	L.GetInfo("f", ar) // pushes the function onto the stack
+	funcIdx := L.GetTop()
+	// Get _LOADED table from registry
+	L.GetField(RegistryIndex, "_LOADED")
+	if !L.IsTable(-1) {
+		L.SetTop(top) // restore stack
+		return ""
+	}
+	name := L.findField(funcIdx, 2)
+	if name != "" {
+		// Strip "_G." prefix if present
+		if len(name) > 3 && name[:3] == "_G." {
+			name = name[3:]
+		}
+	}
+	L.SetTop(top) // restore stack
+	return name
+}
+
+// findField recursively searches the table at the top of the stack for
+// a value that is rawequal to the value at objIdx. Returns the dotted
+// field name or "" if not found. level limits recursion depth.
+// Mirrors: findfield in lauxlib.c.
+func (L *State) findField(objIdx int, level int) string {
+	if level == 0 || !L.IsTable(-1) {
+		return ""
+	}
+	L.PushNil() // start iteration
+	// Stack: ..., table, nil(key)
+	for L.Next(-2) {
+		// Stack: ..., table, key, value
+		if L.Type(-2) == objectapi.TypeString { // ignore non-string keys
+			if L.RawEqual(objIdx, -1) {
+				// Found! Key is at -2, value at -1
+				name, _ := L.ToString(-2)
+				L.Pop(2) // pop value and key
+				return name
+			}
+			if level > 1 {
+				// Value is at -1; try recursively into it (if it's a table)
+				if sub := L.findField(objIdx, level-1); sub != "" {
+					// Stack: ..., table, key, value
+					parentName, _ := L.ToString(-2) // the key
+					L.Pop(2)                         // pop value and key
+					return parentName + "." + sub
+				}
+			}
+		}
+		L.Pop(1) // pop value, keep key for next iteration
+		// Stack: ..., table, key
+	}
+	return ""
 }
 
 // TypeError raises a type error for argument arg.
@@ -1839,8 +1909,17 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 				ar.Name = name
 				ar.NameWhat = kind
 			}
-		case 'S', 'l', 'u', 'f':
+		case 'S', 'l', 'u':
 			// Already filled by GetStack
+		case 'f':
+			// Push the function value onto the stack.
+			// Mirrors: lua_getinfo 'f' flag in lapi.c.
+			if ar.CI != nil {
+				if ci, ok := ar.CI.(*stateapi.CallInfo); ok {
+					fval := ls.Stack[ci.Func].Val
+					L.push(fval)
+				}
+			}
 		case 'r':
 			// Transfer info for call/return hooks
 			if ar.CI != nil {
