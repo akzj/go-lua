@@ -81,6 +81,12 @@ func TestTestesWide(t *testing.T) {
 				src := string(data)
 				// Patch 1: REMOVED — CallK now supports yield across dofile
 				// Patch 3: REMOVED — loadfile now handles binary chunks after shebang
+				// Remove _port guard around os.time edge-value tests (line 858).
+				// go-lua's os.time handles 0, 1, 1000, 0x7fffffff, 0x80000000 correctly.
+				src = strings.Replace(src,
+					"if not _port then\n  -- assume that time_t",
+					"do\n  -- assume that time_t",
+					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)
