@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -359,4 +360,91 @@ func TestInternedStringContent(t *testing.T) {
 	if s.Len() != 11 {
 		t.Errorf("Len() = %d, want 11", s.Len())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Sweep / weak pointer tests — verify strings are collected by Go GC
+// ---------------------------------------------------------------------------
+
+func TestSweepStringsCollectsUnreferencedStrings(t *testing.T) {
+	st := NewStringTable(42)
+
+	// Phase 1: Intern 500 unique short strings, holding strong refs
+	const N = 500
+	refs := make([]*objectapi.LuaString, N)
+	for i := 0; i < N; i++ {
+		refs[i] = st.Intern(fmt.Sprintf("sweep_%04d", i))
+	}
+	countBefore := st.Count()
+	if countBefore != N {
+		t.Fatalf("expected count=%d after interning, got %d", N, countBefore)
+	}
+
+	// Phase 2: Drop all strong references
+	for i := range refs {
+		refs[i] = nil
+	}
+	refs = nil
+
+	// Phase 3: Force Go GC to collect the unreferenced LuaStrings
+	runtime.GC()
+	runtime.GC() // second pass to be thorough
+
+	// Phase 4: Sweep the string table — should remove dead weak pointers
+	st.SweepStrings()
+
+	countAfter := st.Count()
+	t.Logf("count before=%d, after sweep=%d", countBefore, countAfter)
+
+	// We expect a significant decrease. Due to GC timing, we may not get
+	// all of them collected, but the vast majority should be gone.
+	// Accept if at least 80% were collected.
+	if countAfter > N/5 {
+		t.Errorf("expected most strings to be collected: before=%d, after=%d (threshold=%d)",
+			countBefore, countAfter, N/5)
+	}
+}
+
+func TestSweepStringsKeepsReferencedStrings(t *testing.T) {
+	st := NewStringTable(42)
+
+	// Intern strings and keep strong references to half of them
+	const N = 200
+	kept := make([]*objectapi.LuaString, 0, N/2)
+	for i := 0; i < N; i++ {
+		s := st.Intern(fmt.Sprintf("keep_%04d", i))
+		if i%2 == 0 {
+			kept = append(kept, s)
+		}
+	}
+
+	if st.Count() != N {
+		t.Fatalf("expected count=%d, got %d", N, st.Count())
+	}
+
+	// Force GC — only unreferenced strings (odd indices) should be collected
+	runtime.GC()
+	runtime.GC()
+	st.SweepStrings()
+
+	countAfter := st.Count()
+	t.Logf("count after sweep=%d (kept %d strong refs)", countAfter, len(kept))
+
+	// The kept strings (100) must still be alive
+	if countAfter < len(kept) {
+		t.Errorf("expected at least %d strings to survive (kept refs), got %d",
+			len(kept), countAfter)
+	}
+
+	// Verify the kept strings are still internable (same pointer)
+	for i, s := range kept {
+		name := fmt.Sprintf("keep_%04d", i*2)
+		found := st.Intern(name)
+		if found != s {
+			t.Errorf("kept string %q: pointer changed after sweep (should be same)", name)
+		}
+	}
+
+	// Use kept to prevent compiler from optimizing away the references
+	runtime.KeepAlive(kept)
 }
