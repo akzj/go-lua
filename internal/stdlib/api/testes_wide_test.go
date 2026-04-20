@@ -189,17 +189,7 @@ func TestTestesWide(t *testing.T) {
 					"  collectgarbage(\"restart\")\nend\n\n\ndo\n",
 					"  collectgarbage(\"restart\")\nend\nend  -- _port coroutine __gc guard\n\n\ndo\n",
 					1)
-				// Patch 5: skip closing-state __gc and reentrant __gc tests
-				// (Go finalizers don't run synchronously during state close or
-				// return false from collectgarbage inside a finalizer)
-				src = strings.Replace(src,
-					"-- create an object to be collected when state is closed\n",
-					"if not _port then  -- skip: Go GC closing-state and reentrant finalizer tests\n-- create an object to be collected when state is closed\n",
-					1)
-				src = strings.Replace(src,
-					"collectgarbage(oldmode)\n",
-					"end  -- _port closing-state guard\n\ncollectgarbage(oldmode)\n",
-					1)
+
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)

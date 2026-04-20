@@ -660,7 +660,7 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		// Explicit collect always runs, even if GCStopped.
 		// But if we're inside a __gc finalizer, just return false (C Lua behavior).
 		if L.IsGCInFinalizer() {
-			L.PushInteger(0)
+			L.PushBoolean(false)
 			return 1
 		}
 		runtime.GC()
