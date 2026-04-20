@@ -412,11 +412,17 @@ func luaB_next(L *luaapi.State) int {
 	return 1
 }
 
+// pairsCont is the continuation for pairs() after yield from __pairs metamethod.
+// Mirrors: pairscont in lbaselib.c:280
+func pairsCont(L *stateapi.LuaState, status int, ctx int) int {
+	return 4 // __pairs did all the work, just return its 4 results
+}
+
 func luaB_pairs(L *luaapi.State) int {
 	L.CheckAny(1)
 	if L.GetMetafield(1, "__pairs") {
 		L.PushValue(1)
-		L.Call(1, 4) // get 4 values from metamethod (iter, state, control, closing)
+		L.CallK(1, 4, 0, pairsCont) // get 4 values from metamethod (iter, state, control, closing)
 		return 4
 	}
 	L.PushCFunction(luaB_next)
@@ -583,6 +589,12 @@ func loadAux(L *luaapi.State, status, env int) int {
 	return 2
 }
 
+// dofileCont is the continuation for dofile() after yield from the loaded chunk.
+// Mirrors: dofilecont in lbaselib.c:419
+func dofileCont(L *stateapi.LuaState, status int, ctx int) int {
+	return L.Top - (L.CI.Func + 1) - 1
+}
+
 func luaB_dofile(L *luaapi.State) int {
 	fname := L.OptString(1, "")
 	L.SetTop(1)
@@ -591,9 +603,11 @@ func luaB_dofile(L *luaapi.State) int {
 		L.Error()
 		return 0
 	}
-	// Call the loaded chunk, passing through all results
-	L.Call(0, luaapi.MultiRet)
-	return L.GetTop() - 1
+	// Call the loaded chunk, passing through all results.
+	// Use CallK so that yields inside the dofile'd chunk can be resumed.
+	L.CallK(0, luaapi.MultiRet, 0, dofileCont)
+	ls := L.Internal.(*stateapi.LuaState)
+	return dofileCont(ls, 0, 0)
 }
 
 func luaB_loadfile(L *luaapi.State) int {

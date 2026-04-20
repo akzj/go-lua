@@ -1085,6 +1085,32 @@ func (L *State) Call(nArgs, nResults int) {
 	}
 }
 
+// CallK calls a function with a continuation for yielding.
+// If k is non-nil and the coroutine is yieldable, the call is made yieldable
+// and the continuation k will be invoked upon resume after a yield.
+// Otherwise behaves identically to Call (non-yieldable).
+// Mirrors: lua_callk in lapi.c
+func (L *State) CallK(nArgs, nResults int, ctx int, k stateapi.KFunction) {
+	ls := L.ls()
+	funcIdx := ls.Top - nArgs - 1
+	if k != nil && ls.Yieldable() {
+		// Set continuation on the current CallInfo so that if the called
+		// function (or anything it calls) yields, the VM can resume via k.
+		ls.CI.K = k
+		ls.CI.Ctx = ctx
+		vmapi.Call(ls, funcIdx, nResults)
+	} else {
+		// No continuation or not yieldable — same as Call().
+		vmapi.CallNoYield(ls, funcIdx, nResults)
+	}
+	// Ensure Top >= CI.Func + 1 so the API stack is valid
+	base := ls.CI.Func + 1
+	if ls.Top < base {
+		ls.Top = base
+	}
+}
+
+
 // PCall performs a protected call. Returns status code.
 func (L *State) PCall(nArgs, nResults, msgHandler int) int {
 	ls := L.ls()
