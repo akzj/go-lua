@@ -78,31 +78,29 @@ func luaB_require(L *luaapi.State) int {
 
 		if L.IsFunction(-2) {
 			// Found a loader! Stack: [..., loader, extra]
-			// Rearrange: we need loader below extra for the call
-			// C Lua: lua_rotate(L, -2, 1) swaps loader<->extra
+			// Mirrors C Lua ll_require exactly:
 			L.Rotate(-2, 1) // stack: [..., extra, loader]
 			L.PushValue(1)  // push modname as 1st arg
 			L.PushValue(-3) // push extra as 2nd arg; stack: [..., extra, loader, name, extra]
 			L.Call(2, 1)    // call loader(name, extra); stack: [..., extra, result]
 
-			// Store in _LOADED if non-nil
+			// Store in _LOADED if non-nil (setfield pops the value)
 			if !L.IsNil(-1) {
-				L.PushValue(-1)
-				L.SetField(2, name) // _LOADED[name] = result
+				L.SetField(2, name) // _LOADED[name] = result (pops result)
 			} else {
 				L.Pop(1) // pop nil result
 			}
+			// Stack: [..., extra]
 
-			// Check if _LOADED[name] is set (module may have set it itself)
+			// Get _LOADED[name] — may have been set by the module itself
 			if L.GetField(2, name) == objectapi.TypeNil {
 				// Module set no value — use true
 				L.Pop(1) // pop nil
 				L.PushBoolean(true)
-				L.PushValue(-1)
-				L.SetField(2, name) // _LOADED[name] = true
+				L.PushValue(-1)          // dup true
+				L.SetField(2, name)      // _LOADED[name] = true (pops dup)
 			}
 			// Stack: [..., extra, loaded_result]
-			// Swap so result is first, extra second
 			L.Rotate(-2, 1) // stack: [..., loaded_result, extra]
 			return 2
 		}
