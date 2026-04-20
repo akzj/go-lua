@@ -42,12 +42,12 @@ func StandardLibraries() []Library {
 // - OpenTable:     tablelib.go
 // - OpenMath:      mathlib.go
 // - OpenString:    stringlib.go
-// - OpenIO:        iolib.go (stub)
-// - OpenOS:        oslib.go (stub)
-// - OpenDebug:     debuglib.go (stub)
-// - OpenUTF8:      utf8lib.go (stub)
-// - OpenCoroutine: corolib.go (stub)
-// - OpenPackage:   packagelib.go (stub)
+// - OpenIO:        iolib.go
+// - OpenOS:        oslib.go
+// - OpenDebug:     debuglib.go
+// - OpenUTF8:      utf8lib.go
+// - OpenCoroutine: corolib.go
+// - OpenPackage:   packagelib.go
 
 // OpenAll opens all standard libraries. Convenience function.
 func OpenAll(L *luaapi.State) {

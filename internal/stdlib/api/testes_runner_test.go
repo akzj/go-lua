@@ -24,20 +24,22 @@ func runTestFile(t *testing.T, filename string) {
 }
 
 // TestTestesStrings runs the official Lua 5.5 strings.lua test suite.
-// Currently skipped: needs %p pointer format and coroutine.running().
+// Superseded by TestTestesWide which sets _port/_soft and applies needed patches.
 func TestTestesStrings(t *testing.T) {
-	t.Skip("strings.lua: needs pointer format, coroutine.running(), io.stdin")
+	t.Skip("Superseded by TestTestesWide (strings.lua passes there with _port patches)")
 	runTestFile(t, "strings.lua")
 }
 
 // TestTestesMath runs the official Lua 5.5 math.lua test suite.
+// Superseded by TestTestesWide which sets _port/_soft flags.
 func TestTestesMath(t *testing.T) {
-	t.Skip("math.lua: needs investigation")
+	t.Skip("Superseded by TestTestesWide (math.lua passes there)")
 	runTestFile(t, "math.lua")
 }
 
 // TestTestesSort runs the official Lua 5.5 sort.lua test suite.
+// Superseded by TestTestesWide which sets _port/_soft flags.
 func TestTestesSort(t *testing.T) {
-	t.Skip("sort.lua: needs table.create")
+	t.Skip("Superseded by TestTestesWide (sort.lua passes there)")
 	runTestFile(t, "sort.lua")
 }
