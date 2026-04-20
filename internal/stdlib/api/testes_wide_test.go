@@ -225,6 +225,61 @@ func TestTestesWide(t *testing.T) {
 					msg, _ := L.ToString(-1)
 					err = fmt.Errorf("%s", msg)
 				}
+			} else if f == "strings.lua" {
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Skipf("cannot read %s: %v", path, readErr)
+					return
+				}
+				src := string(data)
+				// Remove _port guard around %a format inf/nan/-0.0 tests (line 334).
+				// go-lua formats inf/nan/negative-zero correctly.
+				src = strings.Replace(src,
+					"if not _port then   -- test inf, -inf, NaN, and -0.0\n",
+					"do   -- test inf, -inf, NaN, and -0.0\n",
+					1)
+				status := L.Load(src, "@"+f, "bt")
+				if status != 0 {
+					msg, _ := L.ToString(-1)
+					fmt.Printf("  %-20s FAIL: %v\n", f, msg)
+					t.Skipf("%s: %v", f, msg)
+					return
+				}
+				pcallStatus := L.PCall(0, 0, 0)
+				if pcallStatus != 0 {
+					msg, _ := L.ToString(-1)
+					err = fmt.Errorf("%s", msg)
+				}
+			} else if f == "errors.lua" {
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Skipf("cannot read %s: %v", path, readErr)
+					return
+				}
+				src := string(data)
+				// Remove _port guard around global function name tests (line 298).
+				// go-lua now resolves function names via pushGlobalFuncName fallback.
+				src = strings.Replace(src,
+					"if not _port then\ncheckmessage(\"(io.write or print){}\", \"io.write\")\ncheckmessage(\"(collectgarbage or print){}\", \"collectgarbage\")\nend\n",
+					"do\ncheckmessage(\"(io.write or print){}\", \"io.write\")\ncheckmessage(\"(collectgarbage or print){}\", \"collectgarbage\")\nend\n",
+					1)
+				// Remove _port guard around stdlib function name tests (line 383).
+				src = strings.Replace(src,
+					"if not _port then\ncheckmessage(\"table.sort({1,2,3}, table.sort)\", \"'table.sort'\")\ncheckmessage(\"string.gsub('s', 's', setmetatable)\", \"'setmetatable'\")\nend\n",
+					"do\ncheckmessage(\"table.sort({1,2,3}, table.sort)\", \"'table.sort'\")\ncheckmessage(\"string.gsub('s', 's', setmetatable)\", \"'setmetatable'\")\nend\n",
+					1)
+				status := L.Load(src, "@"+f, "bt")
+				if status != 0 {
+					msg, _ := L.ToString(-1)
+					fmt.Printf("  %-20s FAIL: %v\n", f, msg)
+					t.Skipf("%s: %v", f, msg)
+					return
+				}
+				pcallStatus := L.PCall(0, 0, 0)
+				if pcallStatus != 0 {
+					msg, _ := L.ToString(-1)
+					err = fmt.Errorf("%s", msg)
+				}
 			} else {
 				err = L.DoFile(path)
 			}
