@@ -26,11 +26,15 @@ const MaxUpVal = 255
 // The open upvalue list is sorted by stack level in descending order.
 // ---------------------------------------------------------------------------
 type UpVal struct {
+	objectapi.GCHeader               // GC metadata
 	StackIdx int              // stack index when open, -1 when closed
 	Own      objectapi.TValue // storage for closed value
 	Next     *UpVal           // next in open list (lower stack level)
 	Stack    *[]objectapi.StackValue // pointer to owning thread's stack (for cross-thread access)
 }
+
+// GC returns the GC header for this upvalue.
+func (uv *UpVal) GC() *objectapi.GCHeader { return &uv.GCHeader }
 
 // IsOpen returns true if the upvalue still points to a stack slot.
 func (uv *UpVal) IsOpen() bool {
@@ -78,9 +82,13 @@ func (uv *UpVal) Set(stack []objectapi.StackValue, val objectapi.TValue) {
 // It wraps a Proto with captured upvalues.
 // ---------------------------------------------------------------------------
 type LClosure struct {
+	objectapi.GCHeader               // GC metadata
 	Proto  *objectapi.Proto // compiled function prototype
 	UpVals []*UpVal         // captured upvalues (len == Proto.Upvalues)
 }
+
+// GC returns the GC header for this Lua closure.
+func (cl *LClosure) GC() *objectapi.GCHeader { return &cl.GCHeader }
 
 // ---------------------------------------------------------------------------
 // CClosure is a Go function closure with associated upvalues.
@@ -89,9 +97,13 @@ type LClosure struct {
 // I13 FIX: Fn uses stateapi.CFunction (canonical type, not func(any)int).
 // ---------------------------------------------------------------------------
 type CClosure struct {
+	objectapi.GCHeader               // GC metadata
 	Fn     stateapi.CFunction  // the Go function
 	UpVals []objectapi.TValue  // upvalues stored inline
 }
+
+// GC returns the GC header for this C closure.
+func (cl *CClosure) GC() *objectapi.GCHeader { return &cl.GCHeader }
 
 // NumUpvals returns the number of upvalues.
 func (c *CClosure) NumUpvals() int { return len(c.UpVals) }
