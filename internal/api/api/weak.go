@@ -51,7 +51,7 @@ func weakRefMake(v objectapi.TValue) (any, bool) {
 		p := v.Val.(*stateapi.LuaState)
 		ptr = weak.Make(p)
 	default:
-		return nil, false // non-pointer type
+		return nil, false // non-pointer type (strings are values in Lua, not collectable)
 	}
 	return &weakRef{tag: v.Tt, ptr: ptr}, true
 }
