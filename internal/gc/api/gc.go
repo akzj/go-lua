@@ -366,18 +366,12 @@ func traverseProto(g *stateapi.GlobalState, p *objectapi.Proto) {
 
 // traverseThread marks all live stack values and open upvalues.
 func traverseThread(g *stateapi.GlobalState, th *stateapi.LuaState) {
-	// Find the highest stack position used by any active call frame.
-	// We must mark all slots up to this point because L.Top is NOT
-	// maintained between VM instructions — it can be stale.
-	maxTop := th.Top
-	for ci := th.CI; ci != nil; ci = ci.Prev {
-		if ci.Top > maxTop {
-			maxTop = ci.Top
-		}
-	}
-
-	// Mark all live stack slots up to the highest active frame boundary
-	for i := 0; i < maxTop && i < len(th.Stack); i++ {
+	// Mark ALL allocated stack slots. During VM execution, registers
+	// above L.Top or CI.Top may hold live values that haven't been
+	// cleared yet (e.g., a table just assigned to register ra before
+	// periodic GC fires). Marking the full stack is safe because
+	// unused slots are nil (markValue skips nil TValues).
+	for i := 0; i < len(th.Stack); i++ {
 		markValue(g, th.Stack[i].Val)
 	}
 
