@@ -332,7 +332,7 @@ func TestRawLenFirstNil(t *testing.T) {
 
 func TestNextEmptyTable(t *testing.T) {
 	tbl := New(0, 0)
-	_, _, ok := tbl.Next(obj.Nil)
+	_, _, ok, _ := tbl.Next(obj.Nil)
 	if ok {
 		t.Error("Next on empty table should return false")
 	}
@@ -347,7 +347,7 @@ func TestNextArrayOnly(t *testing.T) {
 	count := 0
 	key := obj.Nil
 	for {
-		k, v, ok := tbl.Next(key)
+		k, v, ok, _ := tbl.Next(key)
 		if !ok {
 			break
 		}
@@ -376,7 +376,7 @@ func TestNextMixedKeys(t *testing.T) {
 	k := obj.Nil
 	for {
 		var ok bool
-		k, _, ok = tbl.Next(k)
+		k, _, ok, _ = tbl.Next(k)
 		if !ok {
 			break
 		}
@@ -498,7 +498,7 @@ func TestLargeTable(t *testing.T) {
 	k := obj.Nil
 	for {
 		var ok bool
-		k, _, ok = tbl.Next(k)
+		k, _, ok, _ = tbl.Next(k)
 		if !ok {
 			break
 		}
