@@ -30,3 +30,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Compiled C object files from lua-master reference
+lua-master/*.o
