@@ -143,13 +143,14 @@ func NewState() *State {
 	// without importing this package.
 
 	// GCStepFn: periodic GC during VM allocation loops.
-	// Runs FullGC (mark/sweep + weak table clearing) but does NOT
-	// call finalizers. Finalizers use PCall which corrupts the stack
-	// when called during VM execution (SetTop nils active registers).
-	// Finalizers only run from explicit collectgarbage("collect").
+	// Runs FullGC (mark/sweep + weak table clearing) AND drains
+	// pending finalizers (__gc). This is required for gc.lua tests
+	// where allocation loops depend on __gc setting a finish flag.
+	// The traverseThread function marks ALL allocated stack slots,
+	// preventing premature collection of live registers.
 	ls.Global.GCStepFn = func(thread *stateapi.LuaState) {
 		g := thread.Global
-		if g.GCRunning || g.GCRunningFinalizer {
+		if g.GCRunning || g.GCRunningFinalizer || g.GCStopped {
 			return
 		}
 		g.GCRunning = true
@@ -159,6 +160,10 @@ func NewState() *State {
 		}
 		gcapi.FullGC(g, thread)
 		g.GCRunning = false
+		// Drain pending finalizers — objects moved to tobefnz by
+		// separateTobeFnz in FullGC need their __gc called.
+		wrapper := &State{Internal: thread}
+		wrapper.callAllPendingFinalizers()
 	}
 
 	// GCDrainFn: just drain pending finalizers.
