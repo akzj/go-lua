@@ -1349,6 +1349,7 @@ func ForLoop(L *stateapi.LuaState, ra int) bool {
 func PushClosure(L *stateapi.LuaState, p *objectapi.Proto, encup []*closureapi.UpVal, base, ra int) {
 	nup := len(p.Upvalues)
 	ncl := closureapi.NewLClosure(p, nup)
+	L.Global.LinkGC(ncl) // V5: register in allgc chain
 	L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: ncl}
 	for i := 0; i < nup; i++ {
 		if p.Upvalues[i].InStack {

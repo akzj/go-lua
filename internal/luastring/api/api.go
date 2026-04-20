@@ -86,9 +86,10 @@ type stringEntry struct {
 // StringTable interns short strings for pointer-equality lookups.
 // It is owned by GlobalState and shared across all threads.
 type StringTable struct {
-	buckets [][]stringEntry // hash buckets (power-of-2 count)
-	count   int             // number of interned strings (may be stale until sweep)
-	seed    uint32          // hash seed (randomized per state)
+	buckets  [][]stringEntry // hash buckets (power-of-2 count)
+	count    int             // number of interned strings (may be stale until sweep)
+	seed     uint32          // hash seed (randomized per state)
+	OnCreate func(objectapi.GCObject) // V5: called when a new string is created (for GC linking)
 }
 
 // NewStringTable creates a string table with the given hash seed.
@@ -105,7 +106,11 @@ func NewStringTable(seed uint32) *StringTable {
 // If long, a new LuaString is created each time (not interned).
 func (st *StringTable) Intern(s string) *objectapi.LuaString {
 	if len(s) > MaxShortLen {
-		return newLong(s)
+		ts := newLong(s)
+		if st.OnCreate != nil {
+			st.OnCreate(ts) // V5: register in allgc chain
+		}
+		return ts
 	}
 	return st.internShort(s, Hash(s, st.seed))
 }
@@ -113,7 +118,11 @@ func (st *StringTable) Intern(s string) *objectapi.LuaString {
 // InternBytes is like Intern but accepts a byte slice.
 func (st *StringTable) InternBytes(b []byte) *objectapi.LuaString {
 	if len(b) > MaxShortLen {
-		return newLong(string(b))
+		ts := newLong(string(b))
+		if st.OnCreate != nil {
+			st.OnCreate(ts) // V5: register in allgc chain
+		}
+		return ts
 	}
 	h := HashBytes(b, st.seed)
 	// Convert to string for lookup/storage. For short strings (≤40 bytes),
@@ -165,6 +174,9 @@ func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 		Data:    s,
 		Hash_:   h,
 		IsShort: true,
+	}
+	if st.OnCreate != nil {
+		st.OnCreate(ts) // V5: register in allgc chain
 	}
 
 	// Insert weak pointer into bucket

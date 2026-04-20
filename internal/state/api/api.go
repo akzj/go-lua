@@ -266,6 +266,34 @@ type GlobalState struct {
 	// reads/writes them (e.g., gc.lua tests) works correctly.
 	// Keys: "pause", "stepmul", "stepsize", "minormul", "majorminor", "minormajor"
 	GCParams map[string]int64
+
+	// =================================================================
+	// V5 Lua GC State — self-managed mark-and-sweep
+	// =================================================================
+
+	// Object chains
+	Allgc    objectapi.GCObject // head of all collectable objects
+	FinObj   objectapi.GCObject // objects with __gc (separated at setmetatable time)
+	TobeFnz  objectapi.GCObject // objects whose __gc should run this cycle
+	FixedGC  objectapi.GCObject // permanent objects (never collected)
+
+	// GC phase
+	GCState      byte // current phase (GCSpause, GCSpropagate, etc.)
+	CurrentWhite byte // current white bit (flips each cycle)
+
+	// Gray lists (for mark propagation)
+	Gray      objectapi.GCObject // objects to be traversed
+	GrayAgain objectapi.GCObject // barrier-back objects (re-traverse)
+	Weak      objectapi.GCObject // weak tables to clear after mark
+	AllWeak   objectapi.GCObject // all-weak (kv) tables
+	Ephemeron objectapi.GCObject // ephemeron tables
+
+	// GC pacing
+	GCDebt     int64 // bytes "owed" — positive means GC should run
+	GCEstimate int64 // estimated live memory after last cycle
+	TotalBytes int64 // total bytes allocated (V5 GC tracking)
+	GCStepMul  int   // step multiplier (default 100)
+	GCPauseMul int   // pause multiplier (default 200)
 }
 
 // ---------------------------------------------------------------------------

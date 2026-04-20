@@ -51,6 +51,19 @@ func (h *GCHeader) IsGray() bool { return !h.IsWhite() && !h.IsBlack() }
 func (h *GCHeader) IsDead(otherwhite byte) bool {
 	return h.Marked&(WhiteBits|BlackBit) == otherwhite
 }
+// GC phase constants (matches C Lua's GCState values from lgc.h).
+const (
+	GCSpause       byte = 0 // waiting to start a new cycle
+	GCSpropagate   byte = 1 // propagating gray objects
+	GCSenteratomic byte = 2 // about to enter atomic phase
+	GCSatomic      byte = 3 // atomic mark phase
+	GCSswpallgc    byte = 4 // sweeping allgc list
+	GCSswpfinobj   byte = 5 // sweeping finobj list
+	GCSswptobefnz  byte = 6 // sweeping tobefnz list
+	GCSswpend      byte = 7 // sweep finished
+	GCScallfin     byte = 8 // calling finalizers
+)
+
 
 // ---------------------------------------------------------------------------
 // Type tags — faithful to C Lua's encoding (lobject.h:37–42)
