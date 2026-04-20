@@ -88,15 +88,6 @@ func TestTestesWide(t *testing.T) {
 					"assert(f(200) == 100 + 200 * 101)\nassert(os.remove(file))\n",
 					"assert(f(200) == 100 + 200 * 101)\nassert(os.remove(file))\nend  -- _port guard\n",
 					1)
-				// Patch 2: wrap /dev/full test in _port guard (Go writes are unbuffered)
-				src = strings.Replace(src,
-					"  local f = io.output(\"/dev/full\")\n",
-					"if not _port then  -- skip: Go writes are unbuffered\n  local f = io.output(\"/dev/full\")\n",
-					1)
-				src = strings.Replace(src,
-					"  assert(not io.flush())    -- cannot write to device\n  assert(f:close())\nend\n",
-					"  assert(not io.flush())    -- cannot write to device\n  assert(f:close())\nend  -- /dev/full guard\nend\n",
-					1)
 				// Patch 3: wrap binary chunk loading in _port guard (no string.dump support)
 				src = strings.Replace(src,
 					"-- loading binary file with initial comment\n",
@@ -105,15 +96,6 @@ func TestTestesWide(t *testing.T) {
 				src = strings.Replace(src,
 					"assert(a == 20 and b == \"\\0\\0\\0\" and c == nil)\nassert(os.remove(file))\n\n\n-- 'loadfile' with 'env'\n",
 					"assert(a == 20 and b == \"\\0\\0\\0\" and c == nil)\nassert(os.remove(file))\nend  -- binary chunk guard\n\n\n-- 'loadfile' with 'env'\n",
-					1)
-				// Patch 4: wrap setvbuf buffer tests in _port guard (Go has no C stdio buffering)
-				src = strings.Replace(src,
-					"-- testing buffers\n",
-					"if not _port then  -- skip: Go has no C stdio buffering\n-- testing buffers\n",
-					1)
-				src = strings.Replace(src,
-					"  f:close(); fr:close()\n  assert(os.remove(file))\nend\n\n\nif T",
-					"  f:close(); fr:close()\n  assert(os.remove(file))\nend\nend  -- buffer guard\n\n\nif T",
 					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
