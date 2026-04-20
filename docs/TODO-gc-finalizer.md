@@ -1,125 +1,105 @@
-# __gc Finalizer Support — Design Document
+# `__gc` Finalizer Support — V5 Architecture
 
-## Overview
+## Status: ✅ Complete (V5 Mark-and-Sweep)
 
-go-lua now supports `__gc` finalizers for tables. When a table with a `__gc`
-metamethod becomes unreachable, Go's garbage collector triggers a callback that
-enqueues the table for Lua-level finalization. The `__gc` metamethods are then
-executed synchronously when `collectgarbage("collect")` or `collectgarbage("step")`
-is called.
+go-lua implements `__gc` finalizers for both tables and userdata using a native
+mark-and-sweep GC. The system closely mirrors C Lua's `lgc.c` architecture.
 
-This bridges Go's GC → Lua's `__gc` metamethod system using `runtime.SetFinalizer`.
-
-## Architecture: Three-Component System
+## Architecture: V5 Mark-and-Sweep Finalization
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 1. REGISTRATION (SetMetatable)                              │
-│    When setmetatable(t, mt) is called and mt has __gc:      │
-│    → runtime.SetFinalizer(tbl, enqueueFunc)                 │
+│ 1. REGISTRATION (SetMetatable → CheckFinalizer)             │
+│    When setmetatable(obj, mt) is called and mt has __gc:    │
+│    → Object is moved from allgc to finobj list              │
+│    → gc/api/gc.go:CheckFinalizer()                          │
+│    ⚠ Object stays on finobj until it becomes unreachable    │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ (Go GC collects table)
+                       │ (FullGC mark phase finds obj unmarked)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 2. ENQUEUE (Go finalizer callback — arbitrary goroutine)    │
-│    → Lock GCFinalizerMu                                     │
-│    → Check GCClosed (skip if closing)                       │
-│    → Append table to GCFinalizerQueue                       │
-│    → Unlock                                                 │
-│    ⚠ NEVER calls Lua functions here — unsafe goroutine!     │
+│ 2. SEPARATION (separateTobeFnz — atomic phase)              │
+│    → Scans finobj list for unmarked (dead) objects          │
+│    → Moves dead objects from finobj → tobefnz list          │
+│    → markBeingFnz() marks them + propagates (resurrection)  │
+│    → gc/api/gc.go:separateTobeFnz()                         │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ (next collectgarbage call)
+                       │ (after sweep completes)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. DRAIN (collectgarbage → DrainGCFinalizers)               │
-│    → Lock mutex, copy queue, clear it, unlock               │
-│    → For each table: look up __gc metamethod                │
-│    → Push __gc function + table onto Lua stack              │
-│    → L.PCall(1, 0, 0) — protected call, errors discarded   │
-│    → Repeat until queue is empty                            │
+│ 3. FINALIZATION (callAllPendingFinalizers)                   │
+│    → Pops objects from tobefnz one at a time                │
+│    → Links object back to allgc (resurrection)              │
+│    → Looks up __gc metamethod on the object                 │
+│    → Calls __gc(obj) via PCall (errors silently discarded)  │
+│    → Repeats until tobefnz is empty                         │
+│    → api/api/impl.go:callAllPendingFinalizers()             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Files Modified
+## Key Functions
 
-### 1. `internal/state/api/api.go` — GlobalState fields
-Added to `GlobalState` struct:
-- `GCFinalizerMu sync.Mutex` — protects the finalizer queue
-- `GCFinalizerQueue []any` — pending tables/userdata for `__gc` calls
-- `GCClosed bool` — set `true` when state is closing; prevents post-close enqueuing
+| Function | File | Purpose |
+|----------|------|---------|
+| `CheckFinalizer` | `gc/api/gc.go:535` | Moves object from allgc → finobj when __gc is set |
+| `separateTobeFnz` | `gc/api/gc.go:512` | Moves dead finobj → tobefnz during atomic phase |
+| `markBeingFnz` | `gc/api/gc.go` | Marks tobefnz objects (resurrection) |
+| `Udata2Finalize` | `gc/api/gc.go` | Pops one object from tobefnz, links to allgc |
+| `callAllPendingFinalizers` | `api/api/impl.go:1445` | Drains tobefnz, calls __gc via PCall |
+| `callOneGCTM` | `api/api/impl.go` | Calls __gc for a single object |
+| `GCCollect` | `api/api/impl.go:1404` | Full GC cycle entry point (mark + sweep + finalize) |
 
-### 2. `internal/api/api/impl.go` — SetMetatable hook + DrainGCFinalizers
-- **SetMetatable**: After setting a metatable on a table, checks if the metatable
-  has `__gc` via `metamethodapi.GetTM()`. If present, registers a Go finalizer
-  via `runtime.SetFinalizer(tbl, ...)`.
-- **DrainGCFinalizers()**: Public method on `*State`. Atomically grabs the queue,
-  then for each table: looks up `__gc`, pushes it + the table, calls via `PCall`.
-  Errors are silently discarded (matching C Lua's `GCTM()` behavior).
+## Design Decisions
 
-### 3. `internal/stdlib/api/baselib.go` — collectgarbage wiring
-- `collectgarbage("collect")`: calls `runtime.GC()` twice (second pass ensures
-  finalizers from first GC have run), then `L.DrainGCFinalizers()`.
-- `collectgarbage("step")`: same pattern.
+### Why native mark-and-sweep (not `runtime.SetFinalizer`)?
+The original implementation used Go's `runtime.SetFinalizer` to bridge Go GC → Lua
+`__gc`. This had fundamental limitations:
+- Go finalizers run in arbitrary goroutines (unsafe for Lua state)
+- No deterministic ordering
+- Circular references prevented collection
+- Weak table clearing and finalization had no ordering guarantees
 
-### 4. `internal/state/api/state.go` — CloseState safety
-- Before nilling references, sets `GCClosed = true` under the mutex.
-- This prevents Go finalizer callbacks (running in arbitrary goroutines) from
-  enqueuing into a dead state.
+The V5 GC manages object lifecycle directly: all collectable objects live on linked
+lists (`allgc`, `finobj`, `tobefnz`), and the GC controls mark/sweep/finalize phases
+in the correct order.
 
-### 5. `internal/stdlib/api/gc_finalizer_test.go` — Tests
-Three tests:
-- `TestGCFinalizer`: Basic __gc fires after collectgarbage
-- `TestGCFinalizerMultiple`: 5 tables all get __gc called
-- `TestGCFinalizerErrorSwallowed`: Error in __gc doesn't prevent other __gc calls
+### Finalization order
+Objects are finalized in the order they appear on the `tobefnz` list, which is
+reverse creation order (LIFO) — matching C Lua's behavior.
 
-## Key Design Decisions
+### Re-entrancy protection
+`callAllPendingFinalizers` checks `GCRunningFinalizer` to prevent re-entrant
+finalization if a `__gc` handler triggers `collectgarbage()`.
 
-### Why `runtime.SetFinalizer` + enqueue (not direct call)?
-Go finalizers run in an arbitrary goroutine. Calling Lua functions from a Go
-finalizer would corrupt the Lua state (which is not thread-safe). The enqueue
-pattern ensures all Lua calls happen in the main goroutine.
-
-### Why `runtime.GC()` twice?
-The first `runtime.GC()` may identify unreachable objects. Go runs finalizers
-after the GC cycle completes, potentially in a separate goroutine. The second
-`runtime.GC()` ensures those finalizer goroutines have had time to run and
-enqueue their objects.
-
-### Why loop in DrainGCFinalizers?
-A `__gc` finalizer might create new objects with `__gc`, or trigger another
-GC cycle. The drain loop continues until the queue is empty, ensuring all
-pending finalizers are processed.
+### Object resurrection
+When an object moves to `tobefnz`, `markBeingFnz` marks it and all objects
+reachable from it. After `__gc` runs, the object is linked back to `allgc`.
+It will be collected in a subsequent GC cycle (matching C Lua's resurrection
+semantics).
 
 ### Error handling
 Like C Lua's `GCTM()`, errors in `__gc` are silently discarded. The `PCall`
 wrapper catches any error and continues to the next finalizer.
 
-## Known Limitations
+## Supported Types
 
-1. **Userdata**: `NewUserdata` is currently a stub (returns nil). Userdata `__gc`
-   support is structurally ready (queue accepts `any`) but untested.
-
-2. **Timing**: Go's GC is non-deterministic. A single `collectgarbage("collect")`
-   may not collect all unreachable objects. Multiple calls may be needed for
-   complete finalization (the tests use 3 cycles for reliability).
-
-3. **No weak tables**: `__mode` is not yet supported. Weak table entries are not
-   collected by Go's GC.
-
-4. **No incremental/generational modes**: `collectgarbage("incremental")` and
-   `collectgarbage("generational")` return defaults but don't change behavior.
-
-5. **Order of finalization**: C Lua finalizes objects in a specific order
-   (reverse creation order within a GC cycle). Go's finalizer ordering is
-   unspecified, so `__gc` call order may differ from C Lua.
-
-6. **Resurrection**: C Lua supports object resurrection (a `__gc` can store `self`
-   somewhere, keeping it alive). In go-lua, the Go finalizer fires once per
-   `runtime.SetFinalizer` registration. If `__gc` resurrects the object, a new
-   `runtime.SetFinalizer` would need to be registered (not currently implemented).
+| Type | `__gc` Support | Notes |
+|------|:-:|-------|
+| Table | ✅ | Via `CheckFinalizer` in `SetMetatable` |
+| Userdata | ✅ | Via `CheckFinalizer` in `SetMetatable` |
 
 ## C Lua Reference
 
-- `lgc.c` — `GCTM()`: runs one finalizer, pops it from the `tobefnz` list
-- `lgc.c` — `luaC_checkfinalizer()`: marks objects for finalization at `setmetatable` time
-- `lstate.c:390` — `luaC_freeallobjects()`: runs all pending finalizers at state close
+- `lgc.c` — `GCTM()`: runs one finalizer, pops from `tobefnz`
+- `lgc.c` — `separateTobeFnz()`: moves dead finobj → tobefnz
+- `lgc.c` — `luaC_checkfinalizer()`: marks objects for finalization
+- `lgc.c` — `markbeingfnz()`: marks objects being finalized (resurrection)
+- `lstate.c` — `luaC_freeallobjects()`: runs all pending finalizers at state close
+
+## Historical Note
+
+The original implementation (pre-V5) used a `runtime.SetFinalizer` + enqueue +
+drain pattern. Go finalizer callbacks would enqueue objects into `GCFinalizerQueue`,
+and `DrainGCFinalizers()` would process them during `collectgarbage()`. This was
+replaced by the V5 mark-and-sweep architecture which provides correct ordering,
+resurrection support, and deterministic behavior.
