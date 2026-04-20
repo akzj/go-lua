@@ -137,9 +137,9 @@ func TestTestesWide(t *testing.T) {
 					"assert(next(a) == string.rep('$', 11))\n",
 					"if not _port then assert(next(a) == string.rep('$', 11)) end\n",
 					1)
-				// Patch 0b: REMOVED — testing if "bug in 5.1" section now works
-				// Patch 1: ephemeron section runs (no longer hangs), but one assertion
-				// still fails: Go GC doesn't clear all weak refs in a single pass.
+				// Patch 0b: REMOVED — Phase B weak table mark integration fixed
+				// __gc + weak table timing; "bug in 5.1" section now passes.
+				// Patch 1: ephemeron — Go GC doesn't clear all weak refs in one pass.
 				src = strings.Replace(src,
 					"for i = 1, 4 do assert(a[i][1] == i * 10); a[i] = undef end\nassert(next(a) == nil)\n",
 					"for i = 1, 4 do assert(a[i][1] == i * 10); a[i] = undef end\nif not _port then assert(next(a) == nil) end\n",
