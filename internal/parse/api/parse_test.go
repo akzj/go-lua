@@ -671,12 +671,21 @@ func TestParseAllTestes(t *testing.T) {
 		t.Skipf("testes directory not found: %v", err)
 	}
 
+	// main.lua and all.lua are interpreter harness files that start with
+	// shebang (#!) lines. Shebang stripping is handled by the file loader
+	// (DoFile), not the parser, so these files cannot be parsed standalone.
+	skipFiles := map[string]bool{"main.lua": true, "all.lua": true}
+
 	var passed, failed int
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".lua") {
 			continue
 		}
 		t.Run(e.Name(), func(t *testing.T) {
+			if skipFiles[e.Name()] {
+				t.Skipf("%s is an interpreter harness with shebang line — not a standalone parse target", e.Name())
+				return
+			}
 			data, err := os.ReadFile(filepath.Join(testesDir, e.Name()))
 			if err != nil {
 				t.Fatalf("read error: %v", err)
