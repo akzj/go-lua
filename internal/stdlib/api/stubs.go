@@ -718,6 +718,22 @@ func OpenPackage(L *luaapi.State) int {
 	L.CreateTable(0, 0)
 	L.SetField(-2, "preload")
 
+	// Create package.searchers table with 4 searcher functions.
+	// Mirrors C Lua's createsearcherstable() in loadlib.c.
+	// Searchers: 1=preload, 2=Lua file, 3=C lib (stub), 4=C root (stub)
+	searchers := []luaapi.CFunction{
+		searcher_preload,
+		searcher_Lua,
+		searcher_Clib,
+		searcher_Croot,
+	}
+	L.CreateTable(len(searchers), 0)
+	for i, s := range searchers {
+		L.PushCFunction(s)
+		L.RawSetI(-2, int64(i+1))
+	}
+	L.SetField(-2, "searchers")
+
 	return 1
 }
 
