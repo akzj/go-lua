@@ -1828,9 +1828,18 @@ func statement(ls *lexapi.LexState) {
 	case lexapi.TK_GOTO:
 		lexapi.Next(ls)
 		gotoStat(ls, line)
-	case lexapi.TK_GLOBAL:
-		globalStatFunc(ls, line)
 	default:
+		// "global" is a context-sensitive (soft) keyword in Lua 5.5.
+		// It is recognized at statement start when followed by '<', TK_NAME,
+		// '*', or TK_FUNCTION, but can still be used as a variable name
+		// in other positions (e.g., "global = 1").
+		if ls.Token.Type == lexapi.TK_NAME && ls.Token.StrVal == "global" {
+			lk := lexapi.Lookahead(ls)
+			if lk == '<' || lk == lexapi.TK_NAME || lk == '*' || lk == lexapi.TK_FUNCTION {
+				globalStatFunc(ls, line)
+				break
+			}
+		}
 		exprStat(ls)
 	}
 	fs := getFS(ls)

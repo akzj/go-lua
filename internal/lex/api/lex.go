@@ -60,9 +60,10 @@ const EOZ = -1
 // ---------------------------------------------------------------------------
 
 var tokenNames = []string{
-	// Reserved words (FirstReserved + 0..22)
+	// Reserved words (FirstReserved + 0..21)
+	// Note: "global" is a soft keyword (not reserved), handled by the parser.
 	"and", "break", "do", "else", "elseif",
-	"end", "false", "for", "function", "global", "goto", "if",
+	"end", "false", "for", "function", "goto", "if",
 	"in", "local", "nil", "not", "or", "repeat",
 	"return", "then", "true", "until", "while",
 	// Multi-char operators and value tokens

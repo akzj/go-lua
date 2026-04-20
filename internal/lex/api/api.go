@@ -31,7 +31,6 @@ const (
 	TK_FALSE
 	TK_FOR
 	TK_FUNCTION
-	TK_GLOBAL // Lua 5.5
 	TK_GOTO
 	TK_IF
 	TK_IN
@@ -45,11 +44,13 @@ const (
 	TK_TRUE
 	TK_UNTIL
 	TK_WHILE
-	NumReserved // count of reserved words = 23
+	NumReserved // count of reserved words = 22
 )
 
-// NumReservedCount is the actual count of reserved words (23).
+// NumReservedCount is the actual count of reserved words (22).
 // NumReserved above is a token value, not a count.
+// Note: "global" is a context-sensitive (soft) keyword handled by the parser,
+// not a reserved word in the lexer. It scans as TK_NAME.
 const NumReservedCount = NumReserved - FirstReserved
 
 // Multi-char operators and value tokens
@@ -89,7 +90,7 @@ var ReservedWords = map[string]TokenType{
 	"and": TK_AND, "break": TK_BREAK, "do": TK_DO,
 	"else": TK_ELSE, "elseif": TK_ELSEIF, "end": TK_END,
 	"false": TK_FALSE, "for": TK_FOR, "function": TK_FUNCTION,
-	"global": TK_GLOBAL, "goto": TK_GOTO, "if": TK_IF,
+	"goto": TK_GOTO, "if": TK_IF,
 	"in": TK_IN, "local": TK_LOCAL, "nil": TK_NIL,
 	"not": TK_NOT, "or": TK_OR, "repeat": TK_REPEAT,
 	"return": TK_RETURN, "then": TK_THEN, "true": TK_TRUE,
