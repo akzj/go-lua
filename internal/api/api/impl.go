@@ -165,6 +165,7 @@ func NewState() *State {
 		runtime.GC()      // second pass to sweep finalized objects
 		runtime.Gosched()
 		wrapper.DrainGCFinalizers()
+		wrapper.SweepStrings() // remove collected interned strings
 	}
 
 	// GCDrainFn: cheap — just drains the finalizer queue. Called frequently.
@@ -812,6 +813,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 			runtime.Gosched()
 			L.DrainGCFinalizers()
 			L.SweepWeakTables() // clear collected weak table entries
+			L.strtab().SweepStrings() // remove collected interned strings
 		}
 	}
 }
@@ -1361,6 +1363,12 @@ func (L *State) IsGCRunning() bool {
 // IsGCInFinalizer returns true if DrainGCFinalizers is currently executing.
 func (L *State) IsGCInFinalizer() bool {
 	return L.ls().Global.GCInFinalizer
+}
+
+// SweepStrings removes collected (dead) interned strings from the string table.
+// Should be called after runtime.GC() alongside SweepWeakTables.
+func (L *State) SweepStrings() {
+	L.strtab().SweepStrings()
 }
 
 // gcParamDefaults are the C Lua 5.5.1 default GC parameter values.

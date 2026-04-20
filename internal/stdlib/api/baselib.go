@@ -667,6 +667,7 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		runtime.GC() // second pass ensures finalizers from first GC have run
 		L.DrainGCFinalizers()
 		L.SweepWeakTables() // clear collected weak table entries
+		L.SweepStrings()    // remove collected interned strings
 		L.PushInteger(0)
 		return 1
 	case 3: // count
@@ -678,6 +679,7 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		runtime.GC()
 		L.DrainGCFinalizers()
 		L.SweepWeakTables() // clear collected weak table entries
+		L.SweepStrings()    // remove collected interned strings
 		L.PushBoolean(true)
 		return 1
 	case 5: // isrunning
