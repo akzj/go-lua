@@ -214,7 +214,9 @@ type GlobalState struct {
 
 	// GCTotalBytes tracks total Lua-level object allocations (bytes).
 	// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
-	// Monotonically increasing — Go's GC handles actual freeing.
+	// Incremented on allocation, decremented via runtime.AddCleanup when
+	// Go's GC collects objects. Access must use sync/atomic since cleanups
+	// run in arbitrary goroutines.
 	GCTotalBytes int64
 
 	// GCAllocCount counts table allocations since the last runtime.GC() call.
