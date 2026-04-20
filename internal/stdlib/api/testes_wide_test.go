@@ -127,9 +127,8 @@ func TestTestesWide(t *testing.T) {
 					"C, C1 = nil\n\n\n-- ephemerons\n",
 					"C, C1 = nil\nend  -- _port bug-in-5.1 guard\n\n\n-- ephemerons\n",
 					1)
-				// Patch 1: ephemeron section no longer hangs (periodic GC triggers
-				// in OP_CLOSURE/OP_CONCAT now drain finalizers). Only skip the
-				// assertion that requires all weak refs collected in one GC pass.
+				// Patch 1: ephemeron section runs (no longer hangs), but one assertion
+				// still fails: Go GC doesn't clear all weak refs in a single pass.
 				src = strings.Replace(src,
 					"for i = 1, 4 do assert(a[i][1] == i * 10); a[i] = undef end\nassert(next(a) == nil)\n",
 					"for i = 1, 4 do assert(a[i][1] == i * 10); a[i] = undef end\nif not _port then assert(next(a) == nil) end\n",
