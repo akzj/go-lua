@@ -80,15 +80,7 @@ func TestTestesWide(t *testing.T) {
 				}
 				src := string(data)
 				// Patch 1: REMOVED — CallK now supports yield across dofile
-				// Patch 3: wrap binary chunk loading in _port guard (no string.dump support)
-				src = strings.Replace(src,
-					"-- loading binary file with initial comment\n",
-					"if not _port then  -- skip: binary chunk loading\n-- loading binary file with initial comment\n",
-					1)
-				src = strings.Replace(src,
-					"assert(a == 20 and b == \"\\0\\0\\0\" and c == nil)\nassert(os.remove(file))\n\n\n-- 'loadfile' with 'env'\n",
-					"assert(a == 20 and b == \"\\0\\0\\0\" and c == nil)\nassert(os.remove(file))\nend  -- binary chunk guard\n\n\n-- 'loadfile' with 'env'\n",
-					1)
+				// Patch 3: REMOVED — loadfile now handles binary chunks after shebang
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)

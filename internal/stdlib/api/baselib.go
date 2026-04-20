@@ -647,7 +647,11 @@ func luaB_loadfileImpl(L *luaapi.State, fname string) int {
 	if len(src) > 0 && src[0] == '#' {
 		idx := strings.IndexByte(src, '\n')
 		if idx >= 0 {
-			src = src[idx:]  // keep the newline (preserves line numbering)
+			src = src[idx:] // keep the newline (preserves line numbering)
+			// If binary signature follows the newline, skip it to expose the signature
+			if len(src) > 1 && src[0] == '\n' && src[1] == '\x1b' {
+				src = src[1:]
+			}
 		} else {
 			src = "" // single-line shebang, no more content
 		}
