@@ -223,13 +223,7 @@ func TestTestesWide(t *testing.T) {
 					return
 				}
 				src := string(data)
-				// Patch 1: replace tracegc require with stub module
-				// tracegc.stop() / tracegc.start() control __gc finalizer
-				// execution during stack overflow tests
-				src = strings.Replace(src,
-					"local tracegc = require\"tracegc\"\n",
-					"local tracegc = {stop = function() end, start = function() end}\n",
-					1)
+				// Patch 1 removed: tracegc module is now preloaded (tracegc.go)
 				// Patch 2: relax "error in error handling" assertion
 				// Go's stack overflow produces "stack overflow" message instead
 				// of "error in error handling" because Lua stack overflow path
