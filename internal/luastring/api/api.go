@@ -6,15 +6,22 @@
 //
 // Long strings are not interned and compared by content.
 //
+// The string table uses weak.Pointer so that interned strings can be collected
+// by Go's GC when no longer referenced by Lua code. A SweepStrings method
+// removes nil weak pointers, matching C Lua's sweepstringtable() behavior.
+//
 // The string table caps its bucket array at maxStrTabSize to prevent OOM
-// from unbounded growth. A Sweep method allows periodic cleanup of dead
-// entries, matching C Lua's checkSizes behavior.
+// from unbounded growth.
 //
 // Reference: .analysis/07-runtime-infrastructure.md §4
 // C source: lua-master/lstring.c
 package api
 
-import objectapi "github.com/akzj/go-lua/internal/object/api"
+import (
+	"weak"
+
+	objectapi "github.com/akzj/go-lua/internal/object/api"
+)
 
 // MaxShortLen is the maximum length for interned short strings (LUAI_MAXSHORTLEN = 40).
 const MaxShortLen = 40
@@ -69,19 +76,26 @@ func HashBytes(data []byte, seed uint32) uint32 {
 // StringTable — the global interning table
 // ---------------------------------------------------------------------------
 
+// stringEntry holds a weak reference to an interned LuaString.
+// The string table only needs weak references because it's a cache —
+// the actual strong references are in Lua's stack, tables, and upvalues.
+type stringEntry struct {
+	wp weak.Pointer[objectapi.LuaString]
+}
+
 // StringTable interns short strings for pointer-equality lookups.
 // It is owned by GlobalState and shared across all threads.
 type StringTable struct {
-	buckets [][]*objectapi.LuaString // hash buckets (power-of-2 count)
-	count   int                      // number of interned strings
-	seed    uint32                   // hash seed (randomized per state)
+	buckets [][]stringEntry // hash buckets (power-of-2 count)
+	count   int             // number of interned strings (may be stale until sweep)
+	seed    uint32          // hash seed (randomized per state)
 }
 
 // NewStringTable creates a string table with the given hash seed.
 // Initial bucket count is 128 (MINSTRTABSIZE).
 func NewStringTable(seed uint32) *StringTable {
 	return &StringTable{
-		buckets: make([][]*objectapi.LuaString, minStrTabSize),
+		buckets: make([][]stringEntry, minStrTabSize),
 		seed:    seed,
 	}
 }
@@ -118,18 +132,33 @@ func (st *StringTable) Seed() uint32 {
 	return st.seed
 }
 
-// internShort looks up a short string in the table. If found, returns the
-// existing *LuaString (pointer equality). If not found, creates a new one,
-// inserts it, and returns it. May trigger resize.
+// internShort looks up a short string in the table. If found and still alive,
+// returns the existing *LuaString (pointer equality). If not found or collected,
+// creates a new one, inserts it, and returns it. May trigger resize.
+//
+// The weak pointer stored in the bucket allows Go's GC to collect strings
+// that are no longer referenced by Lua code. The returned strong pointer is
+// stored by the caller in TValue.Val, keeping the string alive as long as
+// Lua code references it.
 func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 	idx := h & uint32(len(st.buckets)-1) // lmod for power-of-2
 
-	// Search existing bucket
-	for _, ts := range st.buckets[idx] {
-		if ts.Data == s { // Go string comparison (content)
-			return ts
+	// Search existing bucket — check weak pointers
+	bucket := st.buckets[idx]
+	for i := 0; i < len(bucket); i++ {
+		if p := bucket[i].wp.Value(); p != nil {
+			if p.Data == s { // Go string comparison (content)
+				return p
+			}
+		} else {
+			// Weak pointer is nil — entry was collected. Remove it.
+			bucket[i] = bucket[len(bucket)-1]
+			bucket = bucket[:len(bucket)-1]
+			st.count--
+			i-- // re-check this index
 		}
 	}
+	st.buckets[idx] = bucket
 
 	// Not found — create new
 	ts := &objectapi.LuaString{
@@ -138,8 +167,10 @@ func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 		IsShort: true,
 	}
 
-	// Insert at head of bucket
-	st.buckets[idx] = append(st.buckets[idx], ts)
+	// Insert weak pointer into bucket
+	st.buckets[idx] = append(st.buckets[idx], stringEntry{
+		wp: weak.Make(ts),
+	})
 	st.count++
 
 	// Resize if count exceeds bucket count (load factor > 1),
@@ -152,6 +183,7 @@ func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 }
 
 // resize doubles (or changes) the bucket count and rehashes all entries.
+// Dead (collected) entries are dropped during rehash.
 func (st *StringTable) resize(newSize int) {
 	if newSize < minStrTabSize {
 		newSize = minStrTabSize
@@ -159,22 +191,48 @@ func (st *StringTable) resize(newSize int) {
 	if newSize > maxStrTabSize {
 		newSize = maxStrTabSize
 	}
-	newBuckets := make([][]*objectapi.LuaString, newSize)
+	newBuckets := make([][]stringEntry, newSize)
 	mask := uint32(newSize - 1)
+	aliveCount := 0
 	for _, bucket := range st.buckets {
-		for _, ts := range bucket {
-			idx := ts.Hash_ & mask
-			newBuckets[idx] = append(newBuckets[idx], ts)
+		for _, entry := range bucket {
+			if p := entry.wp.Value(); p != nil {
+				idx := p.Hash_ & mask
+				newBuckets[idx] = append(newBuckets[idx], entry)
+				aliveCount++
+			}
+			// Dead entries are simply not copied — dropped during rehash
 		}
 	}
 	st.buckets = newBuckets
+	st.count = aliveCount
 }
 
-// Sweep removes dead entries from the string table and optionally shrinks it.
-// This matches C Lua's checkSizes behavior: shrink when nuse < size/4.
-// Currently a no-op for entry removal (Go GC handles memory), but handles
-// bucket array shrinking.
-func (st *StringTable) Sweep() {
+// SweepStrings removes dead (collected) entries from all buckets and
+// optionally shrinks the bucket array. This matches C Lua's
+// sweepstringtable() + checkSizes behavior.
+//
+// Should be called periodically from the GC path (alongside SweepWeakTables).
+func (st *StringTable) SweepStrings() {
+	alive := 0
+	for i := range st.buckets {
+		bucket := st.buckets[i]
+		j := 0
+		for k := 0; k < len(bucket); k++ {
+			if bucket[k].wp.Value() != nil {
+				bucket[j] = bucket[k]
+				j++
+				alive++
+			}
+		}
+		// Clear tail to allow GC of removed entries
+		for k := j; k < len(bucket); k++ {
+			bucket[k] = stringEntry{}
+		}
+		st.buckets[i] = bucket[:j]
+	}
+	st.count = alive
+
 	// Shrink if too sparse (C Lua: nuse < size/4)
 	size := len(st.buckets)
 	if st.count < size/4 && size > minStrTabSize {
@@ -184,6 +242,11 @@ func (st *StringTable) Sweep() {
 		}
 		st.resize(newSize)
 	}
+}
+
+// Sweep is kept for backward compatibility. It calls SweepStrings.
+func (st *StringTable) Sweep() {
+	st.SweepStrings()
 }
 
 // ---------------------------------------------------------------------------
