@@ -1474,9 +1474,22 @@ func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
 		return
 	}
 
-	// Save state
-	oldTop := L.GetTop()
+	// Save absolute stack state. When callOneGCTM runs from periodic GC
+	// during VM execution, push/PCall overwrites stack slots above Top
+	// that the VM may use as registers. We save those slot values and
+	// restore them after PCall returns.
+	savedTop := ls.Top
+	savedCI := ls.CI
 	oldAllowHook := ls.AllowHook
+
+	// Save stack values at the slots we're about to overwrite.
+	// push(gcTM) writes to Stack[savedTop], push(objVal) to Stack[savedTop+1].
+	// PCall may use additional slots for error handling.
+	const saveSlots = 4 // function + arg + potential error + margin
+	var savedVals [saveSlots]objectapi.TValue
+	for i := 0; i < saveSlots && savedTop+i < len(ls.Stack); i++ {
+		savedVals[i] = ls.Stack[savedTop+i].Val
+	}
 
 	// Suppress hooks and GC during finalizer (mirrors C Lua's GCTM)
 	ls.AllowHook = false
@@ -1494,8 +1507,14 @@ func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
 	ls.CI.CallStatus &^= stateapi.CISTFin
 	ls.AllowHook = oldAllowHook
 
-	// Restore stack — discard any leftover error object
-	L.SetTop(oldTop)
+	// Restore absolute Top, CI, and the original slot values that were
+	// overwritten by push/PCall. This prevents corruption of VM
+	// registers when callOneGCTM runs during periodic GC.
+	ls.CI = savedCI
+	ls.Top = savedTop
+	for i := 0; i < saveSlots && savedTop+i < len(ls.Stack); i++ {
+		ls.Stack[savedTop+i].Val = savedVals[i]
+	}
 }
 
 // SweepStrings removes collected (dead) interned strings from the string table.
