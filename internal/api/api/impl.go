@@ -1880,13 +1880,61 @@ func (L *State) Require(modname string, openf CFunction, global bool) {
 	}
 }
 
-// Ref creates a reference in the table at idx.
-func (L *State) Ref(idx int) int {
-	return 0 // placeholder
+// Ref creates a reference in the table at idx (luaL_ref).
+// Pops the top value and stores it in the table, returning an integer key.
+// If the value is nil, returns RefNil (-1) and pops the value without storing.
+func (L *State) Ref(t int) int {
+	if L.IsNil(-1) {
+		L.Pop(1) // remove nil from stack
+		return RefNil
+	}
+	// Convert t to absolute index before we manipulate the stack
+	absT := t
+	if t != RegistryIndex && t > 0 {
+		absT = t
+	} else if t != RegistryIndex && t < 0 {
+		absT = L.GetTop() + t + 1
+	}
+	// Check free list at t[0]
+	L.RawGetI(absT, 0) // push t[0]
+	ref, ok := L.ToInteger(-1)
+	L.Pop(1) // pop t[0]
+	if ok && ref != 0 {
+		// Free list is non-empty: reuse this key
+		key := int(ref)
+		// Update free list: t[0] = t[key] (next in chain)
+		L.RawGetI(absT, int64(key)) // push t[key] (next free ref)
+		L.RawSetI(absT, 0)          // t[0] = popped value (next free ref)
+		// Store the value (currently at top) into t[key]
+		// The value to store is now at top-1 (it was pushed before Ref was called)
+		// Actually: the original value is still on the stack at the position before our operations
+		// Let's re-check: at this point, the original value is at top of stack
+		L.RawSetI(absT, int64(key)) // t[key] = top value (pops it)
+		return key
+	}
+	// Free list empty: use next integer key = #t + 1
+	key := int(L.RawLen(absT)) + 1
+	L.RawSetI(absT, int64(key)) // t[key] = top value (pops it)
+	return key
 }
 
-// Unref frees a reference in the table at idx.
-func (L *State) Unref(idx int, ref int) {}
+// Unref frees a reference in the table at idx (luaL_unref).
+// Sets t[ref] = nil and adds ref to the free list at t[0].
+func (L *State) Unref(t int, ref int) {
+	if ref >= 0 {
+		// Convert t to absolute index
+		absT := t
+		if t != RegistryIndex && t < 0 {
+			absT = L.GetTop() + t + 1
+		}
+		// t[ref] = t[0] (link into free list — store old head as value)
+		L.RawGetI(absT, 0)          // push current free list head (t[0])
+		L.RawSetI(absT, int64(ref)) // t[ref] = old head (pops it)
+		// t[0] = ref (new free list head)
+		L.PushInteger(int64(ref))
+		L.RawSetI(absT, 0) // t[0] = ref (pops it)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Debug interface (minimal)
