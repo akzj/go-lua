@@ -249,6 +249,10 @@ type GlobalState struct {
 	// GCRunningFinalizer is true while __gc finalizers are being called.
 	// Prevents reentrant finalization (mirrors C Lua's GCSTPGC flag in gcstp).
 	GCRunningFinalizer bool
+	// GCExplicit is true when GC is triggered by explicit collectgarbage() call.
+	// When true, traverseThread uses th.Top (precise — dead registers not marked).
+	// When false (periodic GC), traverseThread uses maxTop (conservative).
+	GCExplicit bool
 
 	// Weak table registry: tables with __mode != 0 are registered here.
 	// Scanned after runtime.GC() to clear collected weak refs.
