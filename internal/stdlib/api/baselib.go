@@ -593,6 +593,13 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushInteger(0)
 		return 1
 	case 2: // collect
+		// If GC is already running (e.g., called from inside __gc finalizer),
+		// return false. Mirrors C Lua's behavior where collectgarbage() is
+		// non-reentrant in incremental mode.
+		if L.IsGCInFinalizer() {
+			L.PushBoolean(false)
+			return 1
+		}
 		// V5: Run Lua mark-and-sweep GC cycle (includes calling __gc finalizers)
 		L.GCCollect()
 		L.SweepStrings()

@@ -1814,18 +1814,12 @@ startfunc:
 			}, size)
 			L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
 
-			// Periodic GC: fire __gc finalizers during tight allocation loops.
-			// Go's GC doesn't fire on every allocation like C Lua's.
-			// Strategy: drain the queue frequently (cheap), trigger full
-			// GC rarely (expensive). Only active when finalizers exist and GC is not stopped.
-			if g := L.Global; g.GCHasFinalizers && !g.GCStopped {
+			// Periodic GC: run Lua GC during tight allocation loops.
+			// V5 GC handles __gc via finobj list.
+			if g := L.Global; !g.GCStopped {
 				g.GCAllocCount++
-				n := g.GCAllocCount
-				if n%10 == 0 && g.GCDrainFn != nil {
-					g.GCDrainFn(L) // cheap: just drain queue
-				}
-				if n%100 == 0 && g.GCStepFn != nil {
-					g.GCStepFn(L) // expensive: clear stack + runtime.GC + drain
+				if g.GCAllocCount%100 == 0 && g.GCStepFn != nil {
+					g.GCStepFn(L)
 				}
 			}
 
@@ -2237,15 +2231,10 @@ startfunc:
 			L.Top = ci.Top // restore top
 
 			// Periodic GC: string concatenation allocates new strings.
-			// Without this, loops building strings with __gc never drain finalizers.
-			if g := L.Global; g.GCHasFinalizers && !g.GCStopped {
+			if g := L.Global; !g.GCStopped {
 				g.GCAllocCount++
-				n := g.GCAllocCount
-				if n%10 == 0 && g.GCDrainFn != nil {
-					g.GCDrainFn(L) // cheap: just drain queue
-				}
-				if n%100 == 0 && g.GCStepFn != nil {
-					g.GCStepFn(L) // expensive: clear stack + runtime.GC + drain
+				if g.GCAllocCount%100 == 0 && g.GCStepFn != nil {
+					g.GCStepFn(L)
 				}
 			}
 
@@ -2565,15 +2554,10 @@ startfunc:
 			PushClosure(L, p, cl.UpVals, base, ra)
 
 			// Periodic GC: closures are heap-allocated objects.
-			// Without this, loops creating closures with __gc never drain finalizers.
-			if g := L.Global; g.GCHasFinalizers && !g.GCStopped {
+			if g := L.Global; !g.GCStopped {
 				g.GCAllocCount++
-				n := g.GCAllocCount
-				if n%10 == 0 && g.GCDrainFn != nil {
-					g.GCDrainFn(L) // cheap: just drain queue
-				}
-				if n%100 == 0 && g.GCStepFn != nil {
-					g.GCStepFn(L) // expensive: clear stack + runtime.GC + drain
+				if g.GCAllocCount%100 == 0 && g.GCStepFn != nil {
+					g.GCStepFn(L)
 				}
 			}
 

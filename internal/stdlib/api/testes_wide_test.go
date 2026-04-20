@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -55,7 +56,9 @@ func TestTestesWide(t *testing.T) {
 			// Recover from panics so one file doesn't kill the whole suite
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("  %-20s PANIC: %v\n", f, r)
+					buf := make([]byte, 8192)
+					n := runtime.Stack(buf, false)
+					fmt.Printf("  %-20s PANIC: %v\n%s\n", f, r, buf[:n])
 					t.Skipf("%s: PANIC: %v", f, r)
 				}
 			}()

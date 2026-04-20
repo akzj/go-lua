@@ -8,8 +8,6 @@
 package api
 
 import (
-	"sync"
-
 	objectapi "github.com/akzj/go-lua/internal/object/api"
 )
 
@@ -223,34 +221,34 @@ type GlobalState struct {
 	// run in arbitrary goroutines.
 	GCTotalBytes int64
 
-	// GCAllocCount counts table allocations since the last runtime.GC() call.
-	// Used to trigger periodic GC so that __gc finalizers fire during tight
-	// allocation loops (Go's GC doesn't fire on every allocation like C Lua's).
+	// GCDeallocDebt accumulates bytes freed by Go GC (via runtime.AddCleanup).
+	// Only subtracted from GCTotalBytes during Lua GC cycles (GCCollect).
+	// This ensures gcinfo() is stable between GC cycles — matches C Lua behavior.
+	GCDeallocDebt int64
+
+	// GCAllocCount counts table allocations since the last GC cycle.
+	// Used to trigger periodic GC during tight allocation loops.
 	GCAllocCount int64
 
-	// GCHasFinalizers is set to true when any __gc finalizer has been
-	// registered via runtime.SetFinalizer. The periodic GC check is
-	// skipped entirely when false, making the common case zero-cost.
-	GCHasFinalizers bool
-
-	// GCStepFn is set by the API layer to drain GC finalizers.
+	// GCStepFn is set by the API layer to run a full GC cycle.
 	// The VM calls this periodically during allocation-heavy loops.
-	// Signature: func(L *LuaState) — runs runtime.GC + DrainGCFinalizers.
+	// Signature: func(L *LuaState) — runs GCCollect.
 	GCStepFn func(L *LuaState)
 
-	// GCDrainFn is set by the API layer to drain the finalizer queue only
-	// (no runtime.GC call). Cheap to call frequently.
-	// Signature: func(L *LuaState) — just DrainGCFinalizers.
+	// GCDrainFn is set by the API layer to run a lightweight GC cycle.
+	// Signature: func(L *LuaState) — runs GCCollect.
 	GCDrainFn func(L *LuaState)
 
-	// __gc finalizer support: tables/userdata with __gc metamethod are
-	// enqueued here by Go's runtime.SetFinalizer callback, then drained
-	// synchronously by collectgarbage("collect").
-	GCFinalizerMu    sync.Mutex
-	GCFinalizerQueue []any // pending *tableapi.Table or *objectapi.Userdata for __gc
-	GCClosed         bool  // set true when state is closing — blocks further enqueuing
-	GCStopped        bool  // set true by collectgarbage("stop") — suppresses periodic GC
-	GCInFinalizer    bool  // true while DrainGCFinalizers is running — prevents reentrancy
+	// GCClosed is set true when the state is closing — suppresses further GC.
+	GCClosed  bool
+	// GCStopped is set true by collectgarbage("stop") — suppresses periodic GC.
+	GCStopped bool
+	// GCRunning is true while a GC cycle is executing — prevents re-entrant GC.
+	// Mirrors C Lua's g->gcrunning flag.
+	GCRunning bool
+	// GCRunningFinalizer is true while __gc finalizers are being called.
+	// Prevents reentrant finalization (mirrors C Lua's GCSTPGC flag in gcstp).
+	GCRunningFinalizer bool
 
 	// Weak table registry: tables with __mode != 0 are registered here.
 	// Scanned after runtime.GC() to clear collected weak refs.

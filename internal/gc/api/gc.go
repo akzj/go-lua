@@ -208,19 +208,19 @@ func traverseProto(g *stateapi.GlobalState, p *objectapi.Proto) {
 
 // traverseThread marks all live stack values and open upvalues.
 func traverseThread(g *stateapi.GlobalState, th *stateapi.LuaState) {
-	// Mark live stack slots (up to Top)
-	for i := 0; i < th.Top && i < len(th.Stack); i++ {
-		markValue(g, th.Stack[i].Val)
+	// Find the highest stack position used by any active call frame.
+	// We must mark all slots up to this point because L.Top is NOT
+	// maintained between VM instructions — it can be stale.
+	maxTop := th.Top
+	for ci := th.CI; ci != nil; ci = ci.Prev {
+		if ci.Top > maxTop {
+			maxTop = ci.Top
+		}
 	}
 
-	// Also mark stack slots used by active call frames above Top
-	// (call frames may reference slots between their Base and Top)
-	for ci := th.CI; ci != nil; ci = ci.Prev {
-		if ci.Top > th.Top {
-			for i := th.Top; i < ci.Top && i < len(th.Stack); i++ {
-				markValue(g, th.Stack[i].Val)
-			}
-		}
+	// Mark all live stack slots up to the highest active frame boundary
+	for i := 0; i < maxTop && i < len(th.Stack); i++ {
+		markValue(g, th.Stack[i].Val)
 	}
 
 	// Mark open upvalues
@@ -349,6 +349,60 @@ func separateTobeFnz(g *stateapi.GlobalState) {
 	}
 }
 
+// CheckFinalizer moves an object from the allgc list to the finobj list
+// if it has a finalizer (__gc metamethod). Called from SetMetatable when
+// __gc is detected. Mirrors C Lua's luaC_checkfinalizer.
+//
+// The hasFinalizer parameter indicates whether the object has __gc;
+// the caller (API layer) is responsible for checking the metatable.
+func CheckFinalizer(g *stateapi.GlobalState, obj objectapi.GCObject) {
+	h := obj.GC()
+	// Already marked as having a finalizer? Skip.
+	if h.Marked&objectapi.FinalizedBit != 0 {
+		return
+	}
+	// Remove from allgc list
+	p := &g.Allgc
+	for *p != nil {
+		if *p == obj {
+			*p = h.Next
+			break
+		}
+		p = &(*p).GC().Next
+	}
+	// Link into finobj list
+	h.Next = g.FinObj
+	g.FinObj = obj
+	// Set FinalizedBit and ensure the object has the current white color.
+	// This is critical: separateTobeFnz identifies dead objects by checking
+	// for the "other" white. Without current white, the object can't be
+	// detected as dead in the next cycle.
+	h.Marked = g.CurrentWhite | objectapi.FinalizedBit
+}
+
+// Udata2Finalize removes the first object from the tobefnz list and
+// links it back into allgc. Clears the FinalizedBit so the object is
+// "normal" again (can be re-finalized if it gets a new __gc).
+// Returns nil if tobefnz is empty.
+// Mirrors C Lua's udata2finalize.
+func Udata2Finalize(g *stateapi.GlobalState) objectapi.GCObject {
+	o := g.TobeFnz
+	if o == nil {
+		return nil
+	}
+	h := o.GC()
+	// Remove from tobefnz
+	g.TobeFnz = h.Next
+	// Link back into allgc (resurrection)
+	h.Next = g.Allgc
+	g.Allgc = o
+	// Clear finalized bit — object is "normal" again
+	h.Marked &^= objectapi.FinalizedBit
+	// Make it white (current white) so it survives this cycle
+	h.Marked = (h.Marked &^ (objectapi.WhiteBits | objectapi.BlackBit)) | g.CurrentWhite
+	return o
+}
+
 // ---------------------------------------------------------------------------
 // Full GC cycle
 // ---------------------------------------------------------------------------
@@ -363,6 +417,14 @@ func separateTobeFnz(g *stateapi.GlobalState) {
 //  4. Finalize — move dead finobj to tobefnz, call __gc
 //  5. Flip — switch current white for next cycle
 func FullGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
+	// Flip current white BEFORE marking. This is critical for correctness
+	// when FullGC runs during VM execution (periodic GC):
+	// - Existing objects have the OLD white → must be marked to survive
+	// - New objects created during the cycle get the NEW white → survive sweep
+	// - Sweep kills objects with OLD white that weren't marked
+	// Mirrors C Lua's atomic phase white flip, but done earlier for safety.
+	g.CurrentWhite ^= objectapi.WhiteBits
+
 	// Phase 1: Mark roots
 	g.GCState = objectapi.GCSpropagate
 	markRoots(g)
@@ -377,12 +439,6 @@ func FullGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
 	}
 	markValue(g, g.Registry)
 	propagateAll(g) // propagate any new gray objects
-
-	// Flip current white at end of atomic phase (before sweep).
-	// Objects that were not marked still have the OLD white.
-	// Sweep will identify them as dead (they have "otherwhite").
-	// Mirrors C Lua: atomic() flips currentwhite before sweep.
-	g.CurrentWhite ^= objectapi.WhiteBits
 
 	// Phase 4: Sweep — dead objects have the old white (now "otherwhite")
 	g.GCState = objectapi.GCSswpallgc
