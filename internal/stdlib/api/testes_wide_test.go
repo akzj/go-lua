@@ -210,14 +210,9 @@ func TestTestesWide(t *testing.T) {
 				}
 				src := string(data)
 				// Patch 1 removed: tracegc module is now preloaded (tracegc.go)
-				// Patch 2: relax "error in error handling" assertion
-				// Go's stack overflow produces "stack overflow" message instead
-				// of "error in error handling" because Lua stack overflow path
-				// differs from C stack overflow path
-				src = strings.Replace(src,
-					"  assert(msg == \"error in error handling\")\n",
-					"  assert(msg == \"error in error handling\" or string.find(tostring(msg), \"stack overflow\"))\n",
-					1)
+				// Patch 2 removed: ErrorMsg now clears ErrFunc before calling handler,
+				// preventing recursive handler invocation and correctly producing
+				// "error in error handling" on handler failure.
 				// Patch 3: skip "too complex" pattern matching test
 				// (Go pattern matcher doesn't have recursion depth limit yet)
 				src = strings.Replace(src,
