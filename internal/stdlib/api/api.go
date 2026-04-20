@@ -55,4 +55,17 @@ func OpenAll(L *luaapi.State) {
 		L.Require(lib.Name, luaapi.CFunction(lib.Open), true)
 		L.Pop(1) // pop the library table left by Require
 	}
+
+	// Preload test-helper modules into package.preload so that
+	// require("tracegc") works without a .lua file on disk.
+	preloadModules := map[string]luaapi.CFunction{
+		"tracegc": luaapi.CFunction(OpenTraceGC),
+	}
+	L.GetGlobal("package")          // push package table
+	L.GetField(-1, "preload")       // push package.preload
+	for name, opener := range preloadModules {
+		L.PushCFunction(opener)
+		L.SetField(-2, name)        // package.preload[name] = opener
+	}
+	L.Pop(2) // pop preload + package
 }
