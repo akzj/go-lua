@@ -143,25 +143,22 @@ func NewState() *State {
 	// without importing this package.
 
 	// GCStepFn: periodic GC during VM allocation loops.
-	// Uses runtime.GC() to clear Go weak pointers (for weak tables),
-	// then drains any pending Lua finalizers. Does NOT run FullGC —
-	// FullGC during VM execution causes premature collection.
+	// Runs FullGC (mark/sweep + weak table clearing) but does NOT
+	// call finalizers. Finalizers use PCall which corrupts the stack
+	// when called during VM execution (SetTop nils active registers).
+	// Finalizers only run from explicit collectgarbage("collect").
 	ls.Global.GCStepFn = func(thread *stateapi.LuaState) {
 		g := thread.Global
 		if g.GCRunning || g.GCRunningFinalizer {
 			return
 		}
-		// Apply dealloc debt
+		g.GCRunning = true
 		debt := atomic.SwapInt64(&g.GCDeallocDebt, 0)
 		if debt > 0 {
 			atomic.AddInt64(&g.GCTotalBytes, -debt)
 		}
-		// Run Go GC to clear weak.Pointer entries (weak tables)
-		runtime.GC()
-		// Sweep weak tables + drain finalizers
-		wrapper := &State{Internal: thread}
-		wrapper.SweepWeakTables()
-		wrapper.callAllPendingFinalizers()
+		gcapi.FullGC(g, thread)
+		g.GCRunning = false
 	}
 
 	// GCDrainFn: just drain pending finalizers.
