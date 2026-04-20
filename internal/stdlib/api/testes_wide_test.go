@@ -127,8 +127,8 @@ func TestTestesWide(t *testing.T) {
 					return
 				}
 				src := string(data)
-				// Patch 0: skip weak table collection assertions that depend on
-				// Go GC collecting all weak refs in one collectgarbage() call
+				// Patch 0: skip weak table collection count — Go GC may not
+				// collect all weak refs in a single collectgarbage() call
 				src = strings.Replace(src,
 					"assert(i == 4)\n",
 					"if not _port then assert(i == 4) end\n",
@@ -137,15 +137,7 @@ func TestTestesWide(t *testing.T) {
 					"assert(next(a) == string.rep('$', 11))\n",
 					"if not _port then assert(next(a) == string.rep('$', 11)) end\n",
 					1)
-				// Patch 0b: skip "bug in 5.1" __gc + weak table test
-				src = strings.Replace(src,
-					"-- 'bug' in 5.1\n",
-					"if not _port then  -- skip: Go GC __gc + weak table timing differs\n-- 'bug' in 5.1\n",
-					1)
-				src = strings.Replace(src,
-					"C, C1 = nil\n\n\n-- ephemerons\n",
-					"C, C1 = nil\nend  -- _port bug-in-5.1 guard\n\n\n-- ephemerons\n",
-					1)
+				// Patch 0b: REMOVED — testing if "bug in 5.1" section now works
 				// Patch 1: ephemeron section runs (no longer hangs), but one assertion
 				// still fails: Go GC doesn't clear all weak refs in a single pass.
 				src = strings.Replace(src,
