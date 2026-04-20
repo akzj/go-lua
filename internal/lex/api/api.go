@@ -89,7 +89,7 @@ var ReservedWords = map[string]TokenType{
 	"and": TK_AND, "break": TK_BREAK, "do": TK_DO,
 	"else": TK_ELSE, "elseif": TK_ELSEIF, "end": TK_END,
 	"false": TK_FALSE, "for": TK_FOR, "function": TK_FUNCTION,
-	"goto": TK_GOTO, "if": TK_IF,
+	"global": TK_GLOBAL, "goto": TK_GOTO, "if": TK_IF,
 	"in": TK_IN, "local": TK_LOCAL, "nil": TK_NIL,
 	"not": TK_NOT, "or": TK_OR, "repeat": TK_REPEAT,
 	"return": TK_RETURN, "then": TK_THEN, "true": TK_TRUE,
