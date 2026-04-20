@@ -1388,6 +1388,7 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		// Mirrors: luaT_adjustvarargs + createvarargtab in ltm.c
 		CheckStack(L, int(p.MaxStackSize)+1)
 		t := tableapi.New(nextra, 1)
+		L.Global.LinkGC(t) // V5: register in allgc chain
 		size := t.EstimateBytes()
 		atomic.AddInt64(&L.Global.GCTotalBytes, size)
 		// Register dealloc cleanup (coexists with any __gc SetFinalizer)
@@ -1805,6 +1806,7 @@ startfunc:
 			}
 			ci.SavedPC++ // skip extra arg
 			t := tableapi.New(c, b)
+			L.Global.LinkGC(t) // V5: register in allgc chain
 			size := t.EstimateBytes()
 			atomic.AddInt64(&L.Global.GCTotalBytes, size)
 			// Register dealloc cleanup (coexists with any __gc SetFinalizer)
