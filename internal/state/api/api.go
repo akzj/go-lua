@@ -148,6 +148,7 @@ func (ci *CallInfo) SetRecst(status int) {
 // Each coroutine has its own LuaState with its own stack.
 // ---------------------------------------------------------------------------
 type LuaState struct {
+	objectapi.GCHeader                // GC metadata
 	// C3 FIX: Stack uses []StackValue (not []TValue) for TBC support.
 	// Each slot has a TBCDelta field for the to-be-closed linked list.
 	Stack   []objectapi.StackValue // the value stack
@@ -175,6 +176,9 @@ type LuaState struct {
 	FTransfer     int  // hook value transfer: index of first value
 	NTransfer     int  // hook value transfer: number of values
 }
+// GC returns the GC header for this thread.
+func (L *LuaState) GC() *objectapi.GCHeader { return &L.GCHeader }
+
 
 // Yieldable returns true if the current coroutine can yield.
 func (L *LuaState) Yieldable() bool {

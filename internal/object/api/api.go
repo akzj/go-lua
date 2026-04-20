@@ -10,6 +10,49 @@ package api
 import "math"
 
 // ---------------------------------------------------------------------------
+// GC Object interface and header — embedded in every collectable Lua object
+// ---------------------------------------------------------------------------
+
+// GCObject is the interface all GC-collectable Lua objects implement.
+type GCObject interface {
+	GC() *GCHeader
+}
+
+// GCHeader is embedded in every collectable Lua object.
+// It provides the linked-list pointers for the Lua GC.
+type GCHeader struct {
+	Next   GCObject // next in allgc/finobj/tobefnz chain
+	GCList GCObject // gray list link (for mark propagation)
+	Marked byte     // GC mark bits: color (white0/white1/black) + age
+}
+
+// GC color/mark bit constants.
+const (
+	WhiteBit0    byte = 1 << 0 // white bit 0
+	WhiteBit1    byte = 1 << 1 // white bit 1
+	BlackBit     byte = 1 << 2 // black bit
+	FinalizedBit byte = 1 << 3 // has been finalized
+	AgeBits      byte = 7 << 3 // age bits for generational GC (bits 3-5)
+)
+
+// WhiteBits is the mask for both white bits.
+const WhiteBits = WhiteBit0 | WhiteBit1
+
+// IsWhite returns true if the object is white (scheduled for collection).
+func (h *GCHeader) IsWhite() bool { return h.Marked&WhiteBits != 0 }
+
+// IsBlack returns true if the object is black (fully traversed).
+func (h *GCHeader) IsBlack() bool { return h.Marked&BlackBit != 0 }
+
+// IsGray returns true if the object is gray (marked but not yet traversed).
+func (h *GCHeader) IsGray() bool { return !h.IsWhite() && !h.IsBlack() }
+
+// IsDead returns true if the object is dead (has the "other" white color).
+func (h *GCHeader) IsDead(otherwhite byte) bool {
+	return h.Marked&(WhiteBits|BlackBit) == otherwhite
+}
+
+// ---------------------------------------------------------------------------
 // Type tags — faithful to C Lua's encoding (lobject.h:37–42)
 // ---------------------------------------------------------------------------
 
@@ -253,11 +296,15 @@ func (v TValue) ToInteger() (int64, bool) {
 
 // LuaString wraps a Go string with interning support and hash caching.
 type LuaString struct {
+	GCHeader              // GC metadata
 	Data    string
 	Hash_   uint32
 	IsShort bool
 	Extra   byte // reserved word flag for short strings
 }
+
+// GC returns the GC header for this string.
+func (s *LuaString) GC() *GCHeader { return &s.GCHeader }
 
 // Tag returns TagShortStr or TagLongStr based on the string kind.
 func (s *LuaString) Tag() Tag {
@@ -281,6 +328,7 @@ func (s *LuaString) Len() int { return len(s.Data) }
 // Proto represents a compiled Lua function (the bytecode + metadata).
 // This is the Go equivalent of C Lua's Proto struct (lobject.h:492–515).
 type Proto struct {
+	GCHeader                 // GC metadata
 	Code         []uint32    // bytecode instructions
 	Constants    []TValue    // constant pool
 	Protos       []*Proto    // nested function prototypes
@@ -297,6 +345,10 @@ type Proto struct {
 	AbsLineInfo []AbsLineInfo // sparse absolute line info
 	LocVars     []LocVar      // local variable info
 }
+
+// GC returns the GC header for this proto.
+func (p *Proto) GC() *GCHeader { return &p.GCHeader }
+
 
 // UpvalDesc describes how an upvalue is captured.
 type UpvalDesc struct {
@@ -324,10 +376,14 @@ type LocVar struct {
 // Userdata represents a full userdata object.
 // It holds arbitrary Go data, a metatable, and user values.
 type Userdata struct {
+	GCHeader              // GC metadata
 	Data      any      // user data (Go value)
 	MetaTable any      // *Table at runtime (any to avoid import cycle)
 	UserVals  []TValue // user values (nuvalue)
 }
+
+// GC returns the GC header for this userdata.
+func (u *Userdata) GC() *GCHeader { return &u.GCHeader }
 
 // --- Stack value (TValue + to-be-closed delta) ---
 

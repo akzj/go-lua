@@ -25,6 +25,7 @@ const (
 
 // Table is a Lua table with hybrid array + hash storage.
 type Table struct {
+	objectapi.GCHeader            // GC metadata
 	Array     []objectapi.TValue // array part: indices 0..len-1 map to Lua keys 1..len
 	Nodes     []Node             // hash part: open-addressing with Brent's variation
 	LsizeNode uint8              // log2(len(nodes)), 0 if nodes == nil
@@ -38,6 +39,9 @@ type Table struct {
 	WeakKeyRefs   map[int]any    // node index → weak.Pointer[T] for weak keys
 	WeakValRefs   map[int]any    // node index → weak.Pointer[T] for weak values
 }
+
+// GC returns the GC header for this table.
+func (t *Table) GC() *objectapi.GCHeader { return &t.GCHeader }
 
 // HasWeakKeys returns true if this table has weak keys (__mode contains "k").
 func (t *Table) HasWeakKeys() bool { return t.WeakMode&WeakKey != 0 }
