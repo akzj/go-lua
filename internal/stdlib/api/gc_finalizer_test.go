@@ -111,3 +111,56 @@ assert(_G.gc_ok == true, "expected sentinel __gc to fire after 100 erroring __gc
 		t.Fatalf("gc finalizer many errors test failed: %v", err)
 	}
 }
+
+// TestGCTotalBytesDecreases verifies that collectgarbage("count") returns a
+// lower value after tables become unreachable and are collected.
+// This tests the AddCleanup-based dealloc tracking on tables.
+func TestGCTotalBytesDecreases(t *testing.T) {
+	L := luaapi.NewState()
+	OpenAll(L)
+
+	script := `
+-- Get baseline count after initial setup
+collectgarbage("collect")
+local baseline = collectgarbage("count")
+
+-- Create many tables to increase the count significantly
+local holder = {}
+for i = 1, 1000 do
+    holder[i] = {i, i+1, i+2, i+3}
+end
+
+-- Verify count increased
+collectgarbage("collect")
+local after_alloc = collectgarbage("count")
+assert(after_alloc > baseline,
+    string.format("expected count to increase: baseline=%.1f, after_alloc=%.1f",
+        baseline, after_alloc))
+
+-- Drop all references
+holder = nil
+
+-- Collect garbage — AddCleanup should decrement GCTotalBytes
+collectgarbage("collect")
+collectgarbage("collect")  -- second pass for cleanup callbacks
+local after_gc = collectgarbage("count")
+
+-- The count should decrease after collection.
+-- It may not drop all the way to baseline (other allocations happen),
+-- but it should be significantly lower than after_alloc.
+local decrease = after_alloc - after_gc
+assert(decrease > 0,
+    string.format("expected count to decrease after GC: after_alloc=%.1f, after_gc=%.1f",
+        after_alloc, after_gc))
+
+-- Verify the decrease is substantial (at least 50% of what we allocated)
+local allocated = after_alloc - baseline
+assert(decrease > allocated * 0.5,
+    string.format("expected substantial decrease: allocated=%.1f, decreased=%.1f",
+        allocated, decrease))
+`
+	err := L.DoString(script)
+	if err != nil {
+		t.Fatalf("GCTotalBytes decrease test failed: %v", err)
+	}
+}
