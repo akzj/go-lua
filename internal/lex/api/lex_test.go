@@ -83,7 +83,7 @@ func TestReservedWords(t *testing.T) {
 		{"and", TK_AND}, {"break", TK_BREAK}, {"do", TK_DO},
 		{"else", TK_ELSE}, {"elseif", TK_ELSEIF}, {"end", TK_END},
 		{"false", TK_FALSE}, {"for", TK_FOR}, {"function", TK_FUNCTION},
-		{"global", TK_GLOBAL}, {"goto", TK_GOTO}, {"if", TK_IF},
+		{"goto", TK_GOTO}, {"if", TK_IF},
 		{"in", TK_IN}, {"local", TK_LOCAL}, {"nil", TK_NIL},
 		{"not", TK_NOT}, {"or", TK_OR}, {"repeat", TK_REPEAT},
 		{"return", TK_RETURN}, {"then", TK_THEN}, {"true", TK_TRUE},
@@ -98,8 +98,21 @@ func TestReservedWords(t *testing.T) {
 }
 
 func TestReservedWordCount(t *testing.T) {
-	if NumReservedCount != 23 {
-		t.Errorf("NumReservedCount = %d, want 23", NumReservedCount)
+	if NumReservedCount != 22 {
+		t.Errorf("NumReservedCount = %d, want 22", NumReservedCount)
+	}
+}
+
+// TestGlobalIsSoftKeyword verifies that "global" scans as TK_NAME (identifier),
+// not as a reserved word. The parser handles "global" as a context-sensitive
+// keyword at statement start, but it must remain usable as a variable name.
+func TestGlobalIsSoftKeyword(t *testing.T) {
+	tok := scanOne(t, "global")
+	if tok.Type != TK_NAME {
+		t.Errorf("\"global\" should scan as TK_NAME (%d), got %d", TK_NAME, tok.Type)
+	}
+	if tok.StrVal != "global" {
+		t.Errorf("\"global\" StrVal = %q, want \"global\"", tok.StrVal)
 	}
 }
 
