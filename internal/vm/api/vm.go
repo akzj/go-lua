@@ -2235,6 +2235,19 @@ startfunc:
 			L.Stack[ra].Val = L.Stack[L.Top-1].Val
 			L.Top = ci.Top // restore top
 
+			// Periodic GC: string concatenation allocates new strings.
+			// Without this, loops building strings with __gc never drain finalizers.
+			if g := L.Global; g.GCHasFinalizers && !g.GCStopped {
+				g.GCAllocCount++
+				n := g.GCAllocCount
+				if n%10 == 0 && g.GCDrainFn != nil {
+					g.GCDrainFn(L) // cheap: just drain queue
+				}
+				if n%100 == 0 && g.GCStepFn != nil {
+					g.GCStepFn(L) // expensive: clear stack + runtime.GC + drain
+				}
+			}
+
 		// ===== Comparison =====
 
 		case opcodeapi.OP_EQ:
@@ -2549,6 +2562,19 @@ startfunc:
 			bx := opcodeapi.GetArgBx(inst)
 			p := cl.Proto.Protos[bx]
 			PushClosure(L, p, cl.UpVals, base, ra)
+
+			// Periodic GC: closures are heap-allocated objects.
+			// Without this, loops creating closures with __gc never drain finalizers.
+			if g := L.Global; g.GCHasFinalizers && !g.GCStopped {
+				g.GCAllocCount++
+				n := g.GCAllocCount
+				if n%10 == 0 && g.GCDrainFn != nil {
+					g.GCDrainFn(L) // cheap: just drain queue
+				}
+				if n%100 == 0 && g.GCStepFn != nil {
+					g.GCStepFn(L) // expensive: clear stack + runtime.GC + drain
+				}
+			}
 
 		case opcodeapi.OP_VARARG:
 			n := opcodeapi.GetArgC(inst) - 1
