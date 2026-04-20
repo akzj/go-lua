@@ -612,9 +612,9 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 			return false
 		}
 		// Try __eq metamethod
-		tm := getTableTM(h1, mmapi.TM_EQ)
+		tm := getTableTM(L.Global, h1, mmapi.TM_EQ)
 		if tm.IsNil() {
-			tm = getTableTM(h2, mmapi.TM_EQ)
+			tm = getTableTM(L.Global, h2, mmapi.TM_EQ)
 		}
 		if tm.IsNil() {
 			return false
@@ -685,19 +685,15 @@ func RawEqualObj(t1, t2 objectapi.TValue) bool {
 }
 
 // getTableTM gets a metamethod from a table's metatable.
-// getTableTM needs GlobalState to look up TM name strings.
-// We pass it through a package-level variable set by Execute.
-var gState *stateapi.GlobalState
-
-func getTableTM(t *tableapi.Table, event mmapi.TMS) objectapi.TValue {
+func getTableTM(g *stateapi.GlobalState, t *tableapi.Table, event mmapi.TMS) objectapi.TValue {
 	mt := t.GetMetatable()
 	if mt == nil {
 		return objectapi.Nil
 	}
-	if gState == nil {
+	if g == nil {
 		return objectapi.Nil
 	}
-	tmName := gState.TMNames[event]
+	tmName := g.TMNames[event]
 	if tmName == nil {
 		return objectapi.Nil
 	}
@@ -1029,7 +1025,7 @@ func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
 		h := rb.Val.(*tableapi.Table)
 		mt := h.GetMetatable()
 		if mt != nil {
-			tm := getTableTM(h, mmapi.TM_LEN)
+			tm := getTableTM(L.Global, h, mmapi.TM_LEN)
 			if !tm.IsNil() {
 				// Ensure L.Top is above ra so callTMRes doesn't clobber live registers
 				if L.Top <= ra {
@@ -1068,7 +1064,7 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 		var tm objectapi.TValue
 		if t.IsTable() {
 			h := t.Val.(*tableapi.Table)
-			tm = getTableTM(h, mmapi.TM_INDEX)
+			tm = getTableTM(L.Global, h, mmapi.TM_INDEX)
 			if tm.IsNil() {
 				L.Stack[ra].Val = objectapi.Nil
 				return
@@ -1123,7 +1119,7 @@ func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val obje
 		return
 	}
 	// Key absent — check for __newindex metamethod
-	tm := getTableTM(h, mmapi.TM_NEWINDEX)
+	tm := getTableTM(L.Global, h, mmapi.TM_NEWINDEX)
 	if tm.IsNil() {
 		// No metamethod — raw set
 		h.Set(key, val)
@@ -1139,7 +1135,7 @@ func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 		var tm objectapi.TValue
 		if t.IsTable() {
 			h := t.Val.(*tableapi.Table)
-			tm = getTableTM(h, mmapi.TM_NEWINDEX)
+			tm = getTableTM(L.Global, h, mmapi.TM_NEWINDEX)
 			if tm.IsNil() {
 				h.Set(key, val)
 				return
@@ -1592,9 +1588,6 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 // Execute runs the VM main loop for the given CallInfo.
 // This is the Go equivalent of luaV_execute in lvm.c.
 func Execute(L *stateapi.LuaState, ci *stateapi.CallInfo) {
-	// Set global state for metamethod lookups
-	gState = L.Global
-
 startfunc:
 	cl := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
 	k := cl.Proto.Constants
