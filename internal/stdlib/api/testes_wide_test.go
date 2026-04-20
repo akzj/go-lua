@@ -197,34 +197,8 @@ func TestTestesWide(t *testing.T) {
 					msg, _ := L.ToString(-1)
 					err = fmt.Errorf("%s", msg)
 				}
-			} else if f == "closure.lua" {
-				data, readErr := os.ReadFile(path)
-				if readErr != nil {
-					t.Skipf("cannot read %s: %v", path, readErr)
-					return
-				}
-				src := string(data)
-				// Patch 1: skip weak-table GC loop that hangs (Go GC doesn't collect weak refs on demand)
-				src = strings.Replace(src,
-					"-- force a GC in this level\n",
-					"if not _port then  -- skip: Go GC weak table loop hangs\n-- force a GC in this level\n",
-					1)
-				src = strings.Replace(src,
-					"assert(B.g == 19)\n",
-					"assert(B.g == 19)\nend  -- _port weak table guard\n",
-					1)
-				status := L.Load(src, "@"+f, "bt")
-				if status != 0 {
-					msg, _ := L.ToString(-1)
-					fmt.Printf("  %-20s FAIL: %v\n", f, msg)
-					t.Skipf("%s: %v", f, msg)
-					return
-				}
-				pcallStatus := L.PCall(0, 0, 0)
-				if pcallStatus != 0 {
-					msg, _ := L.ToString(-1)
-					err = fmt.Errorf("%s", msg)
-				}
+			// closure.lua: Patch 1 REMOVED — periodic GC triggers in OP_CONCAT
+				// now drain finalizers during the string-concat GC loop.
 			} else if f == "nextvar.lua" {
 				data, readErr := os.ReadFile(path)
 				if readErr != nil {

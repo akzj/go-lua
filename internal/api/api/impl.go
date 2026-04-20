@@ -166,7 +166,8 @@ func NewState() *State {
 		runtime.GC()      // second pass to sweep finalized objects
 		runtime.Gosched()
 		wrapper.DrainGCFinalizers()
-		wrapper.SweepStrings() // remove collected interned strings
+		wrapper.SweepWeakTables() // clear collected weak table entries
+		wrapper.SweepStrings()    // remove collected interned strings
 	}
 
 	// GCDrainFn: cheap — just drains the finalizer queue. Called frequently.
