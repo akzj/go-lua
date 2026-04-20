@@ -27,15 +27,84 @@ const (
 // nil means the file is closed.
 type closeFunc func(L *luaapi.State) int
 
+// Buffer mode constants (mirrors C's _IOFBF, _IOLBF, _IONBF).
+const (
+	bufModeNo   = iota // unbuffered — writes go directly to OS
+	bufModeFull        // fully buffered — writes go to bufio.Writer
+	bufModeLine        // line buffered — flush after each newline
+)
+
+// Default buffer size (matches C's BUFSIZ on most systems).
+const defaultBufSize = 8192
+
 // ioStream represents an open file handle (mirrors LStream in liolib.c).
 type ioStream struct {
-	f      *os.File
-	closef closeFunc
+	f       *os.File
+	closef  closeFunc
+	bufW    *bufio.Writer // nil when bufMode == bufModeNo
+	bufMode int           // one of bufModeNo, bufModeFull, bufModeLine
 }
 
 // isClosed returns true if the stream has been closed.
 func (s *ioStream) isClosed() bool {
 	return s.closef == nil
+}
+
+// flushBuf flushes the write buffer if present. Returns any error.
+// On error, the buffer is reset so that subsequent operations (like close)
+// don't re-encounter the same error from stale buffered data.
+func (s *ioStream) flushBuf() error {
+	if s.bufW != nil {
+		err := s.bufW.Flush()
+		if err != nil {
+			// Reset the buffer to discard unflushed data (matches C stdio
+			// behavior where fflush failure discards the buffer contents
+			// so that fclose doesn't fail again on the same data).
+			s.bufW.Reset(s.f)
+			return err
+		}
+	}
+	return nil
+}
+
+// setBuf sets the buffering mode and (re)creates the buffer.
+// Any existing buffered data is flushed first.
+func (s *ioStream) setBuf(mode int, size int) {
+	if s.bufW != nil {
+		s.bufW.Flush() // best-effort flush of old buffer
+	}
+	s.bufMode = mode
+	switch mode {
+	case bufModeNo:
+		s.bufW = nil
+	case bufModeFull, bufModeLine:
+		if size <= 0 {
+			size = defaultBufSize
+		}
+		s.bufW = bufio.NewWriterSize(s.f, size)
+	}
+}
+
+// writeString writes data through the buffer (or directly if unbuffered).
+// For line mode, it flushes after the last newline.
+func (s *ioStream) writeString(data string) (int, error) {
+	if s.bufW == nil {
+		// Unbuffered: write directly to file
+		return s.f.WriteString(data)
+	}
+	n, err := s.bufW.WriteString(data)
+	if err != nil {
+		return n, err
+	}
+	if s.bufMode == bufModeLine {
+		// Flush if data contains a newline
+		if idx := strings.LastIndexByte(data, '\n'); idx >= 0 {
+			if flushErr := s.bufW.Flush(); flushErr != nil {
+				return n, flushErr
+			}
+		}
+	}
+	return n, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -117,8 +186,14 @@ func getIOStream(L *luaapi.State, findex string) *ioStream {
 // ioFclose closes a regular file (mirrors io_fclose).
 func ioFclose(L *luaapi.State) int {
 	s := toStream(L, 1)
-	err := s.f.Close()
-	return pushFileResult(L, err == nil, "", err)
+	// Flush write buffer before closing (mirrors C's fclose which flushes)
+	flushErr := s.flushBuf()
+	closeErr := s.f.Close()
+	// Report the first error (flush error takes precedence, like C)
+	if flushErr != nil {
+		return pushFileResult(L, false, "", flushErr)
+	}
+	return pushFileResult(L, closeErr == nil, "", closeErr)
 }
 
 // ioNoclose "closes" a standard file — keeps it open, returns fail.
@@ -278,6 +353,11 @@ func ioOpen(L *luaapi.State) int {
 		return pushFileResult(L, false, filename, err)
 	}
 	stream.f = f
+	// Default to full buffering for writable files (matching C's fopen behavior).
+	// Read-only files don't need write buffering.
+	if mode[0] != 'r' || strings.ContainsRune(mode, '+') {
+		stream.setBuf(bufModeFull, defaultBufSize)
+	}
 	return 1
 }
 
@@ -328,8 +408,9 @@ func fGC(L *luaapi.State) int {
 	if s.isClosed() {
 		return 0
 	}
-	// Close the file, ignoring errors
+	// Flush and close the file, ignoring errors
 	if s.f != nil {
+		s.flushBuf() // best-effort flush before GC close
 		auxClose(L)
 	}
 	return 0
@@ -368,6 +449,10 @@ func gIOFile(L *luaapi.State, regKey string, mode string) int {
 				return 0
 			}
 			stream.f = f
+			// Default to full buffering for writable files (matching C's fopen)
+			if mode != "r" {
+				stream.setBuf(bufModeFull, defaultBufSize)
+			}
 		} else {
 			toFile(L, 1) // validate it's an open file
 			L.PushValue(1)
@@ -413,6 +498,8 @@ func ioTmpfile(L *luaapi.State) int {
 	// Remove the file so it's deleted when closed (Unix behavior)
 	os.Remove(f.Name())
 	stream.f = f
+	// Default to full buffering (matching C's fopen behavior)
+	stream.setBuf(bufModeFull, defaultBufSize)
 	return 1
 }
 
@@ -421,16 +508,23 @@ func ioTmpfile(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func ioFlush(L *luaapi.State) int {
-	_ = getIOFile(L, ioOutput) // validate file is open
-	// Go's *os.File writes are unbuffered (no C stdio buffer to flush)
-	// so flush is effectively a no-op
-	return pushFileResult(L, true, "", nil)
+	s := getIOStream(L, ioOutput) // validate file is open
+	if s == nil || s.isClosed() {
+		L.Errorf("default %s file is closed", "output")
+		return 0
+	}
+	err := s.flushBuf()
+	return pushFileResult(L, err == nil, "", err)
 }
 
 func fFlush(L *luaapi.State) int {
-	_ = toFile(L, 1) // validate file is open
-	// Go's *os.File writes are unbuffered — flush is a no-op
-	return pushFileResult(L, true, "", nil)
+	s := toStream(L, 1)
+	if s == nil || s.isClosed() {
+		L.Errorf("attempt to use a closed file")
+		return 0
+	}
+	err := s.flushBuf()
+	return pushFileResult(L, err == nil, "", err)
 }
 
 // ---------------------------------------------------------------------------
@@ -438,13 +532,20 @@ func fFlush(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func fSeek(L *luaapi.State) int {
-	f := toFile(L, 1)
+	s := toStream(L, 1)
+	if s == nil || s.isClosed() {
+		L.Errorf("attempt to use a closed file")
+		return 0
+	}
 	whenceNames := []string{"set", "cur", "end"}
 	whenceValues := []int{io.SeekStart, io.SeekCurrent, io.SeekEnd}
 	op := L.CheckOption(2, "cur", whenceNames)
 	offset := L.OptInteger(3, 0)
 
-	pos, err := f.Seek(offset, whenceValues[op])
+	// Flush write buffer before seeking (C stdio does this in fseek)
+	s.flushBuf()
+
+	pos, err := s.f.Seek(offset, whenceValues[op])
 	if err != nil {
 		return pushFileResult(L, false, "", err)
 	}
@@ -457,12 +558,16 @@ func fSeek(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func fSetvbuf(L *luaapi.State) int {
-	toFile(L, 1) // validate it's open
-	// Go doesn't have direct control over buffering like C's setvbuf.
-	// We accept the call but it's a no-op (files are unbuffered in Go).
+	s := toStream(L, 1)
+	if s == nil || s.isClosed() {
+		L.Errorf("attempt to use a closed file")
+		return 0
+	}
 	modeNames := []string{"no", "full", "line"}
-	L.CheckOption(2, "", modeNames)
-	// Just return success
+	modeValues := []int{bufModeNo, bufModeFull, bufModeLine}
+	op := L.CheckOption(2, "", modeNames)
+	size := int(L.OptInteger(3, defaultBufSize))
+	s.setBuf(modeValues[op], size)
 	L.PushBoolean(true)
 	return 1
 }
@@ -787,29 +892,29 @@ func isXDigit(c byte) bool { return isDigit(c) || (c >= 'a' && c <= 'f') || (c >
 // ---------------------------------------------------------------------------
 
 // gWrite is the core write function (mirrors g_write in liolib.c).
-func gWrite(L *luaapi.State, f *os.File, arg int) int {
+func gWrite(L *luaapi.State, stream *ioStream, arg int) int {
 	nargs := L.GetTop() - arg // matches C Lua: excludes file handle at top
 	for i := 0; i < nargs; i++ {
 		idx := arg + i
 		if L.Type(idx) == objectapi.TypeNumber {
 			// Format number as string (like C Lua's lua_numbertocstring)
 			if v, ok := L.ToInteger(idx); ok && float64(v) == func() float64 { f, _ := L.ToNumber(idx); return f }() {
-				s := fmt.Sprintf("%d", v)
-				_, err := f.WriteString(s)
+				str := fmt.Sprintf("%d", v)
+				_, err := stream.writeString(str)
 				if err != nil {
 					return pushFileResult(L, false, "", err)
 				}
 			} else {
 				v, _ := L.ToNumber(idx)
-				s := fmt.Sprintf("%.14g", v)
-				_, err := f.WriteString(s)
+				str := fmt.Sprintf("%.14g", v)
+				_, err := stream.writeString(str)
 				if err != nil {
 					return pushFileResult(L, false, "", err)
 				}
 			}
 		} else {
-			s := L.CheckString(idx)
-			_, err := f.WriteString(s)
+			str := L.CheckString(idx)
+			_, err := stream.writeString(str)
 			if err != nil {
 				return pushFileResult(L, false, "", err)
 			}
@@ -846,15 +951,19 @@ func ioWrite(L *luaapi.State) int {
 	}
 	// Stack: [arg1, arg2, ..., filehandle]
 	// gWrite processes args 1..N (the original args), file handle stays at top
-	return gWrite(L, s.f, 1)
+	return gWrite(L, s, 1)
 }
 
 // f:write(...) — matches C Lua's f_write
 func fWrite(L *luaapi.State) int {
-	f := toFile(L, 1)
+	s := toStream(L, 1)
+	if s == nil || s.isClosed() {
+		L.Errorf("attempt to use a closed file")
+		return 0
+	}
 	L.PushValue(1) // push copy of file handle to top (for return)
 	// Stack: [filehandle, arg2, arg3, ..., filehandle_copy]
-	return gWrite(L, f, 2)
+	return gWrite(L, s, 2)
 }
 
 // ---------------------------------------------------------------------------
