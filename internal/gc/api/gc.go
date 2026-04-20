@@ -585,7 +585,7 @@ func Udata2Finalize(g *stateapi.GlobalState) objectapi.GCObject {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Weak table clearing functions (Phase B)
+// Weak table clearing functions
 // ---------------------------------------------------------------------------
 
 // clearByKeys clears entries with unmarked keys from weak-key tables.

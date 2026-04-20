@@ -167,9 +167,7 @@ func NewState() *State {
 		// separateTobeFnz in FullGC need their __gc called.
 		wrapper := &State{Internal: thread}
 		wrapper.callAllPendingFinalizers()
-		// SweepWeakTables DISABLED — V5 GC handles weak tables natively
-		// via clearByValues/clearByKeys in the atomic phase.
-		// wrapper.SweepWeakTables()
+		// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 	}
 
 	// GCDrainFn: just drain pending finalizers.
@@ -805,10 +803,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 		atomic.AddInt64(gcDeallocDebt, size)
 	}, size)
 
-	// Periodic GC: disabled for now — clearStaleStack during VM execution
-	// corrupts for-loop control variables. Phase D will implement safe
-	// incremental GC steps that don't clear the stack.
-	// TODO(Phase D): implement luaC_checkGC with incremental steps
+	// Periodic GC is handled by checkPeriodicGC in the VM dispatch loop.
 }
 
 // NewTable pushes a new empty table.
@@ -888,9 +883,6 @@ func (L *State) SetMetatable(idx int) {
 					}
 				}
 				tbl.WeakMode = mode
-				if mode != 0 {
-					ls.Global.RegisterWeakTable(tbl)
-				}
 			}
 		} else {
 			tbl.WeakMode = 0
@@ -1412,10 +1404,7 @@ func (L *State) GCCollect() {
 	// Call all pending finalizers (objects moved to tobefnz by separateTobeFnz).
 	// This runs Lua code via PCall, so must NOT be called during VM execution.
 	L.callAllPendingFinalizers()
-	// SweepWeakTables DISABLED — V5 GC's clearByValues/clearByKeys handles
-	// weak table clearing during the atomic phase. The Go weak.Pointer approach
-	// was restoring entries that the Lua GC had already correctly cleared.
-	// L.SweepWeakTables()
+	// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 }
 
 // clearStaleStack nils out stack slots above the highest active frame boundary.
@@ -1533,7 +1522,7 @@ func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
 }
 
 // SweepStrings removes collected (dead) interned strings from the string table.
-// Should be called after runtime.GC() alongside SweepWeakTables.
+// SweepStrings removes dead interned strings from the string table.
 func (L *State) SweepStrings() {
 	L.strtab().SweepStrings()
 }
@@ -2157,7 +2146,7 @@ func (L *State) HasCallFrames() bool {
 
 // GetFuncProtoInfo inspects a Lua closure at stack index `idx` and returns
 // its Proto metadata. For C functions returns defaults with ok=false.
-func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDefined, lastLine, nups, nparams int, isVararg, ok bool) {
+func (L *State) GetFuncProtoInfo(idx int) (source, shortSource, what string, lineDefined, lastLine, nups, nparams int, isVararg, ok bool) {
 	v := L.index2val(idx)
 	if v == nil {
 		return "=[C]", "[C]", "C", 0, 0, 0, 0, true, false
@@ -2170,7 +2159,7 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 			ssrc := "?"
 			if p.Source != nil {
 				src = p.Source.String()
-				ssrc = shortSrcStr(src)
+				ssrc = shortSrc(src)
 			}
 			w := "Lua"
 			if p.LineDefined == 0 {
@@ -2187,10 +2176,7 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSrc, what string, lineDe
 	return "=[C]", "[C]", "C", 0, 0, 0, 0, true, false
 }
 
-// shortSrcStr creates a short source name (exported for use by stdlib).
-func shortSrcStr(source string) string {
-	return shortSrc(source)
-}
+
 func (L *State) GetLocal(ar *DebugInfo, n int) string {
 	ls, ok := ar.ThreadState.(*stateapi.LuaState)
 	if !ok {
@@ -2591,7 +2577,7 @@ type stringReader struct {
 	pos  int
 }
 
-func (r *stringReader) ReadByte() int {
+func (r *stringReader) NextByte() int {
 	if r.pos >= len(r.data) {
 		return -1
 	}

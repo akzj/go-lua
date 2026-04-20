@@ -132,8 +132,8 @@ type LexState struct {
 
 // LexReader is the interface for reading source characters.
 type LexReader interface {
-	// ReadByte returns the next byte, or -1 on EOF.
-	ReadByte() int
+	// NextByte returns the next byte, or -1 on EOF.
+	NextByte() int
 }
 
 // ---------------------------------------------------------------------------

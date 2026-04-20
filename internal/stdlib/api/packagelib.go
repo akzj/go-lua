@@ -193,3 +193,81 @@ func searchPathForSearcher(name, pathStr string) (string, []string) {
 	}
 	return "", tried
 }
+
+// OpenPackage opens the "package" library for a Lua state.
+func OpenPackage(L *luaapi.State) int {
+	L.NewLib(map[string]luaapi.CFunction{
+		"searchpath": pkgSearchPath,
+	})
+
+	// Set package.path — default Lua search path
+	// "./?.lua" covers the common case of loading from the current directory
+	// and the directory of the running script.
+	L.PushString("./?.lua;./?/init.lua")
+	L.SetField(-2, "path")
+
+	// Set package.cpath — default C library search path
+	L.PushString("./?.so")
+	L.SetField(-2, "cpath")
+
+	// Set package.loaded = registry["_LOADED"]
+	L.GetField(luaapi.RegistryIndex, "_LOADED")
+	L.SetField(-2, "loaded")
+
+	// Set package.config (separator, template mark, substitution mark, etc.)
+	L.PushString(string(os.PathSeparator) + "\n;\n?\n!\n-")
+	L.SetField(-2, "config")
+
+	// Set package.preload = {} (empty table for preloaded modules)
+	// C Lua: luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE)
+	L.CreateTable(0, 0)
+	L.SetField(-2, "preload")
+
+	// Create package.searchers table with 4 searcher functions.
+	// Mirrors C Lua's createsearcherstable() in loadlib.c.
+	// Searchers: 1=preload, 2=Lua file, 3=C lib (stub), 4=C root (stub)
+	searchers := []luaapi.CFunction{
+		searcher_preload,
+		searcher_Lua,
+		searcher_Clib,
+		searcher_Croot,
+	}
+	L.CreateTable(len(searchers), 0)
+	for i, s := range searchers {
+		L.PushCFunction(s)
+		L.RawSetI(-2, int64(i+1))
+	}
+	L.SetField(-2, "searchers")
+
+	return 1
+}
+
+// pkgSearchPath implements package.searchpath(name, path [, sep [, rep]])
+func pkgSearchPath(L *luaapi.State) int {
+	name := L.CheckString(1)
+	path := L.CheckString(2)
+	sep := L.OptString(3, ".")
+	rep := L.OptString(4, string(os.PathSeparator))
+
+	if sep != "" {
+		name = strings.ReplaceAll(name, sep, rep)
+	}
+
+	var tried strings.Builder
+	templates := strings.Split(path, ";")
+	for _, tmpl := range templates {
+		candidate := strings.ReplaceAll(tmpl, "?", name)
+		if _, err := os.Stat(candidate); err == nil {
+			L.PushString(candidate)
+			return 1
+		}
+		if tried.Len() > 0 {
+			tried.WriteString("\n\t")
+		}
+		tried.WriteString("no file '" + candidate + "'")
+	}
+
+	L.PushNil()
+	L.PushString(tried.String())
+	return 2
+}

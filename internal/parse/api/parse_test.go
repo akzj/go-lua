@@ -24,7 +24,7 @@ func newStringReader(s string) *stringReader {
 	return &stringReader{data: s}
 }
 
-func (r *stringReader) ReadByte() int {
+func (r *stringReader) NextByte() int {
 	if r.pos >= len(r.data) {
 		return -1
 	}

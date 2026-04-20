@@ -29,8 +29,6 @@ func NewState() *LuaState {
 	// Initialize V5 GC state (before any objects are created)
 	g.CurrentWhite = objectapi.WhiteBit0
 	g.GCState = objectapi.GCSpause
-	g.GCStepMul = 100
-	g.GCPauseMul = 200
 
 	// String table
 	strtab := luastringapi.NewStringTable(g.Seed)
@@ -378,17 +376,3 @@ func CloseState(L *LuaState) {
 	L.Global = nil
 }
 
-// ---------------------------------------------------------------------------
-// Weak table registry
-// ---------------------------------------------------------------------------
-
-// RegisterWeakTable adds a table to the global weak table registry.
-// Called when setmetatable sets a non-zero __mode on a table.
-func (g *GlobalState) RegisterWeakTable(t *tableapi.Table) {
-	for _, wt := range g.WeakTables {
-		if wt == t {
-			return // already registered
-		}
-	}
-	g.WeakTables = append(g.WeakTables, t)
-}

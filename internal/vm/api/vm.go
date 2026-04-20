@@ -28,6 +28,19 @@ import (
 const maxTagLoop = 2000
 
 // ---------------------------------------------------------------------------
+// Periodic GC helper
+// ---------------------------------------------------------------------------
+
+// checkPeriodicGC increments the allocation counter and triggers a GC step
+// every 5000 allocations if a step function is registered.
+func checkPeriodicGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
+	g.GCAllocCount++
+	if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
+		g.GCStepFn(L)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Number conversion helpers
 // ---------------------------------------------------------------------------
 
@@ -1819,10 +1832,7 @@ startfunc:
 			// Periodic GC: run Lua GC during tight allocation loops.
 			// V5 GC handles __gc via finobj list.
 			if g := L.Global; !g.GCStopped {
-				g.GCAllocCount++
-				if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
-					g.GCStepFn(L)
-				}
+				checkPeriodicGC(g, L)
 			}
 
 		case opcodeapi.OP_SELF:
@@ -2234,10 +2244,7 @@ startfunc:
 
 			// Periodic GC: string concatenation allocates new strings.
 			if g := L.Global; !g.GCStopped {
-				g.GCAllocCount++
-				if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
-					g.GCStepFn(L)
-				}
+				checkPeriodicGC(g, L)
 			}
 
 		// ===== Comparison =====
@@ -2444,7 +2451,7 @@ startfunc:
 			if b != 0 {
 				L.Top = ra + b
 			}
-			ci.SavedPC = ci.SavedPC // save PC
+			// SavedPC already set by dispatch loop
 			newci := PreCall(L, ra, nresults)
 			if newci != nil {
 				ci = newci
@@ -2557,10 +2564,7 @@ startfunc:
 
 			// Periodic GC: closures are heap-allocated objects.
 			if g := L.Global; !g.GCStopped {
-				g.GCAllocCount++
-				if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
-					g.GCStepFn(L)
-				}
+				checkPeriodicGC(g, L)
 			}
 
 		case opcodeapi.OP_VARARG:

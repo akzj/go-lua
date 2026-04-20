@@ -254,11 +254,6 @@ type GlobalState struct {
 	// When false (periodic GC), traverseThread uses maxTop (conservative).
 	GCExplicit bool
 
-	// Weak table registry: tables with __mode != 0 are registered here.
-	// Scanned after runtime.GC() to clear collected weak refs.
-	// Stored as []any to avoid importing table/api in this file.
-	WeakTables []any // []*tableapi.Table
-
 	// GCMode tracks the current GC mode: "incremental" (default) or "generational".
 	// Mirrors C Lua's g->gckind (KGC_INC / KGC_GEN).
 	GCMode string
@@ -290,12 +285,6 @@ type GlobalState struct {
 	AllWeak   objectapi.GCObject // all-weak (kv) tables
 	Ephemeron objectapi.GCObject // ephemeron tables
 
-	// GC pacing
-	GCDebt     int64 // bytes "owed" — positive means GC should run
-	GCEstimate int64 // estimated live memory after last cycle
-	TotalBytes int64 // total bytes allocated (V5 GC tracking)
-	GCStepMul  int   // step multiplier (default 100)
-	GCPauseMul int   // pause multiplier (default 200)
 }
 
 // ---------------------------------------------------------------------------
