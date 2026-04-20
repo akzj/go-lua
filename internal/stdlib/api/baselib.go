@@ -681,11 +681,14 @@ func luaB_collectgarbage(L *luaapi.State) int {
 			L.PushBoolean(false)
 			return 1
 		}
+		// V5: Run Lua mark-and-sweep GC cycle
+		L.GCCollect()
+		// Also run Go GC + old mechanisms (still needed during transition)
 		runtime.GC()
-		runtime.GC() // second pass ensures finalizers from first GC have run
+		runtime.GC()
 		L.DrainGCFinalizers()
-		L.SweepWeakTables() // clear collected weak table entries
-		L.SweepStrings()    // remove collected interned strings
+		L.SweepWeakTables()
+		L.SweepStrings()
 		L.PushInteger(0)
 		return 1
 	case 3: // count
@@ -693,11 +696,13 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushNumber(kb)
 		return 1
 	case 4: // step
+		// V5: Run Lua mark-and-sweep GC step
+		L.GCCollect()
 		runtime.GC()
 		runtime.GC()
 		L.DrainGCFinalizers()
-		L.SweepWeakTables() // clear collected weak table entries
-		L.SweepStrings()    // remove collected interned strings
+		L.SweepWeakTables()
+		L.SweepStrings()
 		L.PushBoolean(true)
 		return 1
 	case 5: // isrunning
