@@ -786,7 +786,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 
 	// Periodic GC: fire __gc finalizers during tight allocation loops.
 	ls := L.ls()
-	if g := ls.Global; g.GCHasFinalizers {
+	if g := ls.Global; g.GCHasFinalizers && !g.GCStopped {
 		g.GCAllocCount++
 		n := g.GCAllocCount
 		if n%10 == 0 {
@@ -1335,6 +1335,21 @@ func (L *State) SetGCMode(mode string) string {
 	prev := L.GetGCMode()
 	L.ls().Global.GCMode = mode
 	return prev
+}
+
+// SetGCStopped sets or clears the GCStopped flag (collectgarbage "stop"/"restart").
+func (L *State) SetGCStopped(stopped bool) {
+	L.ls().Global.GCStopped = stopped
+}
+
+// IsGCRunning returns true if GC is not stopped.
+func (L *State) IsGCRunning() bool {
+	return !L.ls().Global.GCStopped
+}
+
+// IsGCInFinalizer returns true if DrainGCFinalizers is currently executing.
+func (L *State) IsGCInFinalizer() bool {
+	return L.ls().Global.GCInFinalizer
 }
 
 // gcParamDefaults are the C Lua 5.5.1 default GC parameter values.

@@ -243,6 +243,8 @@ type GlobalState struct {
 	GCFinalizerMu    sync.Mutex
 	GCFinalizerQueue []any // pending *tableapi.Table or *objectapi.Userdata for __gc
 	GCClosed         bool  // set true when state is closing — blocks further enqueuing
+	GCStopped        bool  // set true by collectgarbage("stop") — suppresses periodic GC
+	GCInFinalizer    bool  // true while DrainGCFinalizers is running — prevents reentrancy
 
 	// Weak table registry: tables with __mode != 0 are registered here.
 	// Scanned after runtime.GC() to clear collected weak refs.

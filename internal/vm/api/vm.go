@@ -1802,8 +1802,8 @@ startfunc:
 			// Periodic GC: fire __gc finalizers during tight allocation loops.
 			// Go's GC doesn't fire on every allocation like C Lua's.
 			// Strategy: drain the queue frequently (cheap), trigger full
-			// GC rarely (expensive). Only active when finalizers exist.
-			if g := L.Global; g.GCHasFinalizers {
+			// GC rarely (expensive). Only active when finalizers exist and GC is not stopped.
+			if g := L.Global; g.GCHasFinalizers && !g.GCStopped {
 				g.GCAllocCount++
 				n := g.GCAllocCount
 				if n%10 == 0 && g.GCDrainFn != nil {
