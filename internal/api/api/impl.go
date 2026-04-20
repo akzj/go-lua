@@ -897,6 +897,23 @@ func (L *State) SetMetatable(idx int) {
 	case objectapi.TagUserdata:
 		if ud, ok := v.Val.(*objectapi.Userdata); ok {
 			ud.MetaTable = mt
+			// Register __gc finalizer if metatable has __gc (mirrors TagTable case)
+			if mt != nil {
+				g := ls.Global
+				tmName := g.TMNames[metamethodapi.TM_GC]
+				gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+				if !gcTM.IsNil() {
+					g.GCHasFinalizers = true
+					runtime.SetFinalizer(ud, func(u *objectapi.Userdata) {
+						g.GCFinalizerMu.Lock()
+						defer g.GCFinalizerMu.Unlock()
+						if g.GCClosed {
+							return
+						}
+						g.GCFinalizerQueue = append(g.GCFinalizerQueue, u)
+					})
+				}
+			}
 		}
 	default:
 		tp := v.Type()
@@ -2577,11 +2594,20 @@ func (L *State) DrainGCFinalizers() {
 		}
 
 		for _, obj := range queue {
-			tbl, ok := obj.(*tableapi.Table)
-			if !ok {
-				continue // skip non-table objects for now
+			var mt *tableapi.Table
+			var objVal objectapi.TValue
+			switch v := obj.(type) {
+			case *tableapi.Table:
+				mt = v.GetMetatable()
+				objVal = objectapi.TValue{Val: v, Tt: objectapi.TagTable}
+			case *objectapi.Userdata:
+				if v.MetaTable != nil {
+					mt, _ = v.MetaTable.(*tableapi.Table)
+				}
+				objVal = objectapi.TValue{Val: v, Tt: objectapi.TagUserdata}
+			default:
+				continue
 			}
-			mt := tbl.GetMetatable()
 			if mt == nil {
 				continue
 			}
@@ -2597,9 +2623,9 @@ func (L *State) DrainGCFinalizers() {
 			// the stack to prevent overflow from repeated __gc errors.
 			// Mirrors C Lua's GCTM: L->top.p = oldtop after luaD_pcall.
 			oldTop := L.GetTop()
-			// Push the __gc function and the table as argument
+			// Push the __gc function and the object as argument
 			L.push(gcTM)
-			L.push(objectapi.TValue{Val: tbl, Tt: objectapi.TagTable})
+			L.push(objVal)
 			// Mark current CI as running a finalizer so debug.getinfo
 			// returns name="__gc", namewhat="metamethod" (mirrors C Lua's GCTM).
 			ls.CI.CallStatus |= stateapi.CISTFin
