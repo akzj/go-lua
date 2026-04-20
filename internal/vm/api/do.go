@@ -924,6 +924,12 @@ func FParser(L *stateapi.LuaState, reader lexapi.LexReader, source string) {
 
 	// Initialize upvalues
 	closureapi.InitUpvals(cl)
+	// Link newly created upvalues to allgc for proper GC tracking
+	for _, uv := range cl.UpVals {
+		if uv != nil {
+			L.Global.LinkGC(uv)
+		}
+	}
 
 	// Wire _ENV (upvalue[0]) to the global table.
 	// In C Lua, f_parser does:
