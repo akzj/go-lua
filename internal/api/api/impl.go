@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	closureapi "github.com/akzj/go-lua/internal/closure/api"
+	gcapi "github.com/akzj/go-lua/internal/gc/api"
 	lexapi "github.com/akzj/go-lua/internal/lex/api"
 	luastringapi "github.com/akzj/go-lua/internal/luastring/api"
 	metamethodapi "github.com/akzj/go-lua/internal/metamethod/api"
@@ -1412,6 +1413,13 @@ func (L *State) IsGCRunning() bool {
 // IsGCInFinalizer returns true if DrainGCFinalizers is currently executing.
 func (L *State) IsGCInFinalizer() bool {
 	return L.ls().Global.GCInFinalizer
+}
+
+// GCCollect runs a full Lua mark-and-sweep GC cycle.
+// This is the V5 GC entry point — replaces runtime.GC() for Lua objects.
+func (L *State) GCCollect() {
+	ls := L.ls()
+	gcapi.FullGC(ls.Global, ls)
 }
 
 // SweepStrings removes collected (dead) interned strings from the string table.
