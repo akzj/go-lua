@@ -46,30 +46,30 @@ func LightCFuncEqual(a, b any) bool {
 // ---------------------------------------------------------------------------
 
 // MakeTable creates a table TValue. t should be a *table.Table.
-func MakeTable(t any) TValue { return TValue{Tt: TagTable, Val: t} }
+func MakeTable(t any) TValue { return TValue{Tt: TagTable, Obj: t} }
 
 // MakeLuaClosure creates a Lua closure TValue. c should be a *closure.LClosure.
-func MakeLuaClosure(c any) TValue { return TValue{Tt: TagLuaClosure, Val: c} }
+func MakeLuaClosure(c any) TValue { return TValue{Tt: TagLuaClosure, Obj: c} }
 
 // MakeCClosure creates a C closure TValue. c should be a *closure.CClosure.
-func MakeCClosure(c any) TValue { return TValue{Tt: TagCClosure, Val: c} }
+func MakeCClosure(c any) TValue { return TValue{Tt: TagCClosure, Obj: c} }
 
 // MakeLightCFunc creates a light C function TValue (no upvalues).
 // f should be a state.CFunction.
-func MakeLightCFunc(f any) TValue { return TValue{Tt: TagLightCFunc, Val: f} }
+func MakeLightCFunc(f any) TValue { return TValue{Tt: TagLightCFunc, Obj: f} }
 
 // MakeUserdata creates a full userdata TValue.
-func MakeUserdata(u *Userdata) TValue { return TValue{Tt: TagUserdata, Val: u} }
+func MakeUserdata(u *Userdata) TValue { return TValue{Tt: TagUserdata, Obj: u} }
 
 // MakeLightUserdata creates a light userdata TValue.
 // p is an arbitrary Go value used as an opaque pointer.
-func MakeLightUserdata(p any) TValue { return TValue{Tt: TagLightUserdata, Val: p} }
+func MakeLightUserdata(p any) TValue { return TValue{Tt: TagLightUserdata, Obj: p} }
 
 // MakeThread creates a thread TValue. t should be a *state.LuaState.
-func MakeThread(t any) TValue { return TValue{Tt: TagThread, Val: t} }
+func MakeThread(t any) TValue { return TValue{Tt: TagThread, Obj: t} }
 
 // MakeProto creates a proto TValue (internal, used by compiler/VM).
-func MakeProto(p *Proto) TValue { return TValue{Tt: TagProto, Val: p} }
+func MakeProto(p *Proto) TValue { return TValue{Tt: TagProto, Obj: p} }
 
 // ---------------------------------------------------------------------------
 // GC-type accessors
@@ -81,7 +81,7 @@ func (v TValue) TableVal() any {
 	if v.Tt != TagTable {
 		panic("TValue.TableVal: not a table")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // LuaClosureVal returns the Lua closure pointer. Panics if not a Lua closure.
@@ -89,7 +89,7 @@ func (v TValue) LuaClosureVal() any {
 	if v.Tt != TagLuaClosure {
 		panic("TValue.LuaClosureVal: not a Lua closure")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // CClosureVal returns the C closure pointer. Panics if not a C closure.
@@ -97,7 +97,7 @@ func (v TValue) CClosureVal() any {
 	if v.Tt != TagCClosure {
 		panic("TValue.CClosureVal: not a C closure")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // ClosureVal returns the closure pointer (Lua or C). Panics if not a function.
@@ -105,7 +105,7 @@ func (v TValue) ClosureVal() any {
 	if v.Tt != TagLuaClosure && v.Tt != TagCClosure && v.Tt != TagLightCFunc {
 		panic("TValue.ClosureVal: not a function")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // LightCFuncVal returns the light C function. Panics if not a light C function.
@@ -113,7 +113,7 @@ func (v TValue) LightCFuncVal() any {
 	if v.Tt != TagLightCFunc {
 		panic("TValue.LightCFuncVal: not a light C function")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // UserdataVal returns the Userdata pointer. Panics if not a full userdata.
@@ -121,7 +121,7 @@ func (v TValue) UserdataVal() *Userdata {
 	if v.Tt != TagUserdata {
 		panic("TValue.UserdataVal: not a userdata")
 	}
-	return v.Val.(*Userdata)
+	return v.Obj.(*Userdata)
 }
 
 // LightUserdataVal returns the light userdata value. Panics if not light userdata.
@@ -129,7 +129,7 @@ func (v TValue) LightUserdataVal() any {
 	if v.Tt != TagLightUserdata {
 		panic("TValue.LightUserdataVal: not a light userdata")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // ThreadVal returns the thread pointer. Panics if not a thread.
@@ -137,7 +137,7 @@ func (v TValue) ThreadVal() any {
 	if v.Tt != TagThread {
 		panic("TValue.ThreadVal: not a thread")
 	}
-	return v.Val
+	return v.Obj
 }
 
 // ProtoVal returns the Proto pointer. Panics if not a proto.
@@ -145,7 +145,7 @@ func (v TValue) ProtoVal() *Proto {
 	if v.Tt != TagProto {
 		panic("TValue.ProtoVal: not a proto")
 	}
-	return v.Val.(*Proto)
+	return v.Obj.(*Proto)
 }
 
 // ---------------------------------------------------------------------------
@@ -181,23 +181,23 @@ func RawEqual(v1, v2 TValue) bool {
 		case TagInteger:
 			// integer == float?
 			if v2.Tt == TagFloat {
-				f := v2.Val.(float64)
+				f := v2.Float()
 				i2, ok := floatToIntegerEq(f)
-				return ok && v1.Val.(int64) == i2
+				return ok && v1.N == i2
 			}
 			return false
 		case TagFloat:
 			// float == integer?
 			if v2.Tt == TagInteger {
-				f := v1.Val.(float64)
+				f := v1.Float()
 				i1, ok := floatToIntegerEq(f)
-				return ok && i1 == v2.Val.(int64)
+				return ok && i1 == v2.N
 			}
 			return false
 		case TagShortStr, TagLongStr:
 			// short string vs long string — compare content
 			if v2.Tt == TagShortStr || v2.Tt == TagLongStr {
-				return v1.Val.(*LuaString).Data == v2.Val.(*LuaString).Data
+				return v1.Obj.(*LuaString).Data == v2.Obj.(*LuaString).Data
 			}
 			return false
 		default:
@@ -210,22 +210,22 @@ func RawEqual(v1, v2 TValue) bool {
 	case TagNil, TagFalse, TagTrue:
 		return true
 	case TagInteger:
-		return v1.Val.(int64) == v2.Val.(int64)
+		return v1.N == v2.N
 	case TagFloat:
-		return v1.Val.(float64) == v2.Val.(float64) // NaN != NaN by IEEE 754
+		return v1.Float() == v2.Float() // NaN != NaN by IEEE 754
 	case TagShortStr:
 		// Interned short strings: pointer equality
-		return v1.Val == v2.Val
+		return v1.Obj == v2.Obj
 	case TagLongStr:
 		// Long strings: content equality
-		return v1.Val.(*LuaString).Data == v2.Val.(*LuaString).Data
+		return v1.Obj.(*LuaString).Data == v2.Obj.(*LuaString).Data
 	case TagLightUserdata:
-		return v1.Val == v2.Val
+		return v1.Obj == v2.Obj
 	case TagLightCFunc:
-		return LightCFuncEqual(v1.Val, v2.Val)
+		return LightCFuncEqual(v1.Obj, v2.Obj)
 	default:
 		// Tables, closures, userdata, threads: pointer identity
-		return v1.Val == v2.Val
+		return v1.Obj == v2.Obj
 	}
 }
 
@@ -258,6 +258,5 @@ func TypeNameOf(v TValue) string {
 
 // SetObj copies the TValue from src to dst.
 func SetObj(dst *TValue, src TValue) {
-	dst.Tt = src.Tt
-	dst.Val = src.Val
+	*dst = src
 }

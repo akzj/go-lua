@@ -38,9 +38,9 @@ func newTable(arraySize, hashSize int) *Table {
 func (t *Table) get(key object.TValue) (object.TValue, bool) {
 	switch key.Tt {
 	case object.TagInteger:
-		return t.getInt(key.Val.(int64))
+		return t.getInt(key.N)
 	case object.TagFloat:
-		f := key.Val.(float64)
+		f := key.Float()
 		if i, ok := floatToInteger(f); ok {
 			return t.getInt(i)
 		}
@@ -49,7 +49,7 @@ func (t *Table) get(key object.TValue) (object.TValue, bool) {
 		}
 		return getFromHashLoop(t, key, mainPosition(t, key))
 	case object.TagShortStr:
-		return t.getStr(key.Val.(*object.LuaString))
+		return t.getStr(key.Obj.(*object.LuaString))
 	case object.TagNil:
 		return object.Nil, false
 	default:
@@ -94,7 +94,7 @@ func (t *Table) set(key, value object.TValue) {
 	case object.TagNil:
 		panic("table index is nil")
 	case object.TagFloat:
-		f := key.Val.(float64)
+		f := key.Float()
 		if math.IsNaN(f) {
 			panic("table index is NaN")
 		}
@@ -104,9 +104,9 @@ func (t *Table) set(key, value object.TValue) {
 		}
 		t.setHash(key, value)
 	case object.TagInteger:
-		t.setInt(key.Val.(int64), value)
+		t.setInt(key.N, value)
 	case object.TagShortStr:
-		t.setStr(key.Val.(*object.LuaString), value)
+		t.setStr(key.Obj.(*object.LuaString), value)
 	default:
 		t.setHash(key, value)
 	}
@@ -174,7 +174,7 @@ func (t *Table) setHash(key, value object.TValue) {
 		rehash(t, key)
 		// After rehash, key might go to array part
 		if key.Tt == object.TagInteger {
-			ik := key.Val.(int64)
+			ik := key.N
 			if ik >= 1 && int(ik) <= len(t.Array) {
 				t.Array[ik-1] = value
 				return
@@ -285,7 +285,7 @@ func (t *Table) next(key object.TValue) (object.TValue, object.TValue, bool, err
 	if key.Tt.IsNil() {
 		startIdx = 0
 	} else if key.Tt == object.TagInteger {
-		k := key.Val.(int64)
+		k := key.N
 		if k >= 1 && int(k) <= asize {
 			startIdx = int(k) // next position after array index k
 		} else {

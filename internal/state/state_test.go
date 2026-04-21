@@ -44,7 +44,7 @@ func TestNewState_Registry(t *testing.T) {
 	if g.Registry.Type() != object.TypeTable {
 		t.Fatalf("Registry type = %v, want TypeTable", g.Registry.Type())
 	}
-	registry := g.Registry.Val.(*table.Table)
+	registry := g.Registry.Obj.(*table.Table)
 
 	// registry[1] = false (C: setbfvalue)
 	v, found := registry.GetInt(1)
@@ -72,7 +72,7 @@ func TestNewState_Registry(t *testing.T) {
 	if v.Tt != object.TagThread {
 		t.Errorf("registry[MAINTHREAD] tag = %v, want TagThread", v.Tt)
 	}
-	if v.Val.(*LuaState) != L {
+	if v.Obj.(*LuaState) != L {
 		t.Error("registry[MAINTHREAD] is not the main thread")
 	}
 }

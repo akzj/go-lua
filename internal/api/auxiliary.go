@@ -37,15 +37,15 @@ func (L *State) CheckInteger(idx int) int64 {
 	v := L.index2val(idx)
 	switch v.Tt {
 	case object.TagInteger:
-		return v.Val.(int64)
+		return v.N
 	case object.TagFloat:
-		f := v.Val.(float64)
+		f := v.Float()
 		if i, ok := object.FloatToInteger(f); ok {
 			return i
 		}
 		L.ArgError(idx, fmt.Sprintf("number (%.10g) has no integer representation", f))
 	case object.TagShortStr, object.TagLongStr:
-		if i, ok := object.StringToInteger(v.Val.(*object.LuaString).Data); ok {
+		if i, ok := object.StringToInteger(v.Obj.(*object.LuaString).Data); ok {
 			return i
 		}
 		L.ArgError(idx, "malformed number")
@@ -233,7 +233,7 @@ func (L *State) Where(level int) {
 	if ci.IsLua() {
 		fval := ls.Stack[ci.Func].Val
 		if fval.Tt == object.TagLuaClosure {
-			cl := fval.Val.(*closure.LClosure)
+			cl := fval.Obj.(*closure.LClosure)
 			pc := ci.SavedPC - 1
 			if pc < 0 {
 				pc = 0
