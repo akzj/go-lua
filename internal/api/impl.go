@@ -549,6 +549,11 @@ func (L *State) RawLen(idx int) int64 {
 		return v.Obj.(*table.Table).RawLen()
 	case object.TagShortStr, object.TagLongStr:
 		return int64(len(v.Obj.(*object.LuaString).Data))
+	case object.TagUserdata:
+		if ud, ok := v.Obj.(*object.Userdata); ok {
+			return int64(ud.Size)
+		}
+		return 0
 	default:
 		return 0
 	}
