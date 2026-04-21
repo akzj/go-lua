@@ -64,6 +64,12 @@ func TestTestesWide(t *testing.T) {
 			}()
 			L := luaapi.NewState()
 			OpenAll(L)
+			// Only register T (testC library) for api.lua — other tests
+			// have `if T then` blocks that need fully-functional stubs
+			// we haven't implemented yet.
+			if f == "api.lua" {
+				OpenTestLib(L)
+			}
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)
 			L.PushBoolean(true)
 			L.SetGlobal("_port")
