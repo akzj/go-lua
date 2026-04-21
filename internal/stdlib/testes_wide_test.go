@@ -67,15 +67,14 @@ func TestTestesWide(t *testing.T) {
 			// Register T (testC library) for test files that use it.
 			// T provides testC, gcstate, gccolor, gcage, newuserdata, etc.
 			// Files NOT enabled for T and why:
-			//   nextvar.lua  — T.querytab exposes Go table rehash differences
-			//   errors.lua   — T.totalmem memory-limit feature not supported in Go
-			//   calls.lua    — T.listk string pointer identity differs (Go interning)
-			//   cstack.lua   — T blocks use T.sethook (not implemented)
-			//   gc.lua       — T blocks test warning system + memory limits
-			//   gengc.lua    — T.gcage age transitions differ from C Lua
+			//   nextvar.lua   — T.querytab exposes Go computesizes differences (array/hash split)
+			//   errors.lua    — T.totalmem memory-limit feature not supported in Go
+			//   calls.lua     — T.listk string pointer identity differs (Go interning)
+			//   cstack.lua    — T blocks use T.sethook (not implemented); hangs
+			//   gc.lua        — T blocks test warning system (warn @store not implemented)
 			//   coroutine.lua — T.sethook yields-inside-hooks not implemented
 			switch f {
-			case "api.lua", "events.lua", "closure.lua":
+			case "api.lua", "events.lua", "closure.lua", "gengc.lua":
 				OpenTestLib(L)
 			}
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)

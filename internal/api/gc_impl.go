@@ -147,12 +147,13 @@ func (L *State) GCStepAPI() bool {
 	}
 
 	// Incremental mode: bounded SingleSteps
-	prevState := g.GCState
+	// GCStep runs FullGC which always completes a full cycle (pause→...→pause).
+	// We detect completion by checking if we end at pause after running steps.
 	gc.GCStep(g, ls)
 	g.GCRunning = false
-	completed := g.GCState == object.GCSpause && prevState != object.GCSpause
+	completed := g.GCState == object.GCSpause
 	// If cycle completed, drain finalizers and recalculate debt
-	if g.GCState == object.GCSpause {
+	if completed {
 		L.callAllPendingFinalizers()
 		gc.SetPause(g)
 	}
@@ -259,10 +260,24 @@ func (L *State) callOneGCTM(ls *state.LuaState, g *state.GlobalState) {
 	ls.CI.CallStatus |= state.CISTFin
 
 	// Protected call: 1 arg, 0 results, no error handler
-	L.PCall(1, 0, 0)
+	status := L.PCall(1, 0, 0)
 
 	ls.CI.CallStatus &^= state.CISTFin
 	ls.AllowHook = oldAllowHook
+
+	// If __gc raised an error, issue a warning (mirrors C Lua's GCTM → luaE_warnerror)
+	if status != 0 {
+		// Get error message from top of stack
+		errMsg := "error object is not a string"
+		if ls.Top > 0 {
+			errVal := ls.Stack[ls.Top-1].Val
+			if errVal.IsString() {
+				errMsg = errVal.StringVal().String()
+			}
+			ls.Top-- // pop error object (mirrors C Lua: L->top.p--)
+		}
+		g.WarnError("__gc", errMsg)
+	}
 
 	// Restore absolute Top, CI, and the original slot values that were
 	// overwritten by push/PCall. This prevents corruption of VM

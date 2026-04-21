@@ -831,3 +831,22 @@ func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
 	L.push(ls.Stack[ci.Func].Val)
 	return true
 }
+
+// ---------------------------------------------------------------------------
+// Warning system — mirrors C Lua's lua_warning / lua_setwarnf
+// ---------------------------------------------------------------------------
+
+// Warning issues a warning message through the registered handler.
+// tocont=true means the message is a continuation (more parts follow).
+// Mirrors C Lua's lua_warning (lapi.c).
+func (L *State) Warning(msg string, tocont bool) {
+	g := L.ls().Global
+	g.Warning(msg, tocont)
+}
+
+// SetWarnF sets the warning handler function.
+// Mirrors C Lua's lua_setwarnf (lapi.c).
+func (L *State) SetWarnF(f func(ud any, msg string, tocont bool), ud any) {
+	g := L.ls().Global
+	g.SetWarnF(f, ud)
+}
