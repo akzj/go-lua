@@ -1117,34 +1117,45 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 // ---------------------------------------------------------------------------
 
 // GCStep performs bounded incremental GC work triggered by the debt-based
-// pacer. Matches C Lua's incstep() (lgc.c:1565-1595):
-//   work2do = stepmul * stepsize (in "work units" from SingleStep)
-//   Loop SingleStep until work >= work2do or a full cycle completes.
-//   If cycle completed: SetPause resets debt based on live data.
-//   If partial: set debt = stepsize bytes (allocation credit until next step).
+// pacer. Matches C Lua's incstep() (lgc.c:1710-1728):
+//
+//	stepsize = applygcparam(STEPSIZE, 100)
+//	work2do  = applygcparam(STEPMUL, stepsize / sizeof(void*))
+//	fast     = (work2do == 0)   // stepsize=0 → full collection per step
+//	loop SingleStep until work >= work2do or cycle completes (or fast)
+//	if completed: SetPause resets debt based on live data
+//	if partial:   debt = stepsize (allocation credit until next step)
 func GCStep(g *state.GlobalState, L *state.LuaState) {
 	if g.GCStopped {
 		return
 	}
 
-	// Calculate work budget.
 	// GCStepSize is log2 of step size in bytes (default 13 → 8KB).
-	// GCStepMul is the step multiplier (default 200).
-	// C Lua: work2do = adjustdebt(g, stepmul) which effectively does
-	//   debt * stepmul / 100, but we simplify to stepmul * stepsize.
+	// Special case: stepsize=0 means "stop-the-world" — run a full cycle
+	// per step (matches C Lua's fast flag in incstep).
+	if g.GCStepSize == 0 {
+		FullGC(g, L)
+		SetPause(g)
+		return
+	}
+
+	// Calculate work budget.
+	// stepsize = 1 << GCStepSize (bytes → work units, divided by pointer size)
+	// work2do  = stepmul * (stepsize / ptrsize) / 100
+	// C Lua divides by sizeof(void*) to convert bytes to "work units".
 	stepsize := int64(1) << g.GCStepSize // e.g. 1<<13 = 8192
 	stepmul := int64(g.GCStepMul)
 	if stepmul == 0 {
 		stepmul = 200 // safety default
 	}
-	work2do := stepmul * stepsize / 100
+	work2do := stepmul * (stepsize / 8) / 100 // 8 = sizeof(void*) on 64-bit
 
 	// Do bounded incremental work via SingleStep
 	var work int64
-	for work < work2do {
+	for {
 		work += SingleStep(g, L)
-		if g.GCState == object.GCSpause {
-			break // completed a full cycle
+		if g.GCState == object.GCSpause || work >= work2do {
+			break
 		}
 	}
 
