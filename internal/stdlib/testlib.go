@@ -646,12 +646,12 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			L1.PushString("traceback") // stub
 
 		case "warningC":
-			_ = p.getString()
-			// no-op — warning system not implemented
+			msg := p.getString()
+			L1.Warning(msg, true) // tocont=true (continuation)
 
 		case "warning":
-			_ = p.getString()
-			// no-op — warning system not implemented
+			msg := p.getString()
+			L1.Warning(msg, false) // tocont=false (final part)
 
 		case "threadstatus":
 			L1.PushString(statusToString(L1.Status()))
@@ -1414,12 +1414,75 @@ func testTrick(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testCodeparam(L *luaapi.State) int {
-	L.PushInteger(0)
+	p := uint(L.CheckInteger(1))
+	L.PushInteger(int64(codeParam(p)))
 	return 1
 }
 
 func testApplyparam(L *luaapi.State) int {
-	return 0
+	p := byte(L.CheckInteger(1))
+	x := L.CheckInteger(2)
+	L.PushInteger(applyParam(p, x))
+	return 1
+}
+
+// codeParam encodes a percentage into a floating-point byte.
+// Format: eeee.xxxx where value = (1.xxxx) * 2^(eeee-7) for normalized,
+// or (0.xxxx) * 2^-7 for subnormal (eeee == 0).
+// Mirrors C Lua's luaO_codeparam (lobject.c).
+func codeParam(p uint) byte {
+	const maxVal = uint((0x1F << (0xF - 7 - 1)) * 100)
+	if p >= maxVal { // overflow
+		return 0xFF
+	}
+	p = (p*128 + 99) / 100 // round up
+	if p < 0x10 {           // subnormal
+		return byte(p)
+	}
+	// p >= 0x10: ceil(log2(p+1)) >= 5, preserve 5 bits
+	log := ceilLog2(p+1) - 5
+	return byte(((p >> log) - 0x10) | ((log + 1) << 4))
+}
+
+// applyParam applies a floating-point byte parameter to a value.
+// Mirrors C Lua's luaO_applyparam (lobject.c).
+func applyParam(p byte, x int64) int64 {
+	const maxLMem = int64(^uint64(0) >> 1) // max int64
+	m := int64(p & 0xF)                     // mantissa
+	e := int(p >> 4)                         // exponent
+	if e > 0 {
+		e--
+		m += 0x10
+	}
+	e -= 7 // correct excess-7
+	if e >= 0 {
+		if x < (maxLMem/0x1F)>>e {
+			return (x * m) << e
+		}
+		return maxLMem
+	}
+	// negative exponent
+	e = -e
+	if x < maxLMem/0x1F {
+		return (x * m) >> e
+	} else if (x>>e) < maxLMem/0x1F {
+		return (x >> e) * m
+	}
+	return maxLMem
+}
+
+// ceilLog2 returns ceil(log2(x)) for x > 0.
+func ceilLog2(x uint) uint {
+	if x <= 1 {
+		return 0
+	}
+	x--
+	var n uint
+	for x > 0 {
+		x >>= 1
+		n++
+	}
+	return n
 }
 
 // suppress unused import warning

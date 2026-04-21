@@ -121,12 +121,14 @@ func luaB_warn(L *luaapi.State) int {
 	for i := 2; i <= n; i++ {
 		L.CheckString(i)
 	}
-	var sb strings.Builder
-	for i := 1; i <= n; i++ {
+	// Issue warning parts with tocont=true for all but the last.
+	// Mirrors C Lua's luaB_warn (lbaselib.c).
+	for i := 1; i < n; i++ {
 		s, _ := L.ToString(i)
-		sb.WriteString(s)
+		L.Warning(s, true)
 	}
-	fmt.Fprintln(os.Stderr, "Lua warning: "+sb.String())
+	s, _ := L.ToString(n)
+	L.Warning(s, false) // last part: tocont=false
 	return 0
 }
 

@@ -321,6 +321,21 @@ type GlobalState struct {
 	// Controls when minor GC switches to major (% of live memory growth).
 	GCMinorMul int // default 25 (LUAI_GENMINORMUL)
 
+	// =================================================================
+	// Warning system — mirrors C Lua's lua_setwarnf / lua_warning
+	// =================================================================
+
+	// WarnF is the warning handler function. Called with (message, tocont).
+	// tocont=true means the message is a continuation (more parts follow).
+	// When nil, warnings are silently discarded.
+	WarnF func(ud any, message string, tocont bool)
+
+	// WarnUd is the user data passed to WarnF (mirrors C Lua's ud_warn).
+	WarnUd any
+
+	// WarnBuf accumulates multi-part warning messages (tocont=true parts).
+	WarnBuf string
+
 }
 
 // ---------------------------------------------------------------------------
