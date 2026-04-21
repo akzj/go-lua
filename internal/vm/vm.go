@@ -45,6 +45,16 @@ func checkGC(g *state.GlobalState, L *state.LuaState) {
 	}
 }
 
+// trackTableResize checks if a table has accumulated a size delta from
+// resize operations and updates GCDebt accordingly. Call after any table
+// mutation that might trigger a rehash (Set, SetInt, SetStr, ResizeArray).
+func trackTableResize(g *state.GlobalState, t *table.Table) {
+	if delta := t.SizeDelta; delta != 0 {
+		t.SizeDelta = 0
+		g.TrackAllocation(delta)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // execute — the main VM execution loop
 // ---------------------------------------------------------------------------
@@ -1143,7 +1153,8 @@ startfunc:
 				h.SetInt(int64(last), L.Stack[ra+i].Val)
 				last--
 			}
-			gc.BarrierBack(L.Global, h) // GC write barrier: table bulk-set
+			trackTableResize(L.Global, h)  // track resize delta for GC debt
+			gc.BarrierBack(L.Global, h)    // GC write barrier: table bulk-set
 			L.Top = ci.Top              // restore top
 
 		// ===== Lua 5.5 new opcodes =====

@@ -478,6 +478,7 @@ func arrayIndex(k int64) uint {
 func resizeTable(t *Table, newASize, newHSize int) {
 	oldArray := t.Array
 	oldNodes := t.Nodes
+	oldSize := t.GCHeader.ObjSize // capture before resize
 
 	// Allocate new array
 	var newArray []object.TValue
@@ -528,8 +529,12 @@ func resizeTable(t *Table, newASize, newHSize int) {
 		insertKey(t, k, nd.Val)
 	}
 
-	// Update pre-computed size for GC accounting
+	// Update pre-computed size for GC accounting and track delta
 	t.GCHeader.ObjSize = t.EstimateBytes()
+	delta := t.GCHeader.ObjSize - oldSize
+	if delta != 0 {
+		t.SizeDelta += delta
+	}
 }
 
 func initHashPart(t *Table, size int) {
