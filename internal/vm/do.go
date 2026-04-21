@@ -324,7 +324,7 @@ retry:
 	fval := L.Stack[funcIdx].Val
 	switch fval.Tt {
 	case object.TagLuaClosure:
-		cl := fval.Val.(*closure.LClosure)
+		cl := fval.Obj.(*closure.LClosure)
 		p := cl.Proto
 		narg := L.Top - funcIdx - 1 // number of actual arguments
 		nfixparams := int(p.NumParams)
@@ -348,12 +348,12 @@ retry:
 		return ci
 
 	case object.TagCClosure:
-		cc := fval.Val.(*closure.CClosure)
+		cc := fval.Obj.(*closure.CClosure)
 		precallC(L, funcIdx, status, cc.Fn)
 		return nil
 
 	case object.TagLightCFunc:
-		f := fval.Val.(state.CFunction)
+		f := fval.Obj.(state.CFunction)
 		precallC(L, funcIdx, status, f)
 		return nil
 
@@ -404,7 +404,7 @@ func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 // ftransfer/ntransfer: parameter/return value transfer info (0 if N/A)
 func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntransfer int) {
 	hookVal, ok := L.Hook.(object.TValue)
-	if !ok || hookVal.Tt == object.TagNil || hookVal.Val == nil {
+	if !ok || hookVal.Tt == object.TagNil || hookVal.Obj == nil {
 		return
 	}
 	if !L.AllowHook {
@@ -469,7 +469,7 @@ func retHook(L *state.LuaState, ci *state.CallInfo, nres int) {
 	// Mirrors: rethook in ldo.c
 	delta := 0
 	if ci.IsLua() {
-		cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+		cl, ok := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 		if ok && cl.Proto != nil && cl.Proto.IsVararg() {
 			delta = ci.NExtraArgs + int(cl.Proto.NumParams) + 1
 		}
@@ -498,7 +498,7 @@ func callHook(L *state.LuaState, ci *state.CallInfo) {
 	if ci.IsLua() {
 		// ftransfer=1 (first param), ntransfer=numparams
 		numparams := 0
-		cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+		cl, ok := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 		if ok && cl.Proto != nil {
 			numparams = int(cl.Proto.NumParams)
 		}
@@ -524,7 +524,7 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 		return false // no line/count hooks, turn off trap
 	}
 
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return false
 	}
@@ -642,15 +642,15 @@ retry:
 	fval := L.Stack[funcIdx].Val
 	switch fval.Tt {
 	case object.TagCClosure:
-		cc := fval.Val.(*closure.CClosure)
+		cc := fval.Obj.(*closure.CClosure)
 		return precallC(L, funcIdx, status, cc.Fn)
 
 	case object.TagLightCFunc:
-		f := fval.Val.(state.CFunction)
+		f := fval.Obj.(state.CFunction)
 		return precallC(L, funcIdx, status, f)
 
 	case object.TagLuaClosure:
-		cl := fval.Val.(*closure.LClosure)
+		cl := fval.Obj.(*closure.LClosure)
 		p := cl.Proto
 		fsize := int(p.MaxStackSize)
 		nfixparams := int(p.NumParams)
@@ -919,7 +919,7 @@ func fParser(L *state.LuaState, reader lex.LexReader, source string) {
 	// Push the closure on the stack
 	state.PushValue(L, object.TValue{
 		Tt:  object.TagLuaClosure,
-		Val: cl,
+		Obj: cl,
 	})
 
 	// Initialize upvalues
@@ -941,7 +941,7 @@ func fParser(L *state.LuaState, reader lex.LexReader, source string) {
 	if len(cl.UpVals) > 0 {
 		gt := GetGlobalTable(L)
 		uv := cl.UpVals[0]
-		uv.Close(object.TValue{Tt: object.TagTable, Val: gt})
+		uv.Close(object.TValue{Tt: object.TagTable, Obj: gt})
 	}
 }
 
@@ -1176,9 +1176,9 @@ func Yield(L *state.LuaState, nResults int) {
 
 // GetGlobalTable returns the global table from the registry.
 func GetGlobalTable(L *state.LuaState) *table.Table {
-	reg := L.Global.Registry.Val.(*table.Table)
+	reg := L.Global.Registry.Obj.(*table.Table)
 	gval, _ := reg.GetInt(int64(state.RegistryIndexGlobals))
-	return gval.Val.(*table.Table)
+	return gval.Obj.(*table.Table)
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,11 +1217,11 @@ func internProtoStringsRec(st *luastring.StringTable, p *object.Proto, longCache
 		k := &p.Constants[i]
 		switch k.Tt {
 		case object.TagShortStr:
-			old := k.Val.(*object.LuaString)
+			old := k.Obj.(*object.LuaString)
 			interned := st.Intern(old.Data)
 			*k = object.MakeString(interned)
 		case object.TagLongStr:
-			old := k.Val.(*object.LuaString)
+			old := k.Obj.(*object.LuaString)
 			if cached, ok := longCache[old.Data]; ok {
 				*k = object.MakeString(cached)
 			} else {
@@ -1265,7 +1265,7 @@ func getLocalName(L *state.LuaState, ci *state.CallInfo, idx int) string {
 	if fn.Tt != object.TagLuaClosure {
 		return "?"
 	}
-	cl, ok := fn.Val.(*closure.LClosure)
+	cl, ok := fn.Obj.(*closure.LClosure)
 	if !ok || cl == nil || cl.Proto == nil {
 		return "?"
 	}

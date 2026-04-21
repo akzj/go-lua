@@ -24,7 +24,7 @@ func (L *State) NewUserdata(size int, nUV int) *object.Userdata {
 	// Track allocation: base Userdata struct (~80 bytes) + UserVals slice
 	estimateSize := int64(80 + nUV*24)
 	L.TrackAlloc(estimateSize)
-	L.push(object.TValue{Tt: object.TagUserdata, Val: ud})
+	L.push(object.TValue{Tt: object.TagUserdata, Obj: ud})
 	return ud
 }
 
@@ -42,7 +42,7 @@ func (L *State) GetUpvalue(funcIdx, n int) (string, bool) {
 	}
 	switch v.Tt {
 	case object.TagLuaClosure:
-		cl := v.Val.(*closure.LClosure)
+		cl := v.Obj.(*closure.LClosure)
 		if n < 1 || n > len(cl.UpVals) {
 			return "", false
 		}
@@ -58,7 +58,7 @@ func (L *State) GetUpvalue(funcIdx, n int) (string, bool) {
 		}
 		return "(no name)", true
 	case object.TagCClosure:
-		cc := v.Val.(*closure.CClosure)
+		cc := v.Obj.(*closure.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
 			return "", false
 		}
@@ -77,7 +77,7 @@ func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 	}
 	switch v.Tt {
 	case object.TagLuaClosure:
-		cl := v.Val.(*closure.LClosure)
+		cl := v.Obj.(*closure.LClosure)
 		if n < 1 || n > len(cl.UpVals) {
 			return "", false
 		}
@@ -95,7 +95,7 @@ func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 		}
 		return "(no name)", true
 	case object.TagCClosure:
-		cc := v.Val.(*closure.CClosure)
+		cc := v.Obj.(*closure.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
 			return "", false
 		}

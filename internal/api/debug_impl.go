@@ -36,7 +36,7 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 	fval := ls.Stack[ci.Func].Val
 	switch fval.Tt {
 	case object.TagLuaClosure:
-		cl := fval.Val.(*closure.LClosure)
+		cl := fval.Obj.(*closure.LClosure)
 		p := cl.Proto
 		if p.Source != nil {
 			ar.Source = p.Source.Data
@@ -69,7 +69,7 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		ar.IsVararg = true // All C functions are vararg
 		ar.NParams = 0
 		if fval.Tt == object.TagCClosure {
-			cc := fval.Val.(*closure.CClosure)
+			cc := fval.Obj.(*closure.CClosure)
 			ar.NUps = len(cc.UpVals)
 		}
 	}
@@ -127,7 +127,7 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			if fval.Tt != object.TagLuaClosure {
 				break
 			}
-			cl := fval.Val.(*closure.LClosure)
+			cl := fval.Obj.(*closure.LClosure)
 			p := cl.Proto
 			if p == nil {
 				break
@@ -276,7 +276,7 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSource, what string, lin
 		return "=[C]", "[C]", "C", 0, 0, 0, 0, true, false
 	}
 	if v.Tt == object.TagLuaClosure {
-		cl := v.Val.(*closure.LClosure)
+		cl := v.Obj.(*closure.LClosure)
 		p := cl.Proto
 		if p != nil {
 			src := "=?"
@@ -293,7 +293,7 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSource, what string, lin
 		}
 	}
 	if v.Tt == object.TagCClosure {
-		cc := v.Val.(*closure.CClosure)
+		cc := v.Obj.(*closure.CClosure)
 		return "=[C]", "[C]", "C", 0, 0, len(cc.UpVals), 0, true, false
 	}
 	// TagLightCFunc or other C function types
@@ -314,7 +314,7 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 
 	var proto *object.Proto
 	if isLua {
-		cl, ok := clfn.Val.(*closure.LClosure)
+		cl, ok := clfn.Obj.(*closure.LClosure)
 		if ok && cl != nil && cl.Proto != nil {
 			proto = cl.Proto
 		}
@@ -414,7 +414,7 @@ func (L *State) SetLocal(ar *DebugInfo, n int) string {
 
 	var proto *object.Proto
 	if isLua {
-		cl, ok := clfn.Val.(*closure.LClosure)
+		cl, ok := clfn.Obj.(*closure.LClosure)
 		if ok && cl != nil && cl.Proto != nil {
 			proto = cl.Proto
 		}

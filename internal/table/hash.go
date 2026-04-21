@@ -61,14 +61,14 @@ func mainPosition(t *Table, key object.TValue) int {
 	hmask := (1 << t.LsizeNode) - 1
 	switch key.Tt {
 	case object.TagInteger:
-		return hashInt(key.Val.(int64), hmask)
+		return hashInt(key.N, hmask)
 	case object.TagFloat:
-		h := hashFloat(key.Val.(float64))
+		h := hashFloat(key.Float())
 		return int(h % uint(hmask|1))
 	case object.TagShortStr:
-		return hashStr(key.Val.(*object.LuaString), hmask)
+		return hashStr(key.Obj.(*object.LuaString), hmask)
 	case object.TagLongStr:
-		s := key.Val.(*object.LuaString)
+		s := key.Obj.(*object.LuaString)
 		return int(s.Hash()) & hmask
 	case object.TagFalse:
 		return 0 & hmask
@@ -76,7 +76,7 @@ func mainPosition(t *Table, key object.TValue) int {
 		return 1 & hmask
 	case object.TagLightCFunc:
 		// Use interface data word (unique per closure instance) for hashing.
-		ptr := object.FuncDataPtr(key.Val)
+		ptr := object.FuncDataPtr(key.Obj)
 		return hashInt(int64(ptr), hmask)
 	default:
 		// For other types, use tag as hash (simple but correct).
@@ -122,12 +122,12 @@ func mainPositionFromNode(t *Table, nd *node) int {
 // ---------------------------------------------------------------------------
 
 func nodeKey(nd *node) object.TValue {
-	return object.TValue{Tt: nd.KeyTT, Val: nd.KeyVal}
+	return object.MakeFromPayload(nd.KeyTT, nd.KeyVal)
 }
 
 func setNodeKey(nd *node, key object.TValue) {
 	nd.KeyTT = key.Tt
-	nd.KeyVal = key.Val
+	nd.KeyVal = key.Payload()
 }
 
 func nodeIsEmpty(nd *node) bool {
@@ -150,14 +150,13 @@ func equalKey(k1 object.TValue, n2 *node, deadOk bool) bool {
 	if k1.Tt != n2.KeyTT {
 		if deadOk && keyIsDead(n2) {
 			// Dead key: compare by value identity for collectable types
-			// Go func values are not comparable; use reflect for those.
 			if k1.Tt == object.TagLightCFunc {
-				return object.LightCFuncEqual(k1.Val, n2.KeyVal)
+				return object.LightCFuncEqual(k1.Obj, n2.KeyVal)
 			}
-			return k1.Val == n2.KeyVal
+			return k1.Payload() == n2.KeyVal
 		}
 		if n2.KeyTT == object.TagShortStr && k1.Tt == object.TagLongStr {
-			s1 := k1.Val.(*object.LuaString)
+			s1 := k1.Obj.(*object.LuaString)
 			s2 := n2.KeyVal.(*object.LuaString)
 			return s1.Data == s2.Data
 		}
@@ -167,21 +166,20 @@ func equalKey(k1 object.TValue, n2 *node, deadOk bool) bool {
 	case object.TagNil, object.TagFalse, object.TagTrue:
 		return true
 	case object.TagInteger:
-		return k1.Val.(int64) == n2.KeyVal.(int64)
+		return k1.N == n2.KeyVal.(int64)
 	case object.TagFloat:
-		return k1.Val.(float64) == n2.KeyVal.(float64)
+		return k1.Float() == n2.KeyVal.(float64)
 	case object.TagShortStr:
-		return k1.Val == n2.KeyVal // pointer equality for interned strings
+		return k1.Obj == n2.KeyVal // pointer equality for interned strings
 	case object.TagLongStr:
-		s1 := k1.Val.(*object.LuaString)
+		s1 := k1.Obj.(*object.LuaString)
 		s2 := n2.KeyVal.(*object.LuaString)
 		return s1.Data == s2.Data
 	default:
-		// Go func values are not comparable with ==; use reflect for those.
 		if n2.KeyTT == object.TagLightCFunc {
-			return object.LightCFuncEqual(k1.Val, n2.KeyVal)
+			return object.LightCFuncEqual(k1.Obj, n2.KeyVal)
 		}
-		return k1.Val == n2.KeyVal // identity for GC objects (pointers)
+		return k1.Obj == n2.KeyVal // identity for GC objects (pointers)
 	}
 }
 
@@ -369,7 +367,7 @@ func rehash(t *Table, extraKey object.TValue) {
 
 	total = 1 // count extra key
 	if extraKey.Tt == object.TagInteger {
-		k := extraKey.Val.(int64)
+		k := extraKey.N
 		if ai := arrayIndex(k); ai > 0 {
 			nums[ceilLog2(uint(ai))]++
 			totalNA++
@@ -509,7 +507,7 @@ func resizeTable(t *Table, newASize, newHSize int) {
 		}
 		k := nodeKey(nd)
 		if k.Tt == object.TagInteger {
-			ik := k.Val.(int64)
+			ik := k.N
 			if ik >= 1 && int(ik) <= newASize {
 				t.Array[ik-1] = nd.Val
 				continue

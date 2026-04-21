@@ -77,7 +77,7 @@ func linkGray(g *state.GlobalState, obj object.GCObject) {
 
 // markValue marks the value inside a TValue if it's a collectable object.
 func markValue(g *state.GlobalState, tv object.TValue) {
-	if obj, ok := tv.Val.(object.GCObject); ok {
+	if obj, ok := tv.Obj.(object.GCObject); ok {
 		markObject(g, obj)
 	}
 }
@@ -229,7 +229,7 @@ func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 		}
 		// Check if value is white (don't mark it — it's weak)
 		if !hasClears {
-			if vObj, ok := n.Val.Val.(object.GCObject); ok {
+			if vObj, ok := n.Val.Obj.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					hasClears = true
 				}
@@ -255,7 +255,7 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 
 	// Traverse array part (always mark — array indices are integers, always alive)
 	for i := range t.Array {
-		if vObj, ok := t.Array[i].Val.(object.GCObject); ok {
+		if vObj, ok := t.Array[i].Obj.(object.GCObject); ok {
 			if isCleared(g, vObj) {
 				// Array values in ephemeron tables: mark them (keys are integers = strong)
 				markObject(g, vObj)
@@ -282,14 +282,14 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 		if keyIsWhite {
 			hasClears = true
 			// Key is white — check if value is also white
-			if vObj, ok := n.Val.Val.(object.GCObject); ok {
+			if vObj, ok := n.Val.Obj.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					hasWW = true // white→white entry
 				}
 			}
 		} else {
 			// Key is marked (or not a GC object) — mark value
-			if vObj, ok := n.Val.Val.(object.GCObject); ok {
+			if vObj, ok := n.Val.Obj.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					markObject(g, vObj)
 					marked = true
@@ -658,7 +658,7 @@ func clearByValues(g *state.GlobalState, l object.GCObject, f object.GCObject) {
 
 		// Clear array part
 		for i := range t.Array {
-			if vObj, ok := t.Array[i].Val.(object.GCObject); ok {
+			if vObj, ok := t.Array[i].Obj.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					t.Array[i] = object.Nil
 				}
@@ -671,7 +671,7 @@ func clearByValues(g *state.GlobalState, l object.GCObject, f object.GCObject) {
 			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if vObj, ok := n.Val.Val.(object.GCObject); ok {
+			if vObj, ok := n.Val.Obj.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					// Dead value — mark key as dead and clear value.
 					// Must NOT nil KeyVal — hash chain probing depends on it.

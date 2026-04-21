@@ -121,9 +121,9 @@ func RawArith(op int, p1, p2 TValue) (TValue, bool) {
 func ToIntegerNS(v TValue) (int64, bool) {
 	switch v.Tt {
 	case TagInteger:
-		return v.Val.(int64), true
+		return v.N, true
 	case TagFloat:
-		f := v.Val.(float64)
+		f := v.Float()
 		// Exact mode: only convert if float has exact integer representation
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return 0, false

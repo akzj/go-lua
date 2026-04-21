@@ -114,7 +114,7 @@ func initRegistry(L *LuaState, g *GlobalState) {
 	// Store as TValue in GlobalState
 	g.Registry = object.TValue{
 		Tt:  object.TagTable,
-		Val: registry,
+		Obj: registry,
 	}
 
 	// registry[1] = false (placeholder, matches C)
@@ -126,13 +126,13 @@ func initRegistry(L *LuaState, g *GlobalState) {
 	g.GCTotalBytes += globals.EstimateBytes()
 	registry.SetInt(int64(RegistryIndexGlobals), object.TValue{
 		Tt:  object.TagTable,
-		Val: globals,
+		Obj: globals,
 	})
 
 	// registry[LUA_RIDX_MAINTHREAD] = L (as thread TValue)
 	registry.SetInt(int64(RegistryIndexMainThread), object.TValue{
 		Tt:  object.TagThread,
-		Val: L,
+		Obj: L,
 	})
 }
 

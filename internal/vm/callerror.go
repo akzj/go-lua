@@ -71,7 +71,7 @@ func FuncNameFromCode(L *state.LuaState, p *object.Proto, pc int) (string, strin
 func callErrorExtra(L *state.LuaState, funcIdx int) string {
 	// Try funcNameFromCode first (examines calling instruction)
 	if L.CI != nil && L.CI.IsLua() {
-		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closure.LClosure); ok && cl.Proto != nil {
+		if cl, ok := L.Stack[L.CI.Func].Val.Obj.(*closure.LClosure); ok && cl.Proto != nil {
 			pc := L.CI.SavedPC - 1 // -1 to get the calling instruction
 			kind, name := FuncNameFromCode(L, cl.Proto, pc)
 			if kind != "" {
@@ -111,7 +111,7 @@ func runTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
 	typeName := metamethod.ObjTypeName(L.Global, val)
 	extra := ""
 	if L.CI != nil && L.CI.IsLua() {
-		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closure.LClosure); ok && cl.Proto != nil {
+		if cl, ok := L.Stack[L.CI.Func].Val.Obj.(*closure.LClosure); ok && cl.Proto != nil {
 			pc := L.CI.SavedPC - 1
 			if pc >= 0 && pc < len(cl.Proto.Code) {
 				inst := cl.Proto.Code[pc]
@@ -130,7 +130,7 @@ func runTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
 							// For _ENV access, use the key (field C) as the global name
 							k := opcode.GetArgC(inst)
 							if k < len(cl.Proto.Constants) && cl.Proto.Constants[k].IsString() {
-								gname := cl.Proto.Constants[k].Val.(*object.LuaString).Data
+								gname := cl.Proto.Constants[k].Obj.(*object.LuaString).Data
 								extra = " (global '" + gname + "')"
 							}
 						} else {
@@ -147,7 +147,7 @@ func runTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
 						if uname == "_ENV" {
 							k := opcode.GetArgB(inst)
 							if k < len(cl.Proto.Constants) && cl.Proto.Constants[k].IsString() {
-								gname := cl.Proto.Constants[k].Val.(*object.LuaString).Data
+								gname := cl.Proto.Constants[k].Obj.(*object.LuaString).Data
 								extra = " (global '" + gname + "')"
 							}
 						} else {
