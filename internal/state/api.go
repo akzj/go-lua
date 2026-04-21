@@ -301,6 +301,26 @@ type GlobalState struct {
 	GCStepMul  int // step multiplier (default 200)
 	GCStepSize int // log2 of step size in bytes (default 13 = 8KB)
 
+	// Generational GC state
+	GCKind byte // KGC_INC=0, KGC_GENMINOR=1, KGC_GENMAJOR=2
+
+	// Generation list boundary pointers within allgc chain.
+	// The allgc chain is ordered: [new objects] → Survival → Old1 → ReallyOld → nil
+	// These pointers mark the boundaries between generations.
+	Survival  object.GCObject // first survival-age object in allgc
+	Old1      object.GCObject // first old1-age object in allgc
+	ReallyOld object.GCObject // first really-old object in allgc
+	FirstOld1 object.GCObject // optimization: first OLD1 in list
+
+	// Same boundaries for finobj chain
+	FinObjSur  object.GCObject // survival boundary in finobj
+	FinObjOld1 object.GCObject // old1 boundary in finobj
+	FinObjROld object.GCObject // really-old boundary in finobj
+
+	// GCMinorMul is the generational minor collection multiplier.
+	// Controls when minor GC switches to major (% of live memory growth).
+	GCMinorMul int // default 25 (LUAI_GENMINORMUL)
+
 }
 
 // ---------------------------------------------------------------------------
