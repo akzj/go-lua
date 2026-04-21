@@ -139,14 +139,30 @@ func RunError(L *state.LuaState, msg string) {
 // ---------------------------------------------------------------------------
 
 // reallocStack reallocates the stack to newsize.
-// Returns true on success. If raiseerror is true, panics on failure.
+// Uses capacity-based growth to avoid allocations when growing within
+// existing capacity. When shrinking below len, always reallocates to
+// actually free memory.
 // Mirrors: luaD_reallocstack in ldo.c
 func reallocStack(L *state.LuaState, newsize int) {
-	oldsize := len(L.Stack)
-	newStack := make([]object.StackValue, newsize)
+	oldLen := len(L.Stack)
+	if newsize > oldLen && newsize <= cap(L.Stack) {
+		// Grow within existing capacity — no allocation needed
+		L.Stack = L.Stack[:newsize]
+		for i := oldLen; i < newsize; i++ {
+			L.Stack[i].Val = object.Nil
+		}
+		return
+	}
+	// Need new allocation (growing beyond capacity, or shrinking)
+	newCap := newsize + newsize/2 // 1.5x headroom for future growth
+	if newsize < oldLen {
+		// Shrinking — don't add headroom, we want to free memory
+		newCap = newsize
+	}
+	newStack := make([]object.StackValue, newsize, newCap)
 	copy(newStack, L.Stack)
 	// Initialize new slots to nil
-	for i := oldsize; i < newsize; i++ {
+	for i := oldLen; i < newsize; i++ {
 		newStack[i].Val = object.Nil
 	}
 	L.Stack = newStack

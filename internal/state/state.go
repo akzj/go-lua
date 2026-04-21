@@ -73,9 +73,10 @@ func NewState() *LuaState {
 // stackInit allocates the stack and sets up the base CallInfo.
 // Mirrors: stack_init in lstate.c
 func stackInit(L *LuaState) {
-	// Allocate stack with extra space
+	// Allocate stack with extra space and capacity headroom
+	// to avoid reallocation on moderate growth.
 	size := BasicStackSize + ExtraStack
-	L.Stack = make([]object.StackValue, size)
+	L.Stack = make([]object.StackValue, size, size+size/2)
 	for i := range L.Stack {
 		L.Stack[i].Val = object.Nil
 	}
