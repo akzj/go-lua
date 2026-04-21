@@ -1554,8 +1554,11 @@ func str_unpack(L *luaapi.State) int {
 		case kChar:
 			L.PushString(data[pos : pos+size])
 		case kString:
-			slen := int(readUint(data, pos, size, h.islittle))
-			L.ArgCheck(slen <= ld-pos-size, 2, "data string too short")
+			rawLen := readUint(data, pos, size, h.islittle)
+			if rawLen > uint64(ld-pos-size) {
+				L.ArgError(2, "data string too short")
+			}
+			slen := int(rawLen)
 			L.PushString(data[pos+size : pos+size+slen])
 			pos += slen // skip string content
 		case kZstr:
@@ -1565,10 +1568,8 @@ func str_unpack(L *luaapi.State) int {
 			}
 			L.ArgCheck(end < ld, 2, "unfinished string for format 'z'")
 			L.PushString(data[pos:end])
-			pos = end + 1 - size // adjust: size=0 for kZstr, but pos += size below
-			// Actually kZstr has size=0, so pos = end+1 after pos += size
 			pos = end + 1
-			size = 0 // ensure pos += size doesn't double-count
+			size = 0 // kZstr has size=0; ensure pos += size below doesn't double-count
 		case kPaddalign, kPadding, kNop:
 			n-- // undo increment (no result pushed)
 		}
