@@ -265,18 +265,19 @@ func (L *State) callOneGCTM(ls *state.LuaState, g *state.GlobalState) {
 	ls.CI.CallStatus &^= state.CISTFin
 	ls.AllowHook = oldAllowHook
 
-	// If __gc raised an error, issue a warning (mirrors C Lua's GCTM → luaE_warnerror)
+	// If __gc raised an error, extract error message BEFORE stack restore
+	// (the error object is on the stack), but issue the warning AFTER restore
+	// so the warn handler can safely push/setglobal without being overwritten.
+	var gcErrMsg string
 	if status != 0 {
-		// Get error message from top of stack
-		errMsg := "error object is not a string"
+		gcErrMsg = "error object is not a string"
 		if ls.Top > 0 {
 			errVal := ls.Stack[ls.Top-1].Val
 			if errVal.IsString() {
-				errMsg = errVal.StringVal().String()
+				gcErrMsg = errVal.StringVal().String()
 			}
 			ls.Top-- // pop error object (mirrors C Lua: L->top.p--)
 		}
-		g.WarnError("__gc", errMsg)
 	}
 
 	// Restore absolute Top, CI, and the original slot values that were
@@ -286,6 +287,12 @@ func (L *State) callOneGCTM(ls *state.LuaState, g *state.GlobalState) {
 	ls.Top = savedTop
 	for i := 0; i < saveSlots && savedTop+i < len(ls.Stack); i++ {
 		ls.Stack[savedTop+i].Val = savedVals[i]
+	}
+
+	// Now issue the warning — after stack is restored, so the warn handler
+	// (which may call PushString/SetGlobal for @store mode) operates safely.
+	if status != 0 {
+		g.WarnError("__gc", gcErrMsg)
 	}
 }
 
