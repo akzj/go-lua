@@ -379,7 +379,8 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "pushcclosure":
 			n := p.getNum(L, L1)
-			L1.PushCClosure(luaapi.CFunction(testCFunc), n)
+			// C Lua uses testC (reads program from arg 1), not Cfunc (reads from upvalue 1)
+			L1.PushCClosure(luaapi.CFunction(testCEntry), n)
 
 		case "pushint":
 			L1.PushInteger(int64(p.getNum(L, L1)))
@@ -851,17 +852,30 @@ func testGetref(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testUpvalue(L *luaapi.State) int {
-	// T.upvalue(f, n) — push upvalue name and value
+	// T.upvalue(f, n [, val])
+	// GET: returns value, name (2 results) — or 0 if invalid
+	// SET: sets upvalue, returns name (1 result)
 	n := int(L.CheckInteger(2))
 	L.CheckType(1, object.TypeFunction)
-	name, ok := L.GetUpvalue(1, n)
+	if L.IsNone(3) {
+		// GET: lua_getupvalue pushes value, then we push name
+		name, ok := L.GetUpvalue(1, n)
+		if !ok {
+			return 0
+		}
+		// Stack: [..., value]. Push name after value.
+		L.PushString(name)
+		return 2 // returns: value, name
+	}
+	// SET: lua_setupvalue(L, 1, n) — takes value from top
+	L.PushValue(3) // push the new value to top
+	name, ok := L.SetUpvalue(1, n)
 	if !ok {
-		L.PushFail()
-		return 1
+		L.Pop(1) // pop unused value
+		return 0
 	}
 	L.PushString(name)
-	L.Insert(-2) // name before value
-	return 2
+	return 1
 }
 
 // ---------------------------------------------------------------------------
