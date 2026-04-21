@@ -10,12 +10,12 @@ import (
 	"math"
 	"sync/atomic"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	mmapi "github.com/akzj/go-lua/internal/metamethod"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/metamethod"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ const maxTagLoop = 2000
 
 // checkPeriodicGC increments the allocation counter and triggers a GC step
 // every 5000 allocations if a step function is registered.
-func checkPeriodicGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
+func checkPeriodicGC(g *state.GlobalState, L *state.LuaState) {
 	g.GCAllocCount++
 	if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
 		g.GCStepFn(L)
@@ -47,11 +47,11 @@ func checkPeriodicGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
 // the metamethod result into the correct register before Execute resumes.
 // Also handles __close interruption (OP_CLOSE/OP_RETURN).
 // Mirrors: luaV_finishOp in lvm.c:568-618
-func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
-	cl := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+func FinishOp(L *state.LuaState, ci *state.CallInfo) {
+	cl := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	code := cl.Proto.Code
 	inst := code[ci.SavedPC-1] // interrupted instruction
-	op := opcodeapi.GetOpCode(inst)
+	op := opcode.GetOpCode(inst)
 	base := ci.Func + 1
 	switch op {
 
@@ -59,40 +59,40 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 	// savedpc-1 = OP_MMBIN/MMBINI/MMBINK (the interrupted instruction)
 	// savedpc-2 = OP_ADD/SUB/etc (the original arithmetic instruction)
 	// Pop TM result from stack top → store in RA of original arith op
-	case opcodeapi.OP_MMBIN, opcodeapi.OP_MMBINI, opcodeapi.OP_MMBINK:
+	case opcode.OP_MMBIN, opcode.OP_MMBINI, opcode.OP_MMBINK:
 		L.Top--
 		prevInst := code[ci.SavedPC-2]
-		dest := base + opcodeapi.GetArgA(prevInst)
+		dest := base + opcode.GetArgA(prevInst)
 		L.Stack[dest].Val = L.Stack[L.Top].Val
 
 	// Category 2: Unary + Table Get
 	// Pop TM result from stack top → store in RA of this instruction
-	case opcodeapi.OP_UNM, opcodeapi.OP_BNOT, opcodeapi.OP_LEN,
-		opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE, opcodeapi.OP_GETI,
-		opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
+	case opcode.OP_UNM, opcode.OP_BNOT, opcode.OP_LEN,
+		opcode.OP_GETTABUP, opcode.OP_GETTABLE, opcode.OP_GETI,
+		opcode.OP_GETFIELD, opcode.OP_SELF:
 		L.Top--
-		dest := base + opcodeapi.GetArgA(inst)
+		dest := base + opcode.GetArgA(inst)
 		L.Stack[dest].Val = L.Stack[L.Top].Val
 
 	// Category 3: Comparisons
 	// Evaluate TM result as boolean, then conditional jump.
 	// savedpc points to the OP_JMP instruction after the comparison.
 	// If res != k, skip the jump (savedpc++).
-	case opcodeapi.OP_LT, opcodeapi.OP_LE,
-		opcodeapi.OP_LTI, opcodeapi.OP_LEI,
-		opcodeapi.OP_GTI, opcodeapi.OP_GEI,
-		opcodeapi.OP_EQ:
+	case opcode.OP_LT, opcode.OP_LE,
+		opcode.OP_LTI, opcode.OP_LEI,
+		opcode.OP_GTI, opcode.OP_GEI,
+		opcode.OP_EQ:
 		res := !L.Stack[L.Top-1].Val.IsFalsy()
 		L.Top--
-		if res != (opcodeapi.GetArgK(inst) != 0) {
+		if res != (opcode.GetArgK(inst) != 0) {
 			ci.SavedPC++ // skip jump
 		}
 
 	// Category 4: Concat
 	// Reposition TM result, adjust top, continue concat loop
-	case opcodeapi.OP_CONCAT:
+	case opcode.OP_CONCAT:
 		top := L.Top - 1
-		a := opcodeapi.GetArgA(inst)
+		a := opcode.GetArgA(inst)
 		total := (top - 1) - (base + a)
 		L.Stack[top-2].Val = L.Stack[top].Val // put TM result in proper position
 		L.Top = top - 1
@@ -101,10 +101,10 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 		}
 
 	// Category 5: Close/Return (already implemented)
-	case opcodeapi.OP_CLOSE:
+	case opcode.OP_CLOSE:
 		ci.SavedPC--
-	case opcodeapi.OP_RETURN:
-		ra := base + opcodeapi.GetArgA(inst)
+	case opcode.OP_RETURN:
+		ra := base + opcode.GetArgA(inst)
 		L.Top = ra + ci.NRes
 		ci.SavedPC--
 
@@ -117,9 +117,9 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 
 // Execute runs the VM main loop for the given CallInfo.
 // This is the Go equivalent of luaV_execute in lvm.c.
-func Execute(L *stateapi.LuaState, ci *stateapi.CallInfo) {
+func Execute(L *state.LuaState, ci *state.CallInfo) {
 startfunc:
-	cl := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	cl := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	k := cl.Proto.Constants
 	code := cl.Proto.Code
 	base := ci.Func + 1
@@ -129,7 +129,7 @@ startfunc:
 	// The call hook for non-tail calls is already fired by PreCall (non-vararg)
 	// or OP_VARARGPREP (vararg). Only tail calls need this path.
 	// For vararg tail calls, defer to OP_VARARGPREP.
-	if L.HookMask != 0 && ci.CallStatus&stateapi.CISTTail != 0 &&
+	if L.HookMask != 0 && ci.CallStatus&state.CISTTail != 0 &&
 		ci.SavedPC == 0 && !cl.Proto.IsVararg() {
 		CallHook(L, ci)
 	}
@@ -143,77 +143,77 @@ startfunc:
 		// for vararg functions, so traceexec is not called for instruction 0.
 		// The call hook and OldPC adjustment happen inside OP_VARARGPREP instead.
 		// Mirrors: vmfetch trap check in lvm.c + luaG_tracecall in ldebug.c
-		if L.HookMask&(stateapi.MaskLine|stateapi.MaskCount) != 0 && L.AllowHook &&
-			opcodeapi.GetOpCode(inst) != opcodeapi.OP_VARARGPREP {
+		if L.HookMask&(state.MaskLine|state.MaskCount) != 0 && L.AllowHook &&
+			opcode.GetOpCode(inst) != opcode.OP_VARARGPREP {
 			TraceExec(L, ci)
 		}
-		op := opcodeapi.GetOpCode(inst)
-		ra := base + opcodeapi.GetArgA(inst)
+		op := opcode.GetOpCode(inst)
+		ra := base + opcode.GetArgA(inst)
 
 		switch op {
 
 		// ===== Load/Move =====
 
-		case opcodeapi.OP_MOVE:
-			rb := base + opcodeapi.GetArgB(inst)
+		case opcode.OP_MOVE:
+			rb := base + opcode.GetArgB(inst)
 			L.Stack[ra].Val = L.Stack[rb].Val
 
-		case opcodeapi.OP_LOADI:
-			L.Stack[ra].Val = objectapi.MakeInteger(int64(opcodeapi.GetArgSBx(inst)))
+		case opcode.OP_LOADI:
+			L.Stack[ra].Val = object.MakeInteger(int64(opcode.GetArgSBx(inst)))
 
-		case opcodeapi.OP_LOADF:
-			L.Stack[ra].Val = objectapi.MakeFloat(float64(opcodeapi.GetArgSBx(inst)))
+		case opcode.OP_LOADF:
+			L.Stack[ra].Val = object.MakeFloat(float64(opcode.GetArgSBx(inst)))
 
-		case opcodeapi.OP_LOADK:
-			L.Stack[ra].Val = k[opcodeapi.GetArgBx(inst)]
+		case opcode.OP_LOADK:
+			L.Stack[ra].Val = k[opcode.GetArgBx(inst)]
 
-		case opcodeapi.OP_LOADKX:
-			ax := opcodeapi.GetArgAx(code[ci.SavedPC])
+		case opcode.OP_LOADKX:
+			ax := opcode.GetArgAx(code[ci.SavedPC])
 			ci.SavedPC++
 			L.Stack[ra].Val = k[ax]
 
-		case opcodeapi.OP_LOADFALSE:
-			L.Stack[ra].Val = objectapi.False
+		case opcode.OP_LOADFALSE:
+			L.Stack[ra].Val = object.False
 
-		case opcodeapi.OP_LFALSESKIP:
-			L.Stack[ra].Val = objectapi.False
+		case opcode.OP_LFALSESKIP:
+			L.Stack[ra].Val = object.False
 			ci.SavedPC++ // skip next instruction
 
-		case opcodeapi.OP_LOADTRUE:
-			L.Stack[ra].Val = objectapi.True
+		case opcode.OP_LOADTRUE:
+			L.Stack[ra].Val = object.True
 
-		case opcodeapi.OP_LOADNIL:
-			b := opcodeapi.GetArgB(inst)
+		case opcode.OP_LOADNIL:
+			b := opcode.GetArgB(inst)
 			for i := 0; i <= b; i++ {
-				L.Stack[ra+i].Val = objectapi.Nil
+				L.Stack[ra+i].Val = object.Nil
 			}
 
 		// ===== Upvalues =====
 
-		case opcodeapi.OP_GETUPVAL:
-			b := opcodeapi.GetArgB(inst)
+		case opcode.OP_GETUPVAL:
+			b := opcode.GetArgB(inst)
 			L.Stack[ra].Val = cl.UpVals[b].Get(L.Stack)
 
-		case opcodeapi.OP_SETUPVAL:
-			b := opcodeapi.GetArgB(inst)
+		case opcode.OP_SETUPVAL:
+			b := opcode.GetArgB(inst)
 			cl.UpVals[b].Set(L.Stack, L.Stack[ra].Val)
 
-		case opcodeapi.OP_CLOSE:
-			closureapi.CloseUpvals(L, ra)
+		case opcode.OP_CLOSE:
+			closure.CloseUpvals(L, ra)
 			CloseTBC(L, ra)
 
-		case opcodeapi.OP_TBC:
+		case opcode.OP_TBC:
 			// To-be-closed: mark the variable in the TBC linked list
 			MarkTBC(L, ra)
 
 		// ===== Table access =====
 
-		case opcodeapi.OP_GETTABUP:
-			b := opcodeapi.GetArgB(inst)
+		case opcode.OP_GETTABUP:
+			b := opcode.GetArgB(inst)
 			upval := cl.UpVals[b].Get(L.Stack)
-			rc := k[opcodeapi.GetArgC(inst)]
+			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
-				h := upval.Val.(*tableapi.Table)
+				h := upval.Val.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -224,11 +224,11 @@ startfunc:
 				FinishGet(L, upval, rc, ra)
 			}
 
-		case opcodeapi.OP_GETTABLE:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_GETTABLE:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsTable() {
-				h := rb.Val.(*tableapi.Table)
+				h := rb.Val.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -239,26 +239,26 @@ startfunc:
 				FinishGet(L, rb, rc, ra)
 			}
 
-		case opcodeapi.OP_GETI:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			c := int64(opcodeapi.GetArgC(inst))
+		case opcode.OP_GETI:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			c := int64(opcode.GetArgC(inst))
 			if rb.IsTable() {
-				h := rb.Val.(*tableapi.Table)
+				h := rb.Val.(*table.Table)
 				val, found := h.GetInt(c)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
 				} else {
-					FinishGet(L, rb, objectapi.MakeInteger(c), ra)
+					FinishGet(L, rb, object.MakeInteger(c), ra)
 				}
 			} else {
-				FinishGet(L, rb, objectapi.MakeInteger(c), ra)
+				FinishGet(L, rb, object.MakeInteger(c), ra)
 			}
 
-		case opcodeapi.OP_GETFIELD:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_GETFIELD:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := k[opcode.GetArgC(inst)]
 			if rb.IsTable() {
-				h := rb.Val.(*tableapi.Table)
+				h := rb.Val.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -269,15 +269,15 @@ startfunc:
 				FinishGet(L, rb, rc, ra)
 			}
 
-		case opcodeapi.OP_SETTABUP:
-			b := opcodeapi.GetArgB(inst)
-			upval := cl.UpVals[opcodeapi.GetArgA(inst)].Get(L.Stack)
+		case opcode.OP_SETTABUP:
+			b := opcode.GetArgB(inst)
+			upval := cl.UpVals[opcode.GetArgA(inst)].Get(L.Stack)
 			rb := k[b]
-			var rc objectapi.TValue
-			if opcodeapi.GetArgK(inst) != 0 {
-				rc = k[opcodeapi.GetArgC(inst)]
+			var rc object.TValue
+			if opcode.GetArgK(inst) != 0 {
+				rc = k[opcode.GetArgC(inst)]
 			} else {
-				rc = L.Stack[base+opcodeapi.GetArgC(inst)].Val
+				rc = L.Stack[base+opcode.GetArgC(inst)].Val
 			}
 			ra = 0 // OP_SETTABUP uses A for upvalue index, not register
 			if upval.IsTable() {
@@ -286,13 +286,13 @@ startfunc:
 				FinishSet(L, upval, rb, rc)
 			}
 
-		case opcodeapi.OP_SETTABLE:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			var rc objectapi.TValue
-			if opcodeapi.GetArgK(inst) != 0 {
-				rc = k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_SETTABLE:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			var rc object.TValue
+			if opcode.GetArgK(inst) != 0 {
+				rc = k[opcode.GetArgC(inst)]
 			} else {
-				rc = L.Stack[base+opcodeapi.GetArgC(inst)].Val
+				rc = L.Stack[base+opcode.GetArgC(inst)].Val
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
@@ -301,28 +301,28 @@ startfunc:
 				FinishSet(L, tval, rb, rc)
 			}
 
-		case opcodeapi.OP_SETI:
-			b := int64(opcodeapi.GetArgB(inst))
-			var rc objectapi.TValue
-			if opcodeapi.GetArgK(inst) != 0 {
-				rc = k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_SETI:
+			b := int64(opcode.GetArgB(inst))
+			var rc object.TValue
+			if opcode.GetArgK(inst) != 0 {
+				rc = k[opcode.GetArgC(inst)]
 			} else {
-				rc = L.Stack[base+opcodeapi.GetArgC(inst)].Val
+				rc = L.Stack[base+opcode.GetArgC(inst)].Val
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				tableSetWithMeta(L, tval, objectapi.MakeInteger(b), rc)
+				tableSetWithMeta(L, tval, object.MakeInteger(b), rc)
 			} else {
-				FinishSet(L, tval, objectapi.MakeInteger(b), rc)
+				FinishSet(L, tval, object.MakeInteger(b), rc)
 			}
 
-		case opcodeapi.OP_SETFIELD:
-			rb := k[opcodeapi.GetArgB(inst)]
-			var rc objectapi.TValue
-			if opcodeapi.GetArgK(inst) != 0 {
-				rc = k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_SETFIELD:
+			rb := k[opcode.GetArgB(inst)]
+			var rc object.TValue
+			if opcode.GetArgK(inst) != 0 {
+				rc = k[opcode.GetArgC(inst)]
 			} else {
-				rc = L.Stack[base+opcodeapi.GetArgC(inst)].Val
+				rc = L.Stack[base+opcode.GetArgC(inst)].Val
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
@@ -331,22 +331,22 @@ startfunc:
 				FinishSet(L, tval, rb, rc)
 			}
 
-		case opcodeapi.OP_NEWTABLE:
-			b := opcodeapi.GetArgVB(inst)
-			c := opcodeapi.GetArgVC(inst)
+		case opcode.OP_NEWTABLE:
+			b := opcode.GetArgVB(inst)
+			c := opcode.GetArgVC(inst)
 			if b > 0 {
 				b = 1 << (b - 1)
 			}
-			if opcodeapi.GetArgK(inst) != 0 {
-				c += opcodeapi.GetArgAx(code[ci.SavedPC]) * (opcodeapi.MaxArgVC + 1)
+			if opcode.GetArgK(inst) != 0 {
+				c += opcode.GetArgAx(code[ci.SavedPC]) * (opcode.MaxArgVC + 1)
 			}
 			ci.SavedPC++ // skip extra arg
-			t := tableapi.New(c, b)
+			t := table.New(c, b)
 			L.Global.LinkGC(t) // V5: register in allgc chain
 			size := t.EstimateBytes()
 			atomic.AddInt64(&L.Global.GCTotalBytes, size)
 			// V5 GC sweep handles dealloc accounting — no AddCleanup needed
-			L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
+			L.Stack[ra].Val = object.TValue{Tt: object.TagTable, Val: t}
 
 			// Periodic GC: run Lua GC during tight allocation loops.
 			// V5 GC handles __gc via finobj list.
@@ -354,12 +354,12 @@ startfunc:
 				checkPeriodicGC(g, L)
 			}
 
-		case opcodeapi.OP_SELF:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_SELF:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := k[opcode.GetArgC(inst)]
 			L.Stack[ra+1].Val = rb // save table as self
 			if rb.IsTable() {
-				h := rb.Val.(*tableapi.Table)
+				h := rb.Val.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -372,25 +372,25 @@ startfunc:
 
 		// ===== Arithmetic with immediate =====
 
-		case opcodeapi.OP_ADDI:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			ic := int64(opcodeapi.GetArgSC(inst))
+		case opcode.OP_ADDI:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			ic := int64(opcode.GetArgSC(inst))
 			if rb.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() + ic)
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() + ic)
 				ci.SavedPC++ // skip MMBIN
 			} else if rb.IsFloat() {
-				L.Stack[ra].Val = objectapi.MakeFloat(rb.Float() + float64(ic))
+				L.Stack[ra].Val = object.MakeFloat(rb.Float() + float64(ic))
 				ci.SavedPC++
 			}
 			// else: fall through to MMBINI on next instruction
 
 		// ===== Arithmetic with constant =====
 
-		case opcodeapi.OP_ADDK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_ADDK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() + kc.Integer())
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() + kc.Integer())
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
@@ -401,11 +401,11 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_SUBK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_SUBK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() - kc.Integer())
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() - kc.Integer())
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
@@ -416,11 +416,11 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_MULK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_MULK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() * kc.Integer())
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() * kc.Integer())
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
@@ -431,59 +431,59 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_MODK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_MODK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, rb.Integer(), kc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(IMod(L, rb.Integer(), kc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(kc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
 					} else {
-						L.Stack[ra].Val = objectapi.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
+						L.Stack[ra].Val = object.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
 					}
 					ci.SavedPC++
 				}
 			}
 
-		case opcodeapi.OP_POWK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_POWK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			nb, ok1 := ToNumberNS(rb)
 			nc, ok2 := ToNumberNS(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeFloat(math.Pow(nb, nc))
+				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_DIVK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_DIVK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			nb, ok1 := ToNumberNS(rb)
 			nc, ok2 := ToNumberNS(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeFloat(nb / nc)
+				L.Stack[ra].Val = object.MakeFloat(nb / nc)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_IDIVK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_IDIVK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, rb.Integer(), kc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(IDiv(L, rb.Integer(), kc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(kc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
 					} else {
-						L.Stack[ra].Val = objectapi.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
+						L.Stack[ra].Val = object.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
 					}
 					ci.SavedPC++
 				}
@@ -491,61 +491,61 @@ startfunc:
 
 		// ===== Bitwise with constant =====
 
-		case opcodeapi.OP_BANDK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_BANDK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ib & ic)
+				L.Stack[ra].Val = object.MakeInteger(ib & ic)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_BORK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_BORK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ib | ic)
+				L.Stack[ra].Val = object.MakeInteger(ib | ic)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_BXORK:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			kc := k[opcodeapi.GetArgC(inst)]
+		case opcode.OP_BXORK:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			kc := k[opcode.GetArgC(inst)]
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ib ^ ic)
+				L.Stack[ra].Val = object.MakeInteger(ib ^ ic)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_SHLI:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			ic := int64(opcodeapi.GetArgSC(inst))
+		case opcode.OP_SHLI:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			ic := int64(opcode.GetArgSC(inst))
 			ib, ok := toIntegerStrict(rb)
 			if ok {
-				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ic, ib))
+				L.Stack[ra].Val = object.MakeInteger(ShiftL(ic, ib))
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_SHRI:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			ic := int64(opcodeapi.GetArgSC(inst))
+		case opcode.OP_SHRI:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			ic := int64(opcode.GetArgSC(inst))
 			ib, ok := toIntegerStrict(rb)
 			if ok {
-				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ib, -ic))
+				L.Stack[ra].Val = object.MakeInteger(ShiftL(ib, -ic))
 				ci.SavedPC++
 			}
 
 		// ===== Arithmetic register-register =====
 
-		case opcodeapi.OP_ADD:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_ADD:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() + rc.Integer())
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() + rc.Integer())
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
@@ -556,11 +556,11 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_SUB:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_SUB:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() - rc.Integer())
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() - rc.Integer())
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
@@ -571,11 +571,11 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_MUL:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_MUL:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(rb.Integer() * rc.Integer())
+				L.Stack[ra].Val = object.MakeInteger(rb.Integer() * rc.Integer())
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
@@ -586,59 +586,59 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_MOD:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_MOD:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, rb.Integer(), rc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(IMod(L, rb.Integer(), rc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(rc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = objectapi.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
 					} else {
-						L.Stack[ra].Val = objectapi.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
+						L.Stack[ra].Val = object.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
 					}
 					ci.SavedPC++
 				}
 			}
 
-		case opcodeapi.OP_POW:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_POW:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			nb, ok1 := ToNumberNS(rb)
 			nc, ok2 := ToNumberNS(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeFloat(math.Pow(nb, nc))
+				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_DIV:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_DIV:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			nb, ok1 := ToNumberNS(rb)
 			nc, ok2 := ToNumberNS(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeFloat(nb / nc)
+				L.Stack[ra].Val = object.MakeFloat(nb / nc)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_IDIV:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_IDIV:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, rb.Integer(), rc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(IDiv(L, rb.Integer(), rc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(rc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = objectapi.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
 					} else {
-						L.Stack[ra].Val = objectapi.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
+						L.Stack[ra].Val = object.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
 					}
 					ci.SavedPC++
 				}
@@ -646,116 +646,116 @@ startfunc:
 
 		// ===== Bitwise register-register =====
 
-		case opcodeapi.OP_BAND:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_BAND:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ib & ic)
+				L.Stack[ra].Val = object.MakeInteger(ib & ic)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_BOR:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_BOR:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ib | ic)
+				L.Stack[ra].Val = object.MakeInteger(ib | ic)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_BXOR:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_BXOR:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ib ^ ic)
+				L.Stack[ra].Val = object.MakeInteger(ib ^ ic)
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_SHL:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_SHL:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ib, ic))
+				L.Stack[ra].Val = object.MakeInteger(ShiftL(ib, ic))
 				ci.SavedPC++
 			}
 
-		case opcodeapi.OP_SHR:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+		case opcode.OP_SHR:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = objectapi.MakeInteger(ShiftL(ib, -ic))
+				L.Stack[ra].Val = object.MakeInteger(ShiftL(ib, -ic))
 				ci.SavedPC++
 			}
 
 		// ===== Metamethod fallback =====
 
-		case opcodeapi.OP_MMBIN:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			tm := mmapi.TMS(opcodeapi.GetArgC(inst))
+		case opcode.OP_MMBIN:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			tm := metamethod.TMS(opcode.GetArgC(inst))
 			prevInst := code[ci.SavedPC-2]
-			result := base + opcodeapi.GetArgA(prevInst)
-			tryBinTM(L, L.Stack[ra].Val, rb, result, tm, ra-base, opcodeapi.GetArgB(inst))
+			result := base + opcode.GetArgA(prevInst)
+			tryBinTM(L, L.Stack[ra].Val, rb, result, tm, ra-base, opcode.GetArgB(inst))
 
-		case opcodeapi.OP_MMBINI:
-			imm := opcodeapi.GetArgSB(inst)
-			tm := mmapi.TMS(opcodeapi.GetArgC(inst))
-			flip := opcodeapi.GetArgK(inst) != 0
+		case opcode.OP_MMBINI:
+			imm := opcode.GetArgSB(inst)
+			tm := metamethod.TMS(opcode.GetArgC(inst))
+			flip := opcode.GetArgK(inst) != 0
 			prevInst := code[ci.SavedPC-2]
-			result := base + opcodeapi.GetArgA(prevInst)
+			result := base + opcode.GetArgA(prevInst)
 			tryBiniTM(L, L.Stack[ra].Val, imm, flip, result, tm, ra-base)
 
-		case opcodeapi.OP_MMBINK:
-			imm := k[opcodeapi.GetArgB(inst)]
-			tm := mmapi.TMS(opcodeapi.GetArgC(inst))
-			flip := opcodeapi.GetArgK(inst) != 0
+		case opcode.OP_MMBINK:
+			imm := k[opcode.GetArgB(inst)]
+			tm := metamethod.TMS(opcode.GetArgC(inst))
+			flip := opcode.GetArgK(inst) != 0
 			prevInst := code[ci.SavedPC-2]
-			result := base + opcodeapi.GetArgA(prevInst)
+			result := base + opcode.GetArgA(prevInst)
 			tryBinKTM(L, L.Stack[ra].Val, imm, flip, result, tm, ra-base)
 
 		// ===== Unary =====
 
-		case opcodeapi.OP_UNM:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_UNM:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			if rb.IsInteger() {
-				L.Stack[ra].Val = objectapi.MakeInteger(-rb.Integer())
+				L.Stack[ra].Val = object.MakeInteger(-rb.Integer())
 			} else if rb.IsFloat() {
-				L.Stack[ra].Val = objectapi.MakeFloat(-rb.Float())
+				L.Stack[ra].Val = object.MakeFloat(-rb.Float())
 			} else {
-				tryBinTM(L, rb, rb, ra, mmapi.TM_UNM, opcodeapi.GetArgB(inst), opcodeapi.GetArgB(inst))
+				tryBinTM(L, rb, rb, ra, metamethod.TM_UNM, opcode.GetArgB(inst), opcode.GetArgB(inst))
 			}
 
-		case opcodeapi.OP_BNOT:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_BNOT:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			ib, ok := toIntegerStrict(rb)
 			if ok {
-				L.Stack[ra].Val = objectapi.MakeInteger(^ib)
+				L.Stack[ra].Val = object.MakeInteger(^ib)
 			} else {
-				tryBinTM(L, rb, rb, ra, mmapi.TM_BNOT, opcodeapi.GetArgB(inst), opcodeapi.GetArgB(inst))
+				tryBinTM(L, rb, rb, ra, metamethod.TM_BNOT, opcode.GetArgB(inst), opcode.GetArgB(inst))
 			}
 
-		case opcodeapi.OP_NOT:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_NOT:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			if rb.IsFalsy() {
-				L.Stack[ra].Val = objectapi.True
+				L.Stack[ra].Val = object.True
 			} else {
-				L.Stack[ra].Val = objectapi.False
+				L.Stack[ra].Val = object.False
 			}
 
-		case opcodeapi.OP_LEN:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_LEN:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			ObjLen(L, ra, rb)
 
-		case opcodeapi.OP_CONCAT:
-			n := opcodeapi.GetArgB(inst)
+		case opcode.OP_CONCAT:
+			n := opcode.GetArgB(inst)
 			L.Top = ra + n
 			Concat(L, n)
 			L.Stack[ra].Val = L.Stack[L.Top-1].Val
@@ -768,49 +768,49 @@ startfunc:
 
 		// ===== Comparison =====
 
-		case opcodeapi.OP_EQ:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_EQ:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			// Bump L.Top to frame top so callTMRes scratch space
 			// doesn't clobber live registers (metamethod dispatch).
 			L.Top = ci.Top
 			cond := EqualObj(L, L.Stack[ra].Val, rb)
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++ // skip jump
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_LT:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_LT:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			L.Top = ci.Top
 			cond := LessThan(L, L.Stack[ra].Val, rb)
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_LE:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
+		case opcode.OP_LE:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			L.Top = ci.Top
 			cond := LessEqual(L, L.Stack[ra].Val, rb)
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_EQK:
-			rb := k[opcodeapi.GetArgB(inst)]
+		case opcode.OP_EQK:
+			rb := k[opcode.GetArgB(inst)]
 			cond := RawEqualObj(L.Stack[ra].Val, rb)
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_EQI:
-			im := int64(opcodeapi.GetArgSB(inst))
+		case opcode.OP_EQI:
+			im := int64(opcode.GetArgSB(inst))
 			v := L.Stack[ra].Val
 			var cond bool
 			if v.IsInteger() {
@@ -818,14 +818,14 @@ startfunc:
 			} else if v.IsFloat() {
 				cond = v.Float() == float64(im)
 			}
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_LTI:
-			im := int64(opcodeapi.GetArgSB(inst))
+		case opcode.OP_LTI:
+			im := int64(opcode.GetArgSB(inst))
 			v := L.Stack[ra].Val
 			var cond bool
 			if v.IsInteger() {
@@ -834,18 +834,18 @@ startfunc:
 				cond = v.Float() < float64(im)
 			} else {
 				// Metamethod fallback: callOrderITM(L, v, im, false, isf, TM_LT)
-				isf := opcodeapi.GetArgC(inst) != 0
+				isf := opcode.GetArgC(inst) != 0
 				L.Top = ci.Top
-				cond = callOrderITM(L, v, im, false, isf, mmapi.TM_LT)
+				cond = callOrderITM(L, v, im, false, isf, metamethod.TM_LT)
 			}
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_LEI:
-			im := int64(opcodeapi.GetArgSB(inst))
+		case opcode.OP_LEI:
+			im := int64(opcode.GetArgSB(inst))
 			v := L.Stack[ra].Val
 			var cond bool
 			if v.IsInteger() {
@@ -853,18 +853,18 @@ startfunc:
 			} else if v.IsFloat() {
 				cond = v.Float() <= float64(im)
 			} else {
-				isf := opcodeapi.GetArgC(inst) != 0
+				isf := opcode.GetArgC(inst) != 0
 				L.Top = ci.Top
-				cond = callOrderITM(L, v, im, false, isf, mmapi.TM_LE)
+				cond = callOrderITM(L, v, im, false, isf, metamethod.TM_LE)
 			}
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_GTI:
-			im := int64(opcodeapi.GetArgSB(inst))
+		case opcode.OP_GTI:
+			im := int64(opcode.GetArgSB(inst))
 			v := L.Stack[ra].Val
 			var cond bool
 			if v.IsInteger() {
@@ -873,18 +873,18 @@ startfunc:
 				cond = v.Float() > float64(im)
 			} else {
 				// GTI: a > im ⟺ im < a, so flip=true, TM_LT
-				isf := opcodeapi.GetArgC(inst) != 0
+				isf := opcode.GetArgC(inst) != 0
 				L.Top = ci.Top
-				cond = callOrderITM(L, v, im, true, isf, mmapi.TM_LT)
+				cond = callOrderITM(L, v, im, true, isf, metamethod.TM_LT)
 			}
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_GEI:
-			im := int64(opcodeapi.GetArgSB(inst))
+		case opcode.OP_GEI:
+			im := int64(opcode.GetArgSB(inst))
 			v := L.Stack[ra].Val
 			var cond bool
 			if v.IsInteger() {
@@ -893,51 +893,51 @@ startfunc:
 				cond = v.Float() >= float64(im)
 			} else {
 				// GEI: a >= im ⟺ im <= a, so flip=true, TM_LE
-				isf := opcodeapi.GetArgC(inst) != 0
+				isf := opcode.GetArgC(inst) != 0
 				L.Top = ci.Top
-				cond = callOrderITM(L, v, im, true, isf, mmapi.TM_LE)
+				cond = callOrderITM(L, v, im, true, isf, metamethod.TM_LE)
 			}
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_TEST:
+		case opcode.OP_TEST:
 			cond := !L.Stack[ra].Val.IsFalsy()
-			if cond != (opcodeapi.GetArgK(inst) != 0) {
+			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
-		case opcodeapi.OP_TESTSET:
-			rb := L.Stack[base+opcodeapi.GetArgB(inst)].Val
-			if rb.IsFalsy() == (opcodeapi.GetArgK(inst) != 0) {
+		case opcode.OP_TESTSET:
+			rb := L.Stack[base+opcode.GetArgB(inst)].Val
+			if rb.IsFalsy() == (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++ // condition failed, skip jump
 			} else {
 				L.Stack[ra].Val = rb
-				ci.SavedPC += opcodeapi.GetArgSJ(code[ci.SavedPC]) + 1
+				ci.SavedPC += opcode.GetArgSJ(code[ci.SavedPC]) + 1
 			}
 
 		// ===== Jump =====
 
-		case opcodeapi.OP_JMP:
-			ci.SavedPC += opcodeapi.GetArgSJ(inst)
+		case opcode.OP_JMP:
+			ci.SavedPC += opcode.GetArgSJ(inst)
 
 		// ===== For loops =====
 
-		case opcodeapi.OP_FORPREP:
+		case opcode.OP_FORPREP:
 			if ForPrep(L, ra) {
-				ci.SavedPC += opcodeapi.GetArgBx(inst) + 1 // skip loop
+				ci.SavedPC += opcode.GetArgBx(inst) + 1 // skip loop
 			}
 
-		case opcodeapi.OP_FORLOOP:
+		case opcode.OP_FORLOOP:
 			if ForLoop(L, ra) {
-				ci.SavedPC -= opcodeapi.GetArgBx(inst) // jump back
+				ci.SavedPC -= opcode.GetArgBx(inst) // jump back
 			}
 
-		case opcodeapi.OP_TFORPREP:
+		case opcode.OP_TFORPREP:
 			// Swap control and closing variables
 			// Before: ra=iter, ra+1=state, ra+2=control, ra+3=closing
 			// After:  ra=iter, ra+1=state, ra+2=closing(tbc), ra+3=control
@@ -947,26 +947,26 @@ startfunc:
 			// Mark the closing variable (now at ra+2) as to-be-closed
 			// C Lua: halfProtect(luaF_newtbcupval(L, ra + 2))
 			MarkTBC(L, ra+2)
-			ci.SavedPC += opcodeapi.GetArgBx(inst)
+			ci.SavedPC += opcode.GetArgBx(inst)
 			// Fall through to TFORCALL
 			inst = code[ci.SavedPC]
 			ci.SavedPC++
-			ra = base + opcodeapi.GetArgA(inst)
+			ra = base + opcode.GetArgA(inst)
 			goto tforcall
 
-		case opcodeapi.OP_TFORCALL:
+		case opcode.OP_TFORCALL:
 			goto tforcall
 
-		case opcodeapi.OP_TFORLOOP:
+		case opcode.OP_TFORLOOP:
 			if !L.Stack[ra+3].Val.IsNil() {
-				ci.SavedPC -= opcodeapi.GetArgBx(inst) // jump back
+				ci.SavedPC -= opcode.GetArgBx(inst) // jump back
 			}
 
 		// ===== Call/Return =====
 
-		case opcodeapi.OP_CALL:
-			b := opcodeapi.GetArgB(inst)
-			nresults := opcodeapi.GetArgC(inst) - 1
+		case opcode.OP_CALL:
+			b := opcode.GetArgB(inst)
+			nresults := opcode.GetArgC(inst) - 1
 			if b != 0 {
 				L.Top = ra + b
 			}
@@ -978,9 +978,9 @@ startfunc:
 			}
 			// C function already executed
 
-		case opcodeapi.OP_TAILCALL:
-			b := opcodeapi.GetArgB(inst)
-			nparams1 := opcodeapi.GetArgC(inst)
+		case opcode.OP_TAILCALL:
+			b := opcode.GetArgB(inst)
+			nparams1 := opcode.GetArgC(inst)
 			delta := 0
 			if nparams1 != 0 {
 				delta = ci.NExtraArgs + nparams1
@@ -990,8 +990,8 @@ startfunc:
 			} else {
 				b = L.Top - ra
 			}
-			if opcodeapi.GetArgK(inst) != 0 {
-				closureapi.CloseUpvals(L, base)
+			if opcode.GetArgK(inst) != 0 {
+				closure.CloseUpvals(L, base)
 			}
 			n := PreTailCall(L, ci, ra, b, delta)
 			if n < 0 {
@@ -1003,14 +1003,14 @@ startfunc:
 			PosCall(L, ci, n)
 			goto ret
 
-		case opcodeapi.OP_RETURN:
-			b := opcodeapi.GetArgB(inst)
+		case opcode.OP_RETURN:
+			b := opcode.GetArgB(inst)
 			n := b - 1
-			nparams1 := opcodeapi.GetArgC(inst)
+			nparams1 := opcode.GetArgC(inst)
 			if n < 0 {
 				n = L.Top - ra
 			}
-			if opcodeapi.GetArgK(inst) != 0 {
+			if opcode.GetArgK(inst) != 0 {
 				// C Lua: save nres, ensure stack space, close upvals+TBC, refresh base/ra
 				// Use StatusCloseKTop so callCloseMethod does NOT reset L.Top —
 				// return values sit on the stack above the TBC variables.
@@ -1018,12 +1018,12 @@ startfunc:
 				if L.Top < ci.Top {
 					L.Top = ci.Top
 				}
-				closureapi.CloseUpvals(L, base)
-				CloseTBCWithError(L, base, stateapi.StatusCloseKTop, objectapi.Nil, true)
+				closure.CloseUpvals(L, base)
+				CloseTBCWithError(L, base, state.StatusCloseKTop, object.Nil, true)
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
 				base = ci.Func + 1
-				ra = base + opcodeapi.GetArgA(inst)
+				ra = base + opcode.GetArgA(inst)
 			}
 			if nparams1 != 0 {
 				ci.Func -= ci.NExtraArgs + nparams1
@@ -1032,7 +1032,7 @@ startfunc:
 			PosCall(L, ci, n)
 			goto ret
 
-		case opcodeapi.OP_RETURN0:
+		case opcode.OP_RETURN0:
 			if L.HookMask != 0 {
 				// Hooks active — fall back to full PosCall (fires return hook)
 				L.Top = ra
@@ -1043,7 +1043,7 @@ startfunc:
 				L.CI = ci.Prev
 				L.Top = base - 1
 				for i := 0; i < nres; i++ {
-					L.Stack[L.Top].Val = objectapi.Nil
+					L.Stack[L.Top].Val = object.Nil
 					L.Top++
 				}
 				if nres < 0 {
@@ -1052,7 +1052,7 @@ startfunc:
 			}
 			goto ret
 
-		case opcodeapi.OP_RETURN1:
+		case opcode.OP_RETURN1:
 			if L.HookMask != 0 {
 				// Hooks active — fall back to full PosCall (fires return hook)
 				L.Top = ra + 1
@@ -1067,7 +1067,7 @@ startfunc:
 					L.Stack[base-1].Val = L.Stack[ra].Val
 					L.Top = base
 					for i := 1; i < nres; i++ {
-						L.Stack[L.Top].Val = objectapi.Nil
+						L.Stack[L.Top].Val = object.Nil
 						L.Top++
 					}
 				}
@@ -1076,8 +1076,8 @@ startfunc:
 
 		// ===== Closure/Vararg =====
 
-		case opcodeapi.OP_CLOSURE:
-			bx := opcodeapi.GetArgBx(inst)
+		case opcode.OP_CLOSURE:
+			bx := opcode.GetArgBx(inst)
 			p := cl.Proto.Protos[bx]
 			PushClosure(L, p, cl.UpVals, base, ra)
 
@@ -1086,15 +1086,15 @@ startfunc:
 				checkPeriodicGC(g, L)
 			}
 
-		case opcodeapi.OP_VARARG:
-			n := opcodeapi.GetArgC(inst) - 1
+		case opcode.OP_VARARG:
+			n := opcode.GetArgC(inst) - 1
 			vatab := -1
-			if opcodeapi.GetArgK(inst) != 0 {
-				vatab = opcodeapi.GetArgB(inst)
+			if opcode.GetArgK(inst) != 0 {
+				vatab = opcode.GetArgB(inst)
 			}
 			GetVarargs(L, ci, ra, n, vatab)
 
-		case opcodeapi.OP_VARARGPREP:
+		case opcode.OP_VARARGPREP:
 			AdjustVarargs(L, ci, cl.Proto)
 			// Update base after adjustment
 			base = ci.Func + 1
@@ -1108,16 +1108,16 @@ startfunc:
 
 		// ===== Table construction =====
 
-		case opcodeapi.OP_SETLIST:
-			n := opcodeapi.GetArgVB(inst)
-			last := opcodeapi.GetArgVC(inst)
-			h := L.Stack[ra].Val.Val.(*tableapi.Table)
+		case opcode.OP_SETLIST:
+			n := opcode.GetArgVB(inst)
+			last := opcode.GetArgVC(inst)
+			h := L.Stack[ra].Val.Val.(*table.Table)
 			if n == 0 {
 				n = L.Top - ra - 1
 			}
 			last += n
-			if opcodeapi.GetArgK(inst) != 0 {
-				last += opcodeapi.GetArgAx(code[ci.SavedPC]) * (opcodeapi.MaxArgVC + 1)
+			if opcode.GetArgK(inst) != 0 {
+				last += opcode.GetArgAx(code[ci.SavedPC]) * (opcode.MaxArgVC + 1)
 				ci.SavedPC++
 			}
 			for i := n; i > 0; i-- {
@@ -1128,24 +1128,24 @@ startfunc:
 
 		// ===== Lua 5.5 new opcodes =====
 
-		case opcodeapi.OP_GETVARG:
+		case opcode.OP_GETVARG:
 			// OP_GETVARG: ra = vararg[rc]
 			// Mirrors C Lua's luaT_getvararg (ltm.c):
 			//   integer key → read from hidden vararg stack slots
 			//   string "n"  → return number of extra args
 			//   anything else → nil
-			rc := L.Stack[base+opcodeapi.GetArgC(inst)].Val
+			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			switch rc.Tt {
-			case objectapi.TagInteger:
+			case object.TagInteger:
 				idx := rc.Val.(int64)
 				nExtra := ci.NExtraArgs
 				if uint64(idx-1) < uint64(nExtra) {
 					varBase := ci.Func - nExtra
 					L.Stack[ra].Val = L.Stack[varBase+int(idx)-1].Val
 				} else {
-					L.Stack[ra].Val = objectapi.Nil
+					L.Stack[ra].Val = object.Nil
 				}
-			case objectapi.TagFloat:
+			case object.TagFloat:
 				f := rc.Val.(float64)
 				if idx, ok := FloatToInteger(f); ok {
 					nExtra := ci.NExtraArgs
@@ -1153,26 +1153,26 @@ startfunc:
 						varBase := ci.Func - nExtra
 						L.Stack[ra].Val = L.Stack[varBase+int(idx)-1].Val
 					} else {
-						L.Stack[ra].Val = objectapi.Nil
+						L.Stack[ra].Val = object.Nil
 					}
 				} else {
-					L.Stack[ra].Val = objectapi.Nil
+					L.Stack[ra].Val = object.Nil
 				}
-			case objectapi.TagShortStr, objectapi.TagLongStr:
-				s := rc.Val.(*objectapi.LuaString)
+			case object.TagShortStr, object.TagLongStr:
+				s := rc.Val.(*object.LuaString)
 				if s.Data == "n" {
-					L.Stack[ra].Val = objectapi.MakeInteger(int64(ci.NExtraArgs))
+					L.Stack[ra].Val = object.MakeInteger(int64(ci.NExtraArgs))
 				} else {
-					L.Stack[ra].Val = objectapi.Nil
+					L.Stack[ra].Val = object.Nil
 				}
 			default:
-				L.Stack[ra].Val = objectapi.Nil
+				L.Stack[ra].Val = object.Nil
 			}
 
-		case opcodeapi.OP_ERRNNIL:
+		case opcode.OP_ERRNNIL:
 			// Error if value is not nil — used for global redefinition check
 			if !L.Stack[ra].Val.IsNil() {
-				bx := opcodeapi.GetArgBx(inst)
+				bx := opcode.GetArgBx(inst)
 				if bx > 0 {
 					// bx-1 is the constant index for the variable name
 					name := k[bx-1]
@@ -1186,7 +1186,7 @@ startfunc:
 				}
 			}
 
-		case opcodeapi.OP_EXTRAARG:
+		case opcode.OP_EXTRAARG:
 			// Should never be executed directly
 			panic("OP_EXTRAARG should not be executed")
 
@@ -1202,21 +1202,21 @@ startfunc:
 		L.Stack[ra+3].Val = L.Stack[ra].Val   // copy function
 		L.Top = ra + 3 + 3
 		{
-			nr := opcodeapi.GetArgC(inst)
+			nr := opcode.GetArgC(inst)
 			Call(L, ra+3, nr)
 		}
 		L.Top = ci.Top // restore top
 		// Next instruction should be TFORLOOP
 		inst = code[ci.SavedPC]
 		ci.SavedPC++
-		ra = base + opcodeapi.GetArgA(inst)
+		ra = base + opcode.GetArgA(inst)
 		if !L.Stack[ra+3].Val.IsNil() {
-			ci.SavedPC -= opcodeapi.GetArgBx(inst)
+			ci.SavedPC -= opcode.GetArgBx(inst)
 		}
 		continue
 
 	ret:
-		if ci.CallStatus&stateapi.CISTFresh != 0 {
+		if ci.CallStatus&state.CISTFresh != 0 {
 			return // end this frame
 		}
 		ci = L.CI

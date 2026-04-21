@@ -9,9 +9,9 @@ package parse
 import (
 	"fmt"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	lexapi "github.com/akzj/go-lua/internal/lex"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/lex"
+	"github.com/akzj/go-lua/internal/opcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -39,72 +39,72 @@ const loopVarKind = RDKCONST
 // ---------------------------------------------------------------------------
 
 // getFS returns the current FuncState from the LexState.
-func getFS(ls *lexapi.LexState) *FuncState {
+func getFS(ls *lex.LexState) *FuncState {
 	return ls.FuncState.(*FuncState)
 }
 
 // testNext tests whether the current token matches c; if so, skips it.
-func testNext(ls *lexapi.LexState, c lexapi.TokenType) bool {
+func testNext(ls *lex.LexState, c lex.TokenType) bool {
 	if ls.Token.Type == c {
-		lexapi.Next(ls)
+		lex.Next(ls)
 		return true
 	}
 	return false
 }
 
 // check asserts the current token is c.
-func check(ls *lexapi.LexState, c lexapi.TokenType) {
+func check(ls *lex.LexState, c lex.TokenType) {
 	if ls.Token.Type != c {
 		errorExpected(ls, c)
 	}
 }
 
 // checkNext checks current token is c and consumes it.
-func checkNext(ls *lexapi.LexState, c lexapi.TokenType) {
+func checkNext(ls *lex.LexState, c lex.TokenType) {
 	check(ls, c)
-	lexapi.Next(ls)
+	lex.Next(ls)
 }
 
 // checkMatch matches a closing token (end, ), ]).
-func checkMatch(ls *lexapi.LexState, what, who lexapi.TokenType, where int) {
+func checkMatch(ls *lex.LexState, what, who lex.TokenType, where int) {
 	if !testNext(ls, what) {
 		if where == ls.Line {
 			errorExpected(ls, what)
 		} else {
 			msg := fmt.Sprintf("%s expected (to close %s at line %d)",
-				lexapi.Token2Str(what), lexapi.Token2Str(who), where)
-			lexapi.SyntaxErr(ls, msg)
+				lex.Token2Str(what), lex.Token2Str(who), where)
+			lex.SyntaxErr(ls, msg)
 		}
 	}
 }
 
 // strCheckName reads and returns an identifier name.
-func strCheckName(ls *lexapi.LexState) string {
-	check(ls, lexapi.TK_NAME)
+func strCheckName(ls *lex.LexState) string {
+	check(ls, lex.TK_NAME)
 	s := ls.Token.StrVal
-	lexapi.Next(ls)
+	lex.Next(ls)
 	return s
 }
 
 // errorExpected raises an error for an expected token.
-func errorExpected(ls *lexapi.LexState, token lexapi.TokenType) {
-	msg := fmt.Sprintf("%s expected", lexapi.Token2Str(token))
-	lexapi.SyntaxErr(ls, msg)
+func errorExpected(ls *lex.LexState, token lex.TokenType) {
+	msg := fmt.Sprintf("%s expected", lex.Token2Str(token))
+	lex.SyntaxErr(ls, msg)
 }
 
 // checkCondition checks a condition, raising a syntax error if false.
-func checkCondition(ls *lexapi.LexState, cond bool, msg string) {
+func checkCondition(ls *lex.LexState, cond bool, msg string) {
 	if !cond {
-		lexapi.SyntaxErr(ls, msg)
+		lex.SyntaxErr(ls, msg)
 	}
 }
 
 // blockFollow checks if the current token can end a block.
-func blockFollow(ls *lexapi.LexState, withUntil bool) bool {
+func blockFollow(ls *lex.LexState, withUntil bool) bool {
 	switch ls.Token.Type {
-	case lexapi.TK_ELSE, lexapi.TK_ELSEIF, lexapi.TK_END, lexapi.TK_EOS:
+	case lex.TK_ELSE, lex.TK_ELSEIF, lex.TK_END, lex.TK_EOS:
 		return true
-	case lexapi.TK_UNTIL:
+	case lex.TK_UNTIL:
 		return withUntil
 	default:
 		return false
@@ -132,7 +132,7 @@ func codeString(e *ExpDesc, s string) {
 }
 
 // codeName reads a name and inits as VKSTR.
-func codeName(ls *lexapi.LexState, e *ExpDesc) {
+func codeName(ls *lex.LexState, e *ExpDesc) {
 	codeString(e, strCheckName(ls))
 }
 
@@ -168,11 +168,11 @@ func varinreg(vd *VarDesc) bool {
 // ---------------------------------------------------------------------------
 
 // registerLocalVar adds a local variable to Proto.LocVars (debug info).
-func registerLocalVar(ls *lexapi.LexState, fs *FuncState, name string) int {
+func registerLocalVar(ls *lex.LexState, fs *FuncState, name string) int {
 	f := fs.Proto
 	idx := fs.NDebugVars
-	f.LocVars = append(f.LocVars, objectapi.LocVar{
-		Name:    &objectapi.LuaString{Data: name, IsShort: len(name) <= 40},
+	f.LocVars = append(f.LocVars, object.LocVar{
+		Name:    &object.LuaString{Data: name, IsShort: len(name) <= 40},
 		StartPC: fs.PC,
 	})
 	fs.NDebugVars++
@@ -180,7 +180,7 @@ func registerLocalVar(ls *lexapi.LexState, fs *FuncState, name string) int {
 }
 
 // newVarKind creates a new variable with given name and kind.
-func newVarKind(ls *lexapi.LexState, name string, kind byte) int {
+func newVarKind(ls *lex.LexState, name string, kind byte) int {
 	fs := getFS(ls)
 	dyd := ls.DynData.(*Dyndata)
 	dyd.ActVar = append(dyd.ActVar, VarDesc{Name: name, Kind: kind})
@@ -188,12 +188,12 @@ func newVarKind(ls *lexapi.LexState, name string, kind byte) int {
 }
 
 // newLocalVar creates a new regular local variable.
-func newLocalVar(ls *lexapi.LexState, name string) int {
+func newLocalVar(ls *lex.LexState, name string) int {
 	return newVarKind(ls, name, VDKREG)
 }
 
 // newLocalVarLiteral creates a new local with a literal name.
-func newLocalVarLiteral(ls *lexapi.LexState, name string) int {
+func newLocalVarLiteral(ls *lex.LexState, name string) int {
 	return newLocalVar(ls, name)
 }
 
@@ -216,7 +216,7 @@ func regLevel(fs *FuncState, nvar int16) byte {
 }
 
 // localDebugInfo returns the LocVar for a given variable index.
-func localDebugInfo(fs *FuncState, vidx int) *objectapi.LocVar {
+func localDebugInfo(fs *FuncState, vidx int) *object.LocVar {
 	vd := getLocalVarDesc(fs, vidx)
 	if !varinreg(vd) {
 		return nil
@@ -238,7 +238,7 @@ func initVar(fs *FuncState, e *ExpDesc, vidx int) {
 }
 
 // checkReadonly raises an error if assigning to a readonly variable.
-func checkReadonly(ls *lexapi.LexState, e *ExpDesc) {
+func checkReadonly(ls *lex.LexState, e *ExpDesc) {
 	fs := getFS(ls)
 	var varname string
 	switch e.Kind {
@@ -256,7 +256,7 @@ func checkReadonly(ls *lexapi.LexState, e *ExpDesc) {
 			varname = up.Name.Data
 		}
 	case VVARGIND:
-		fs.Proto.Flag |= objectapi.PF_VATAB
+		fs.Proto.Flag |= object.PF_VATAB
 		e.Kind = VINDEXED
 		fallthrough
 	case VINDEXUP, VINDEXSTR, VINDEXED:
@@ -272,7 +272,7 @@ func checkReadonly(ls *lexapi.LexState, e *ExpDesc) {
 }
 
 // adjustLocalVars activates nvars new local variables.
-func adjustLocalVars(ls *lexapi.LexState, nvars int) {
+func adjustLocalVars(ls *lex.LexState, nvars int) {
 	fs := getFS(ls)
 	rl := regLevel(fs, fs.NumActVar)
 	for i := 0; i < nvars; i++ {
@@ -317,9 +317,9 @@ func searchUpvalue(fs *FuncState, name string) int {
 }
 
 // allocUpvalue allocates a new upvalue descriptor.
-func allocUpvalue(fs *FuncState) *objectapi.UpvalDesc {
+func allocUpvalue(fs *FuncState) *object.UpvalDesc {
 	checkLimit(fs, int(fs.NumUps)+1, maxUpval, "upvalues")
-	fs.Proto.Upvalues = append(fs.Proto.Upvalues, objectapi.UpvalDesc{})
+	fs.Proto.Upvalues = append(fs.Proto.Upvalues, object.UpvalDesc{})
 	idx := int(fs.NumUps)
 	fs.NumUps++
 	return &fs.Proto.Upvalues[idx]
@@ -338,7 +338,7 @@ func newUpvalue(fs *FuncState, name string, v *ExpDesc) int {
 		up.Idx = byte(v.Info)
 		up.Kind = prev.Proto.Upvalues[v.Info].Kind
 	}
-	up.Name = &objectapi.LuaString{Data: name, IsShort: len(name) <= 40}
+	up.Name = &object.LuaString{Data: name, IsShort: len(name) <= 40}
 	return int(fs.NumUps) - 1
 }
 
@@ -421,7 +421,7 @@ func singleVarAux(fs *FuncState, n string, v *ExpDesc, base bool) {
 }
 
 // buildGlobal resolves a variable as _ENV[name].
-func buildGlobal(ls *lexapi.LexState, varname string, v *ExpDesc) {
+func buildGlobal(ls *lex.LexState, varname string, v *ExpDesc) {
 	fs := getFS(ls)
 	var key ExpDesc
 	initExp(v, VGLOBAL, -1)
@@ -435,7 +435,7 @@ func buildGlobal(ls *lexapi.LexState, varname string, v *ExpDesc) {
 }
 
 // buildVar resolves a variable, handling global declarations.
-func buildVar(ls *lexapi.LexState, varname string, v *ExpDesc) {
+func buildVar(ls *lex.LexState, varname string, v *ExpDesc) {
 	fs := getFS(ls)
 	initExp(v, VGLOBAL, -1)
 	singleVarAux(fs, varname, v, true)
@@ -453,7 +453,7 @@ func buildVar(ls *lexapi.LexState, varname string, v *ExpDesc) {
 }
 
 // singleVar resolves a name to local/upvalue/global.
-func singleVar(ls *lexapi.LexState, v *ExpDesc) {
+func singleVar(ls *lex.LexState, v *ExpDesc) {
 	buildVar(ls, strCheckName(ls), v)
 }
 
@@ -462,7 +462,7 @@ func singleVar(ls *lexapi.LexState, v *ExpDesc) {
 // ---------------------------------------------------------------------------
 
 // jumpScopeError raises an error for goto jumping into scope.
-func jumpScopeError(ls *lexapi.LexState, gt *LabelDesc) {
+func jumpScopeError(ls *lex.LexState, gt *LabelDesc) {
 	fs := getFS(ls)
 	vd := getLocalVarDesc(fs, int(gt.NumActVar))
 	varname := vd.Name
@@ -474,7 +474,7 @@ func jumpScopeError(ls *lexapi.LexState, gt *LabelDesc) {
 }
 
 // closeGoto resolves a goto to a label.
-func closeGoto(ls *lexapi.LexState, g int, label *LabelDesc, bup bool) {
+func closeGoto(ls *lex.LexState, g int, label *LabelDesc, bup bool) {
 	fs := getFS(ls)
 	dyd := ls.DynData.(*Dyndata)
 	gt := &dyd.Gotos[g]
@@ -485,7 +485,7 @@ func closeGoto(ls *lexapi.LexState, g int, label *LabelDesc, bup bool) {
 		stklevel := regLevel(fs, label.NumActVar)
 		// Swap jump and close
 		fs.Proto.Code[gt.PC+1] = fs.Proto.Code[gt.PC]
-		fs.Proto.Code[gt.PC] = opcodeapi.CreateABCK(opcodeapi.OP_CLOSE, int(stklevel), 0, 0, 0)
+		fs.Proto.Code[gt.PC] = opcode.CreateABCK(opcode.OP_CLOSE, int(stklevel), 0, 0, 0)
 		gt.PC++
 	}
 	PatchList(fs, gt.PC, label.PC)
@@ -495,7 +495,7 @@ func closeGoto(ls *lexapi.LexState, g int, label *LabelDesc, bup bool) {
 }
 
 // findLabel searches for an active label starting at index ilb.
-func findLabel(ls *lexapi.LexState, name string, ilb int) *LabelDesc {
+func findLabel(ls *lex.LexState, name string, ilb int) *LabelDesc {
 	dyd := ls.DynData.(*Dyndata)
 	for i := ilb; i < len(dyd.Labels); i++ {
 		if dyd.Labels[i].Name == name {
@@ -506,7 +506,7 @@ func findLabel(ls *lexapi.LexState, name string, ilb int) *LabelDesc {
 }
 
 // newLabelEntry adds a new label to the given list.
-func newLabelEntry(ls *lexapi.LexState, list *[]LabelDesc, name string, line, pc int) int {
+func newLabelEntry(ls *lex.LexState, list *[]LabelDesc, name string, line, pc int) int {
 	fs := getFS(ls)
 	n := len(*list)
 	*list = append(*list, LabelDesc{
@@ -520,16 +520,16 @@ func newLabelEntry(ls *lexapi.LexState, list *[]LabelDesc, name string, line, pc
 }
 
 // newGotoEntry creates a goto entry with JMP + placeholder CLOSE.
-func newGotoEntry(ls *lexapi.LexState, name string, line int) int {
+func newGotoEntry(ls *lex.LexState, name string, line int) int {
 	fs := getFS(ls)
 	dyd := ls.DynData.(*Dyndata)
 	pc := Jump(fs)
-	CodeABC(fs, opcodeapi.OP_CLOSE, 0, 1, 0) // placeholder
+	CodeABC(fs, opcode.OP_CLOSE, 0, 1, 0) // placeholder
 	return newLabelEntry(ls, &dyd.Gotos, name, line, pc)
 }
 
 // createLabel creates a new label and solves pending gotos.
-func createLabel(ls *lexapi.LexState, name string, line int, last bool) {
+func createLabel(ls *lex.LexState, name string, line int, last bool) {
 	fs := getFS(ls)
 	dyd := ls.DynData.(*Dyndata)
 	l := newLabelEntry(ls, &dyd.Labels, name, line, GetLabel(fs))
@@ -561,7 +561,7 @@ func solveGotos(fs *FuncState, bl *BlockCnt) {
 }
 
 // checkRepeated checks for duplicate labels.
-func checkRepeated(ls *lexapi.LexState, name string) {
+func checkRepeated(ls *lex.LexState, name string) {
 	fs := getFS(ls)
 	lb := findLabel(ls, name, fs.FirstLabel)
 	if lb != nil {
@@ -570,7 +570,7 @@ func checkRepeated(ls *lexapi.LexState, name string) {
 }
 
 // undefGoto raises an error for an undefined goto.
-func undefGoto(ls *lexapi.LexState, gt *LabelDesc) {
+func undefGoto(ls *lex.LexState, gt *LabelDesc) {
 	SemError(ls, fmt.Sprintf("no visible label '%s' for <goto> at line %d", gt.Name, gt.Line))
 }
 
@@ -597,7 +597,7 @@ func leaveBlock(fs *FuncState) {
 	ls := fs.Lex
 	stklevel := regLevel(fs, bl.NumActVar)
 	if bl.Prev != nil && bl.HasUpval {
-		CodeABC(fs, opcodeapi.OP_CLOSE, int(stklevel), 0, 0)
+		CodeABC(fs, opcode.OP_CLOSE, int(stklevel), 0, 0)
 	}
 	fs.FreeReg = stklevel
 	removeVars(fs, bl.NumActVar)
@@ -627,24 +627,24 @@ func leaveBlock(fs *FuncState) {
 // ---------------------------------------------------------------------------
 
 // addPrototype creates a nested Proto.
-func addPrototype(ls *lexapi.LexState) *objectapi.Proto {
+func addPrototype(ls *lex.LexState) *object.Proto {
 	fs := getFS(ls)
 	f := fs.Proto
-	child := &objectapi.Proto{}
+	child := &object.Proto{}
 	f.Protos = append(f.Protos, child)
 	fs.NProtos++
 	return child
 }
 
 // codeClosure emits OP_CLOSURE instruction.
-func codeClosure(ls *lexapi.LexState, v *ExpDesc) {
+func codeClosure(ls *lex.LexState, v *ExpDesc) {
 	fs := getFS(ls).Prev
-	initExp(v, VRELOC, CodeABx(fs, opcodeapi.OP_CLOSURE, 0, fs.NProtos-1))
+	initExp(v, VRELOC, CodeABx(fs, opcode.OP_CLOSURE, 0, fs.NProtos-1))
 	Exp2NextReg(fs, v)
 }
 
 // openFunc initializes a FuncState for a new function.
-func openFunc(ls *lexapi.LexState, fs *FuncState, bl *BlockCnt) {
+func openFunc(ls *lex.LexState, fs *FuncState, bl *BlockCnt) {
 	f := fs.Proto
 	if ls.FuncState != nil {
 		fs.Prev = ls.FuncState.(*FuncState)
@@ -665,20 +665,20 @@ func openFunc(ls *lexapi.LexState, fs *FuncState, bl *BlockCnt) {
 	fs.FirstLocal = len(dyd.ActVar)
 	fs.FirstLabel = len(dyd.Labels)
 	fs.Block = nil
-	f.Source = &objectapi.LuaString{Data: ls.Source, IsShort: len(ls.Source) <= 40}
+	f.Source = &object.LuaString{Data: ls.Source, IsShort: len(ls.Source) <= 40}
 	f.MaxStackSize = 2 // registers 0/1 always valid
 	fs.KCache = make(map[any]int)
 	// Inherit or create shared string cache for the compilation unit
 	if fs.Prev != nil {
 		fs.StringCache = fs.Prev.StringCache
 	} else {
-		fs.StringCache = make(map[string]*objectapi.LuaString)
+		fs.StringCache = make(map[string]*object.LuaString)
 	}
 	enterBlock(fs, bl, 0)
 }
 
 // closeFunc finalizes a Proto.
-func closeFunc(ls *lexapi.LexState) {
+func closeFunc(ls *lex.LexState) {
 	fs := getFS(ls)
 	f := fs.Proto
 	Ret(fs, int(regLevel(fs, fs.NumActVar)), 0)
@@ -703,7 +703,7 @@ func closeFunc(ls *lexapi.LexState) {
 // ---------------------------------------------------------------------------
 
 // adjustAssign adjusts multiple assignment.
-func adjustAssign(ls *lexapi.LexState, nvars, nexps int, e *ExpDesc) {
+func adjustAssign(ls *lex.LexState, nvars, nexps int, e *ExpDesc) {
 	fs := getFS(ls)
 	needed := nvars - nexps
 	CheckStack(fs, needed)
@@ -753,11 +753,11 @@ func maxToStoreCalc(fs *FuncState) int {
 	return 1
 }
 
-func recfield(ls *lexapi.LexState, cc *ConsControl) {
+func recfield(ls *lex.LexState, cc *ConsControl) {
 	fs := getFS(ls)
 	reg := fs.FreeReg
 	var tab, key, val ExpDesc
-	if ls.Token.Type == lexapi.TK_NAME {
+	if ls.Token.Type == lex.TK_NAME {
 		codeName(ls, &key)
 	} else { // '['
 		yindex(ls, &key)
@@ -798,15 +798,15 @@ func lastListField(fs *FuncState, cc *ConsControl) {
 	cc.NA += cc.ToStore
 }
 
-func listfield(ls *lexapi.LexState, cc *ConsControl) {
+func listfield(ls *lex.LexState, cc *ConsControl) {
 	expr(ls, &cc.V)
 	cc.ToStore++
 }
 
-func field(ls *lexapi.LexState, cc *ConsControl) {
+func field(ls *lex.LexState, cc *ConsControl) {
 	switch ls.Token.Type {
-	case lexapi.TK_NAME:
-		if lexapi.Lookahead(ls) != '=' {
+	case lex.TK_NAME:
+		if lex.Lookahead(ls) != '=' {
 			listfield(ls, cc)
 		} else {
 			recfield(ls, cc)
@@ -818,10 +818,10 @@ func field(ls *lexapi.LexState, cc *ConsControl) {
 	}
 }
 
-func constructor(ls *lexapi.LexState, t *ExpDesc) {
+func constructor(ls *lex.LexState, t *ExpDesc) {
 	fs := getFS(ls)
 	line := ls.Line
-	pc := CodeVABCk(fs, opcodeapi.OP_NEWTABLE, 0, 0, 0, 0)
+	pc := CodeVABCk(fs, opcode.OP_NEWTABLE, 0, 0, 0, 0)
 	Code(fs, 0) // space for extra arg
 	var cc ConsControl
 	cc.NA = 0
@@ -856,11 +856,11 @@ func constructor(ls *lexapi.LexState, t *ExpDesc) {
 // ---------------------------------------------------------------------------
 
 func setVararg(fs *FuncState) {
-	fs.Proto.Flag |= objectapi.PF_VAHID
-	CodeABC(fs, opcodeapi.OP_VARARGPREP, 0, 0, 0)
+	fs.Proto.Flag |= object.PF_VAHID
+	CodeABC(fs, opcode.OP_VARARGPREP, 0, 0, 0)
 }
 
-func parlist(ls *lexapi.LexState) {
+func parlist(ls *lex.LexState) {
 	fs := getFS(ls)
 	f := fs.Proto
 	nparams := 0
@@ -868,19 +868,19 @@ func parlist(ls *lexapi.LexState) {
 	if ls.Token.Type != ')' {
 		for {
 			switch ls.Token.Type {
-			case lexapi.TK_NAME:
+			case lex.TK_NAME:
 				newLocalVar(ls, strCheckName(ls))
 				nparams++
-			case lexapi.TK_DOTS:
+			case lex.TK_DOTS:
 				varargk = true
-				lexapi.Next(ls)
-				if ls.Token.Type == lexapi.TK_NAME {
+				lex.Next(ls)
+				if ls.Token.Type == lex.TK_NAME {
 					newVarKind(ls, strCheckName(ls), RDKVAVAR)
 				} else {
 					newLocalVarLiteral(ls, "(vararg table)")
 				}
 			default:
-				lexapi.SyntaxErr(ls, "<name> or '...' expected")
+				lex.SyntaxErr(ls, "<name> or '...' expected")
 			}
 			if varargk || !testNext(ls, ',') {
 				break
@@ -896,7 +896,7 @@ func parlist(ls *lexapi.LexState) {
 	ReserveRegs(fs, int(fs.NumActVar))
 }
 
-func body(ls *lexapi.LexState, e *ExpDesc, ismethod bool, line int) {
+func body(ls *lex.LexState, e *ExpDesc, ismethod bool, line int) {
 	var newFS FuncState
 	var bl BlockCnt
 	newFS.Proto = addPrototype(ls)
@@ -911,7 +911,7 @@ func body(ls *lexapi.LexState, e *ExpDesc, ismethod bool, line int) {
 	checkNext(ls, ')')
 	statList(ls)
 	newFS.Proto.LastLine = ls.Line
-	checkMatch(ls, lexapi.TK_END, lexapi.TK_FUNCTION, line)
+	checkMatch(ls, lex.TK_END, lex.TK_FUNCTION, line)
 	codeClosure(ls, e)
 	closeFunc(ls)
 }
@@ -920,7 +920,7 @@ func body(ls *lexapi.LexState, e *ExpDesc, ismethod bool, line int) {
 // Expression list and function arguments
 // ---------------------------------------------------------------------------
 
-func explist(ls *lexapi.LexState, v *ExpDesc) int {
+func explist(ls *lex.LexState, v *ExpDesc) int {
 	n := 1
 	expr(ls, v)
 	for testNext(ls, ',') {
@@ -931,13 +931,13 @@ func explist(ls *lexapi.LexState, v *ExpDesc) int {
 	return n
 }
 
-func funcargs(ls *lexapi.LexState, f *ExpDesc) {
+func funcargs(ls *lex.LexState, f *ExpDesc) {
 	fs := getFS(ls)
 	var args ExpDesc
 	line := ls.Line
 	switch ls.Token.Type {
 	case '(':
-		lexapi.Next(ls)
+		lex.Next(ls)
 		if ls.Token.Type == ')' {
 			args.Kind = VVOID
 		} else {
@@ -949,11 +949,11 @@ func funcargs(ls *lexapi.LexState, f *ExpDesc) {
 		checkMatch(ls, ')', '(', line)
 	case '{':
 		constructor(ls, &args)
-	case lexapi.TK_STRING:
+	case lex.TK_STRING:
 		codeString(&args, ls.Token.StrVal)
-		lexapi.Next(ls)
+		lex.Next(ls)
 	default:
-		lexapi.SyntaxErr(ls, "function arguments expected")
+		lex.SyntaxErr(ls, "function arguments expected")
 	}
 	base := f.Info
 	var nparams int
@@ -965,7 +965,7 @@ func funcargs(ls *lexapi.LexState, f *ExpDesc) {
 		}
 		nparams = int(fs.FreeReg) - (base + 1)
 	}
-	initExp(f, VCALL, CodeABC(fs, opcodeapi.OP_CALL, base, nparams+1, 2))
+	initExp(f, VCALL, CodeABC(fs, opcode.OP_CALL, base, nparams+1, 2))
 	FixLine(fs, line)
 	fs.FreeReg = byte(base + 1)
 }
@@ -974,22 +974,22 @@ func funcargs(ls *lexapi.LexState, f *ExpDesc) {
 // Expression parsing
 // ---------------------------------------------------------------------------
 
-func primaryexp(ls *lexapi.LexState, v *ExpDesc) {
+func primaryexp(ls *lex.LexState, v *ExpDesc) {
 	switch ls.Token.Type {
 	case '(':
 		line := ls.Line
-		lexapi.Next(ls)
+		lex.Next(ls)
 		expr(ls, v)
 		checkMatch(ls, ')', '(', line)
 		DischargeVars(getFS(ls), v)
-	case lexapi.TK_NAME:
+	case lex.TK_NAME:
 		singleVar(ls, v)
 	default:
-		lexapi.SyntaxErr(ls, "unexpected symbol")
+		lex.SyntaxErr(ls, "unexpected symbol")
 	}
 }
 
-func suffixedexp(ls *lexapi.LexState, v *ExpDesc) {
+func suffixedexp(ls *lex.LexState, v *ExpDesc) {
 	fs := getFS(ls)
 	primaryexp(ls, v)
 	for {
@@ -1003,11 +1003,11 @@ func suffixedexp(ls *lexapi.LexState, v *ExpDesc) {
 			Indexed(fs, v, &key)
 		case ':':
 			var key ExpDesc
-			lexapi.Next(ls)
+			lex.Next(ls)
 			codeName(ls, &key)
 			Self(fs, v, &key)
 			funcargs(ls, v)
-		case '(', lexapi.TK_STRING, '{':
+		case '(', lex.TK_STRING, '{':
 			Exp2NextReg(fs, v)
 			funcargs(ls, v)
 		default:
@@ -1016,60 +1016,60 @@ func suffixedexp(ls *lexapi.LexState, v *ExpDesc) {
 	}
 }
 
-func fieldsel(ls *lexapi.LexState, v *ExpDesc) {
+func fieldsel(ls *lex.LexState, v *ExpDesc) {
 	fs := getFS(ls)
 	var key ExpDesc
 	Exp2AnyRegUp(fs, v)
-	lexapi.Next(ls) // skip dot or colon
+	lex.Next(ls) // skip dot or colon
 	codeName(ls, &key)
 	Indexed(fs, v, &key)
 }
 
-func yindex(ls *lexapi.LexState, v *ExpDesc) {
-	lexapi.Next(ls) // skip '['
+func yindex(ls *lex.LexState, v *ExpDesc) {
+	lex.Next(ls) // skip '['
 	expr(ls, v)
 	Exp2Val(getFS(ls), v)
 	checkNext(ls, ']')
 }
 
-func simpleexp(ls *lexapi.LexState, v *ExpDesc) {
+func simpleexp(ls *lex.LexState, v *ExpDesc) {
 	switch ls.Token.Type {
-	case lexapi.TK_FLT:
+	case lex.TK_FLT:
 		initExp(v, VKFLT, 0)
 		v.NVal = ls.Token.FltVal
-	case lexapi.TK_INT:
+	case lex.TK_INT:
 		initExp(v, VKINT, 0)
 		v.IVal = ls.Token.IntVal
-	case lexapi.TK_STRING:
+	case lex.TK_STRING:
 		codeString(v, ls.Token.StrVal)
-	case lexapi.TK_NIL:
+	case lex.TK_NIL:
 		initExp(v, VNIL, 0)
-	case lexapi.TK_TRUE:
+	case lex.TK_TRUE:
 		initExp(v, VTRUE, 0)
-	case lexapi.TK_FALSE:
+	case lex.TK_FALSE:
 		initExp(v, VFALSE, 0)
-	case lexapi.TK_DOTS:
+	case lex.TK_DOTS:
 		fs := getFS(ls)
 		checkCondition(ls, fs.Proto.IsVararg(), "cannot use '...' outside a vararg function")
-		initExp(v, VVARARG, CodeABC(fs, opcodeapi.OP_VARARG, 0, int(fs.Proto.NumParams), 1))
+		initExp(v, VVARARG, CodeABC(fs, opcode.OP_VARARG, 0, int(fs.Proto.NumParams), 1))
 	case '{':
 		constructor(ls, v)
 		return
-	case lexapi.TK_FUNCTION:
-		lexapi.Next(ls)
+	case lex.TK_FUNCTION:
+		lex.Next(ls)
 		body(ls, v, false, ls.Line)
 		return
 	default:
 		suffixedexp(ls, v)
 		return
 	}
-	lexapi.Next(ls)
+	lex.Next(ls)
 }
 
 // getUnOpr maps token to unary operator.
-func getUnOpr(op lexapi.TokenType) UnOpr {
+func getUnOpr(op lex.TokenType) UnOpr {
 	switch op {
-	case lexapi.TK_NOT:
+	case lex.TK_NOT:
 		return OPR_NOT
 	case '-':
 		return OPR_MINUS
@@ -1083,7 +1083,7 @@ func getUnOpr(op lexapi.TokenType) UnOpr {
 }
 
 // getBinOpr maps token to binary operator.
-func getBinOpr(op lexapi.TokenType) BinOpr {
+func getBinOpr(op lex.TokenType) BinOpr {
 	switch op {
 	case '+':
 		return OPR_ADD
@@ -1097,7 +1097,7 @@ func getBinOpr(op lexapi.TokenType) BinOpr {
 		return OPR_POW
 	case '/':
 		return OPR_DIV
-	case lexapi.TK_IDIV:
+	case lex.TK_IDIV:
 		return OPR_IDIV
 	case '&':
 		return OPR_BAND
@@ -1105,27 +1105,27 @@ func getBinOpr(op lexapi.TokenType) BinOpr {
 		return OPR_BOR
 	case '~':
 		return OPR_BXOR
-	case lexapi.TK_SHL:
+	case lex.TK_SHL:
 		return OPR_SHL
-	case lexapi.TK_SHR:
+	case lex.TK_SHR:
 		return OPR_SHR
-	case lexapi.TK_CONCAT:
+	case lex.TK_CONCAT:
 		return OPR_CONCAT
-	case lexapi.TK_NE:
+	case lex.TK_NE:
 		return OPR_NE
-	case lexapi.TK_EQ:
+	case lex.TK_EQ:
 		return OPR_EQ
 	case '<':
 		return OPR_LT
-	case lexapi.TK_LE:
+	case lex.TK_LE:
 		return OPR_LE
 	case '>':
 		return OPR_GT
-	case lexapi.TK_GE:
+	case lex.TK_GE:
 		return OPR_GE
-	case lexapi.TK_AND:
+	case lex.TK_AND:
 		return OPR_AND
-	case lexapi.TK_OR:
+	case lex.TK_OR:
 		return OPR_OR
 	default:
 		return OPR_NOBINOPR
@@ -1148,25 +1148,25 @@ var priority = [...]struct{ left, right int }{
 
 // enterLevel increments parser nesting depth and checks for overflow.
 // Mirrors: luaY_checklimit with nCcalls in C Lua's lparser.c
-func enterLevel(ls *lexapi.LexState) {
+func enterLevel(ls *lex.LexState) {
 	ls.NestLevel++
 	if ls.NestLevel > ls.MaxNestLevel {
-		lexapi.LexError(ls, "chunk has too many syntax levels", 0)
+		lex.LexError(ls, "chunk has too many syntax levels", 0)
 	}
 }
 
 // leaveLevel decrements parser nesting depth.
-func leaveLevel(ls *lexapi.LexState) {
+func leaveLevel(ls *lex.LexState) {
 	ls.NestLevel--
 }
 
-func subexpr(ls *lexapi.LexState, v *ExpDesc, limit int) BinOpr {
+func subexpr(ls *lex.LexState, v *ExpDesc, limit int) BinOpr {
 	enterLevel(ls)
 	defer leaveLevel(ls)
 	uop := getUnOpr(ls.Token.Type)
 	if uop != OPR_NOUNOPR {
 		line := ls.Line
-		lexapi.Next(ls)
+		lex.Next(ls)
 		subexpr(ls, v, unaryPriority)
 		Prefix(getFS(ls), uop, v, line)
 	} else {
@@ -1176,7 +1176,7 @@ func subexpr(ls *lexapi.LexState, v *ExpDesc, limit int) BinOpr {
 	for op != OPR_NOBINOPR && priority[op].left > limit {
 		var v2 ExpDesc
 		line := ls.Line
-		lexapi.Next(ls)
+		lex.Next(ls)
 		Infix(getFS(ls), op, v)
 		nextop := subexpr(ls, &v2, priority[op].right)
 		Posfix(getFS(ls), op, v, &v2, line)
@@ -1186,7 +1186,7 @@ func subexpr(ls *lexapi.LexState, v *ExpDesc, limit int) BinOpr {
 	return op
 }
 
-func expr(ls *lexapi.LexState, v *ExpDesc) {
+func expr(ls *lex.LexState, v *ExpDesc) {
 	subexpr(ls, v, 0)
 }
 
@@ -1205,7 +1205,7 @@ type LHSAssign struct {
 }
 
 // cond parses a condition expression and returns the false-jump list.
-func cond(ls *lexapi.LexState) int {
+func cond(ls *lex.LexState) int {
 	var v ExpDesc
 	expr(ls, &v)
 	if v.Kind == VNIL {
@@ -1216,7 +1216,7 @@ func cond(ls *lexapi.LexState) int {
 }
 
 // exp1 parses a single expression and puts its result in next register.
-func exp1(ls *lexapi.LexState) {
+func exp1(ls *lex.LexState) {
 	var e ExpDesc
 	expr(ls, &e)
 	Exp2NextReg(getFS(ls), &e)
@@ -1229,19 +1229,19 @@ func fixForJump(fs *FuncState, pc, dest int, back bool) {
 	if back {
 		offset = -offset
 	}
-	if offset > opcodeapi.MaxArgBx {
-		lexapi.SyntaxErr(fs.Lex, "control structure too long")
+	if offset > opcode.MaxArgBx {
+		lex.SyntaxErr(fs.Lex, "control structure too long")
 	}
-	*jmp = opcodeapi.SetArgBx(*jmp, offset)
+	*jmp = opcode.SetArgBx(*jmp, offset)
 }
 
 // ---------------------------------------------------------------------------
 // statList — parse a list of statements
 // ---------------------------------------------------------------------------
 
-func statList(ls *lexapi.LexState) {
+func statList(ls *lex.LexState) {
 	for !blockFollow(ls, true) {
-		if ls.Token.Type == lexapi.TK_RETURN {
+		if ls.Token.Type == lex.TK_RETURN {
 			statement(ls)
 			return // 'return' must be last statement
 		}
@@ -1250,7 +1250,7 @@ func statList(ls *lexapi.LexState) {
 }
 
 // block parses a block (enter/leave block around statlist).
-func block(ls *lexapi.LexState) {
+func block(ls *lex.LexState) {
 	fs := getFS(ls)
 	var bl BlockCnt
 	enterBlock(fs, &bl, 0)
@@ -1263,7 +1263,7 @@ func block(ls *lexapi.LexState) {
 // ---------------------------------------------------------------------------
 
 // checkConflict checks table assignment conflicts in multi-assignment.
-func checkConflict(ls *lexapi.LexState, lh *LHSAssign, v *ExpDesc) {
+func checkConflict(ls *lex.LexState, lh *LHSAssign, v *ExpDesc) {
 	fs := getFS(ls)
 	extra := fs.FreeReg
 	conflict := false
@@ -1290,9 +1290,9 @@ func checkConflict(ls *lexapi.LexState, lh *LHSAssign, v *ExpDesc) {
 	}
 	if conflict {
 		if v.Kind == VLOCAL {
-			CodeABC(fs, opcodeapi.OP_MOVE, int(extra), int(v.Var.RegIdx), 0)
+			CodeABC(fs, opcode.OP_MOVE, int(extra), int(v.Var.RegIdx), 0)
 		} else {
-			CodeABC(fs, opcodeapi.OP_GETUPVAL, int(extra), v.Info, 0)
+			CodeABC(fs, opcode.OP_GETUPVAL, int(extra), v.Info, 0)
 		}
 		ReserveRegs(fs, 1)
 	}
@@ -1306,7 +1306,7 @@ func storeVarTop(fs *FuncState, v *ExpDesc) {
 }
 
 // restAssign recursively parses multi-assignment.
-func restAssign(ls *lexapi.LexState, lh *LHSAssign, nvars int) {
+func restAssign(ls *lex.LexState, lh *LHSAssign, nvars int) {
 	var e ExpDesc
 	checkCondition(ls, vkisvar(lh.V.Kind), "syntax error")
 	checkReadonly(ls, &lh.V)
@@ -1338,29 +1338,29 @@ func restAssign(ls *lexapi.LexState, lh *LHSAssign, nvars int) {
 // If statement
 // ---------------------------------------------------------------------------
 
-func testThenBlock(ls *lexapi.LexState, escapelist *int) {
+func testThenBlock(ls *lex.LexState, escapelist *int) {
 	fs := getFS(ls)
-	lexapi.Next(ls) // skip IF or ELSEIF
+	lex.Next(ls) // skip IF or ELSEIF
 	condtrue := cond(ls)
-	checkNext(ls, lexapi.TK_THEN)
+	checkNext(ls, lex.TK_THEN)
 	block(ls)
-	if ls.Token.Type == lexapi.TK_ELSE || ls.Token.Type == lexapi.TK_ELSEIF {
+	if ls.Token.Type == lex.TK_ELSE || ls.Token.Type == lex.TK_ELSEIF {
 		ConcatJumps(fs, escapelist, Jump(fs))
 	}
 	PatchToHere(fs, condtrue)
 }
 
-func ifStat(ls *lexapi.LexState, line int) {
+func ifStat(ls *lex.LexState, line int) {
 	fs := getFS(ls)
 	escapelist := NoJump
 	testThenBlock(ls, &escapelist)
-	for ls.Token.Type == lexapi.TK_ELSEIF {
+	for ls.Token.Type == lex.TK_ELSEIF {
 		testThenBlock(ls, &escapelist)
 	}
-	if testNext(ls, lexapi.TK_ELSE) {
+	if testNext(ls, lex.TK_ELSE) {
 		block(ls)
 	}
-	checkMatch(ls, lexapi.TK_END, lexapi.TK_IF, line)
+	checkMatch(ls, lex.TK_END, lex.TK_IF, line)
 	PatchToHere(fs, escapelist)
 }
 
@@ -1368,17 +1368,17 @@ func ifStat(ls *lexapi.LexState, line int) {
 // While statement
 // ---------------------------------------------------------------------------
 
-func whileStat(ls *lexapi.LexState, line int) {
+func whileStat(ls *lex.LexState, line int) {
 	fs := getFS(ls)
-	lexapi.Next(ls) // skip WHILE
+	lex.Next(ls) // skip WHILE
 	whileinit := GetLabel(fs)
 	condexit := cond(ls)
 	var bl BlockCnt
 	enterBlock(fs, &bl, 1)
-	checkNext(ls, lexapi.TK_DO)
+	checkNext(ls, lex.TK_DO)
 	block(ls)
 	PatchList(fs, Jump(fs), whileinit)
-	checkMatch(ls, lexapi.TK_END, lexapi.TK_WHILE, line)
+	checkMatch(ls, lex.TK_END, lex.TK_WHILE, line)
 	leaveBlock(fs)
 	PatchToHere(fs, condexit)
 }
@@ -1387,21 +1387,21 @@ func whileStat(ls *lexapi.LexState, line int) {
 // Repeat statement
 // ---------------------------------------------------------------------------
 
-func repeatStat(ls *lexapi.LexState, line int) {
+func repeatStat(ls *lex.LexState, line int) {
 	fs := getFS(ls)
 	repeatInit := GetLabel(fs)
 	var bl1, bl2 BlockCnt
 	enterBlock(fs, &bl1, 1) // loop block
 	enterBlock(fs, &bl2, 0) // scope block
-	lexapi.Next(ls)          // skip REPEAT
+	lex.Next(ls)          // skip REPEAT
 	statList(ls)
-	checkMatch(ls, lexapi.TK_UNTIL, lexapi.TK_REPEAT, line)
+	checkMatch(ls, lex.TK_UNTIL, lex.TK_REPEAT, line)
 	condexit := cond(ls)
 	leaveBlock(fs) // finish scope
 	if bl2.HasUpval {
 		exit := Jump(fs)
 		PatchToHere(fs, condexit)
-		CodeABC(fs, opcodeapi.OP_CLOSE, int(regLevel(fs, bl2.NumActVar)), 0, 0)
+		CodeABC(fs, opcode.OP_CLOSE, int(regLevel(fs, bl2.NumActVar)), 0, 0)
 		condexit = Jump(fs)
 		PatchToHere(fs, exit)
 	}
@@ -1413,18 +1413,18 @@ func repeatStat(ls *lexapi.LexState, line int) {
 // For statements
 // ---------------------------------------------------------------------------
 
-func forBody(ls *lexapi.LexState, base, line, nvars int, isgen bool) {
-	var forprep, forloop opcodeapi.OpCode
+func forBody(ls *lex.LexState, base, line, nvars int, isgen bool) {
+	var forprep, forloop opcode.OpCode
 	if isgen {
-		forprep = opcodeapi.OP_TFORPREP
-		forloop = opcodeapi.OP_TFORLOOP
+		forprep = opcode.OP_TFORPREP
+		forloop = opcode.OP_TFORLOOP
 	} else {
-		forprep = opcodeapi.OP_FORPREP
-		forloop = opcodeapi.OP_FORLOOP
+		forprep = opcode.OP_FORPREP
+		forloop = opcode.OP_FORLOOP
 	}
 	var bl BlockCnt
 	fs := getFS(ls)
-	checkNext(ls, lexapi.TK_DO)
+	checkNext(ls, lex.TK_DO)
 	prep := CodeABx(fs, forprep, base, 0)
 	fs.FreeReg-- // both forprep remove one register
 	enterBlock(fs, &bl, 0)
@@ -1434,7 +1434,7 @@ func forBody(ls *lexapi.LexState, base, line, nvars int, isgen bool) {
 	leaveBlock(fs)
 	fixForJump(fs, prep, GetLabel(fs), false)
 	if isgen {
-		CodeABC(fs, opcodeapi.OP_TFORCALL, base, 0, nvars)
+		CodeABC(fs, opcode.OP_TFORCALL, base, 0, nvars)
 		FixLine(fs, line)
 	}
 	endfor := CodeABx(fs, forloop, base, 0)
@@ -1442,7 +1442,7 @@ func forBody(ls *lexapi.LexState, base, line, nvars int, isgen bool) {
 	FixLine(fs, line)
 }
 
-func forNum(ls *lexapi.LexState, varname string, line int) {
+func forNum(ls *lex.LexState, varname string, line int) {
 	fs := getFS(ls)
 	base := int(fs.FreeReg)
 	newLocalVarLiteral(ls, "(for state)")
@@ -1462,7 +1462,7 @@ func forNum(ls *lexapi.LexState, varname string, line int) {
 	forBody(ls, base, line, 1, false)
 }
 
-func forList(ls *lexapi.LexState, indexname string) {
+func forList(ls *lex.LexState, indexname string) {
 	fs := getFS(ls)
 	var e ExpDesc
 	nvars := 4 // function, state, closing, control
@@ -1475,7 +1475,7 @@ func forList(ls *lexapi.LexState, indexname string) {
 		newLocalVar(ls, strCheckName(ls))
 		nvars++
 	}
-	checkNext(ls, lexapi.TK_IN)
+	checkNext(ls, lex.TK_IN)
 	line := ls.Line
 	adjustAssign(ls, 4, explist(ls, &e), &e)
 	adjustLocalVars(ls, 3)
@@ -1484,21 +1484,21 @@ func forList(ls *lexapi.LexState, indexname string) {
 	forBody(ls, base, line, nvars-3, true)
 }
 
-func forStat(ls *lexapi.LexState, line int) {
+func forStat(ls *lex.LexState, line int) {
 	fs := getFS(ls)
 	var bl BlockCnt
 	enterBlock(fs, &bl, 1)
-	lexapi.Next(ls) // skip FOR
+	lex.Next(ls) // skip FOR
 	varname := strCheckName(ls)
 	switch ls.Token.Type {
 	case '=':
 		forNum(ls, varname, line)
-	case ',', lexapi.TK_IN:
+	case ',', lex.TK_IN:
 		forList(ls, varname)
 	default:
-		lexapi.SyntaxErr(ls, "'=' or 'in' expected")
+		lex.SyntaxErr(ls, "'=' or 'in' expected")
 	}
-	checkMatch(ls, lexapi.TK_END, lexapi.TK_FOR, line)
+	checkMatch(ls, lex.TK_END, lex.TK_FOR, line)
 	leaveBlock(fs)
 }
 
@@ -1506,7 +1506,7 @@ func forStat(ls *lexapi.LexState, line int) {
 // Local statements
 // ---------------------------------------------------------------------------
 
-func getVarAttribute(ls *lexapi.LexState, df byte) byte {
+func getVarAttribute(ls *lex.LexState, df byte) byte {
 	if testNext(ls, '<') {
 		attr := strCheckName(ls)
 		checkNext(ls, '>')
@@ -1525,11 +1525,11 @@ func getVarAttribute(ls *lexapi.LexState, df byte) byte {
 func checkToClose(fs *FuncState, level int) {
 	if level != -1 {
 		markToBeClosed(fs)
-		CodeABC(fs, opcodeapi.OP_TBC, int(regLevel(fs, int16(level))), 0, 0)
+		CodeABC(fs, opcode.OP_TBC, int(regLevel(fs, int16(level))), 0, 0)
 	}
 }
 
-func localFunc(ls *lexapi.LexState) {
+func localFunc(ls *lex.LexState) {
 	var b ExpDesc
 	fs := getFS(ls)
 	fvar := int(fs.NumActVar)
@@ -1539,7 +1539,7 @@ func localFunc(ls *lexapi.LexState) {
 	localDebugInfo(fs, fvar).StartPC = fs.PC
 }
 
-func localStat(ls *lexapi.LexState) {
+func localStat(ls *lex.LexState) {
 	fs := getFS(ls)
 	toclose := -1
 	nvars := 0
@@ -1584,7 +1584,7 @@ func localStat(ls *lexapi.LexState) {
 // Function statement
 // ---------------------------------------------------------------------------
 
-func funcName(ls *lexapi.LexState, v *ExpDesc) bool {
+func funcName(ls *lex.LexState, v *ExpDesc) bool {
 	ismethod := false
 	singleVar(ls, v)
 	for ls.Token.Type == '.' {
@@ -1597,9 +1597,9 @@ func funcName(ls *lexapi.LexState, v *ExpDesc) bool {
 	return ismethod
 }
 
-func funcStat(ls *lexapi.LexState, line int) {
+func funcStat(ls *lex.LexState, line int) {
 	var v, b ExpDesc
-	lexapi.Next(ls) // skip FUNCTION
+	lex.Next(ls) // skip FUNCTION
 	ismethod := funcName(ls, &v)
 	checkReadonly(ls, &v)
 	body(ls, &b, ismethod, line)
@@ -1611,7 +1611,7 @@ func funcStat(ls *lexapi.LexState, line int) {
 // Expression statement (call or assignment)
 // ---------------------------------------------------------------------------
 
-func exprStat(ls *lexapi.LexState) {
+func exprStat(ls *lex.LexState) {
 	fs := getFS(ls)
 	var v LHSAssign
 	suffixedexp(ls, &v.V)
@@ -1621,7 +1621,7 @@ func exprStat(ls *lexapi.LexState) {
 	} else {
 		checkCondition(ls, v.V.Kind == VCALL, "syntax error")
 		inst := getInstruction(fs, &v.V)
-		*inst = opcodeapi.SetArgC(*inst, 1) // call uses no results
+		*inst = opcode.SetArgC(*inst, 1) // call uses no results
 	}
 }
 
@@ -1629,7 +1629,7 @@ func exprStat(ls *lexapi.LexState) {
 // Return statement
 // ---------------------------------------------------------------------------
 
-func retStat(ls *lexapi.LexState) {
+func retStat(ls *lex.LexState) {
 	fs := getFS(ls)
 	var e ExpDesc
 	first := int(regLevel(fs, fs.NumActVar))
@@ -1642,7 +1642,7 @@ func retStat(ls *lexapi.LexState) {
 			SetReturns(fs, &e, LuaMultRet)
 			if e.Kind == VCALL && nret == 1 && !fs.Block.InsideTBC {
 				inst := getInstruction(fs, &e)
-				*inst = opcodeapi.SetOpCode(*inst, opcodeapi.OP_TAILCALL)
+				*inst = opcode.SetOpCode(*inst, opcode.OP_TAILCALL)
 			}
 			nret = LuaMultRet
 		} else {
@@ -1661,12 +1661,12 @@ func retStat(ls *lexapi.LexState) {
 // Goto, break, label
 // ---------------------------------------------------------------------------
 
-func gotoStat(ls *lexapi.LexState, line int) {
+func gotoStat(ls *lex.LexState, line int) {
 	name := strCheckName(ls)
 	newGotoEntry(ls, name, line)
 }
 
-func breakStat(ls *lexapi.LexState, line int) {
+func breakStat(ls *lex.LexState, line int) {
 	bl := getFS(ls).Block
 	for bl != nil {
 		if bl.IsLoop != 0 {
@@ -1674,16 +1674,16 @@ func breakStat(ls *lexapi.LexState, line int) {
 		}
 		bl = bl.Prev
 	}
-	lexapi.SyntaxErr(ls, "break outside loop")
+	lex.SyntaxErr(ls, "break outside loop")
 ok:
 	bl.IsLoop = 2 // signal pending breaks
-	lexapi.Next(ls)
+	lex.Next(ls)
 	newGotoEntry(ls, ls.BreakName, line)
 }
 
-func labelStat(ls *lexapi.LexState, name string, line int) {
-	checkNext(ls, lexapi.TK_DBCOLON)
-	for ls.Token.Type == ';' || ls.Token.Type == lexapi.TK_DBCOLON {
+func labelStat(ls *lex.LexState, name string, line int) {
+	checkNext(ls, lex.TK_DBCOLON)
+	for ls.Token.Type == ';' || ls.Token.Type == lex.TK_DBCOLON {
 		statement(ls)
 	}
 	checkRepeated(ls, name)
@@ -1694,7 +1694,7 @@ func labelStat(ls *lexapi.LexState, name string, line int) {
 // Lua 5.5 global statements
 // ---------------------------------------------------------------------------
 
-func getGlobalAttribute(ls *lexapi.LexState, df byte) byte {
+func getGlobalAttribute(ls *lex.LexState, df byte) byte {
 	kind := getVarAttribute(ls, df)
 	switch kind {
 	case RDKTOCLOSE:
@@ -1707,7 +1707,7 @@ func getGlobalAttribute(ls *lexapi.LexState, df byte) byte {
 	}
 }
 
-func checkGlobal(ls *lexapi.LexState, varname string, line int) {
+func checkGlobal(ls *lex.LexState, varname string, line int) {
 	fs := getFS(ls)
 	var v ExpDesc
 	buildGlobal(ls, varname, &v)
@@ -1715,7 +1715,7 @@ func checkGlobal(ls *lexapi.LexState, varname string, line int) {
 	CodeCheckGlobal(fs, &v, k, line)
 }
 
-func initGlobal(ls *lexapi.LexState, nvars, firstidx, n, line int) {
+func initGlobal(ls *lex.LexState, nvars, firstidx, n, line int) {
 	if n == nvars {
 		var e ExpDesc
 		nexps := explist(ls, &e)
@@ -1733,7 +1733,7 @@ func initGlobal(ls *lexapi.LexState, nvars, firstidx, n, line int) {
 	}
 }
 
-func globalNames(ls *lexapi.LexState, defkind byte) {
+func globalNames(ls *lex.LexState, defkind byte) {
 	fs := getFS(ls)
 	nvars := 0
 	var lastidx int
@@ -1752,7 +1752,7 @@ func globalNames(ls *lexapi.LexState, defkind byte) {
 	fs.NumActVar = int16(int(fs.NumActVar) + nvars)
 }
 
-func globalStat(ls *lexapi.LexState) {
+func globalStat(ls *lex.LexState) {
 	fs := getFS(ls)
 	defkind := getGlobalAttribute(ls, GDKREG)
 	if !testNext(ls, '*') {
@@ -1763,7 +1763,7 @@ func globalStat(ls *lexapi.LexState) {
 	}
 }
 
-func globalFunc(ls *lexapi.LexState, line int) {
+func globalFunc(ls *lex.LexState, line int) {
 	var v, b ExpDesc
 	fs := getFS(ls)
 	fname := strCheckName(ls)
@@ -1776,9 +1776,9 @@ func globalFunc(ls *lexapi.LexState, line int) {
 	FixLine(fs, line)
 }
 
-func globalStatFunc(ls *lexapi.LexState, line int) {
-	lexapi.Next(ls) // skip 'global'
-	if testNext(ls, lexapi.TK_FUNCTION) {
+func globalStatFunc(ls *lex.LexState, line int) {
+	lex.Next(ls) // skip 'global'
+	if testNext(ls, lex.TK_FUNCTION) {
 		globalFunc(ls, line)
 	} else {
 		globalStat(ls)
@@ -1789,53 +1789,53 @@ func globalStatFunc(ls *lexapi.LexState, line int) {
 // The big statement switch
 // ---------------------------------------------------------------------------
 
-func statement(ls *lexapi.LexState) {
+func statement(ls *lex.LexState) {
 	line := ls.Line
 	enterLevel(ls)
 	defer leaveLevel(ls)
 	switch ls.Token.Type {
 	case ';':
-		lexapi.Next(ls)
-	case lexapi.TK_IF:
+		lex.Next(ls)
+	case lex.TK_IF:
 		ifStat(ls, line)
-	case lexapi.TK_WHILE:
+	case lex.TK_WHILE:
 		whileStat(ls, line)
-	case lexapi.TK_DO:
-		lexapi.Next(ls)
+	case lex.TK_DO:
+		lex.Next(ls)
 		block(ls)
-		checkMatch(ls, lexapi.TK_END, lexapi.TK_DO, line)
-	case lexapi.TK_FOR:
+		checkMatch(ls, lex.TK_END, lex.TK_DO, line)
+	case lex.TK_FOR:
 		forStat(ls, line)
-	case lexapi.TK_REPEAT:
+	case lex.TK_REPEAT:
 		repeatStat(ls, line)
-	case lexapi.TK_FUNCTION:
+	case lex.TK_FUNCTION:
 		funcStat(ls, line)
-	case lexapi.TK_LOCAL:
-		lexapi.Next(ls)
-		if testNext(ls, lexapi.TK_FUNCTION) {
+	case lex.TK_LOCAL:
+		lex.Next(ls)
+		if testNext(ls, lex.TK_FUNCTION) {
 			localFunc(ls)
 		} else {
 			localStat(ls)
 		}
-	case lexapi.TK_DBCOLON:
-		lexapi.Next(ls)
+	case lex.TK_DBCOLON:
+		lex.Next(ls)
 		labelStat(ls, strCheckName(ls), line)
-	case lexapi.TK_RETURN:
-		lexapi.Next(ls)
+	case lex.TK_RETURN:
+		lex.Next(ls)
 		retStat(ls)
-	case lexapi.TK_BREAK:
+	case lex.TK_BREAK:
 		breakStat(ls, line)
-	case lexapi.TK_GOTO:
-		lexapi.Next(ls)
+	case lex.TK_GOTO:
+		lex.Next(ls)
 		gotoStat(ls, line)
 	default:
 		// "global" is a context-sensitive (soft) keyword in Lua 5.5.
 		// It is recognized at statement start when followed by '<', TK_NAME,
 		// '*', or TK_FUNCTION, but can still be used as a variable name
 		// in other positions (e.g., "global = 1").
-		if ls.Token.Type == lexapi.TK_NAME && ls.Token.StrVal == "global" {
-			lk := lexapi.Lookahead(ls)
-			if lk == '<' || lk == lexapi.TK_NAME || lk == '*' || lk == lexapi.TK_FUNCTION {
+		if ls.Token.Type == lex.TK_NAME && ls.Token.StrVal == "global" {
+			lk := lex.Lookahead(ls)
+			if lk == '<' || lk == lex.TK_NAME || lk == '*' || lk == lex.TK_FUNCTION {
 				globalStatFunc(ls, line)
 				break
 			}
@@ -1855,9 +1855,9 @@ func statement(ls *lexapi.LexState) {
 // This is the sole public API of the parser.
 //
 // Mirrors: luaY_parser + mainfunc in lparser.c
-func Parse(source string, reader lexapi.LexReader) *objectapi.Proto {
-	ls := lexapi.NewLexState(reader, source)
-	lexapi.SetInput(ls) // prime the lexer with first character
+func Parse(source string, reader lex.LexReader) *object.Proto {
+	ls := lex.NewLexState(reader, source)
+	lex.SetInput(ls) // prime the lexer with first character
 	// Note: shebang skipping is handled by the file loader (DoFile),
 	// NOT here. load() from strings must not skip '#' lines.
 	ls.EnvName = "_ENV"
@@ -1867,7 +1867,7 @@ func Parse(source string, reader lexapi.LexReader) *objectapi.Proto {
 
 	var fs FuncState
 	var bl BlockCnt
-	fs.Proto = &objectapi.Proto{}
+	fs.Proto = &object.Proto{}
 	fs.Proto.LineDefined = 0
 
 	openFunc(ls, &fs, &bl)
@@ -1878,11 +1878,11 @@ func Parse(source string, reader lexapi.LexReader) *objectapi.Proto {
 	env.InStack = true
 	env.Idx = 0
 	env.Kind = VDKREG
-	env.Name = &objectapi.LuaString{Data: ls.EnvName, IsShort: true}
+	env.Name = &object.LuaString{Data: ls.EnvName, IsShort: true}
 
-	lexapi.Next(ls) // read first token
+	lex.Next(ls) // read first token
 	statList(ls)
-	check(ls, lexapi.TK_EOS)
+	check(ls, lex.TK_EOS)
 	closeFunc(ls)
 
 	return fs.Proto

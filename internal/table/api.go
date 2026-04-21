@@ -11,7 +11,7 @@
 // Reference: .analysis/07-runtime-infrastructure.md §3
 package table
 
-import objectapi "github.com/akzj/go-lua/internal/object"
+import "github.com/akzj/go-lua/internal/object"
 
 // ---------------------------------------------------------------------------
 // Table — the core Lua data structure
@@ -25,8 +25,8 @@ const (
 
 // Table is a Lua table with hybrid array + hash storage.
 type Table struct {
-	objectapi.GCHeader            // GC metadata
-	Array     []objectapi.TValue // array part: indices 0..len-1 map to Lua keys 1..len
+	object.GCHeader            // GC metadata
+	Array     []object.TValue // array part: indices 0..len-1 map to Lua keys 1..len
 	Nodes     []Node             // hash part: open-addressing with Brent's variation
 	LsizeNode uint8              // log2(len(nodes)), 0 if nodes == nil
 	LastFree  int                // index for free-slot backward scan
@@ -38,7 +38,7 @@ type Table struct {
 }
 
 // GC returns the GC header for this table.
-func (t *Table) GC() *objectapi.GCHeader { return &t.GCHeader }
+func (t *Table) GC() *object.GCHeader { return &t.GCHeader }
 
 // HasWeakKeys returns true if this table has weak keys (__mode contains "k").
 func (t *Table) HasWeakKeys() bool { return t.WeakMode&WeakKey != 0 }
@@ -48,9 +48,9 @@ func (t *Table) HasWeakValues() bool { return t.WeakMode&WeakValue != 0 }
 
 // Node is a hash table entry (key + value + chain offset).
 type Node struct {
-	Val    objectapi.TValue // value
-	KeyTT  objectapi.Tag    // key type tag
-	KeyVal any              // key value (int64, float64, *objectapi.LuaString, etc.)
+	Val    object.TValue // value
+	KeyTT  object.Tag    // key type tag
+	KeyVal any              // key value (int64, float64, *object.LuaString, etc.)
 	Next   int32            // offset to next node in chain (0 = end)
 }
 
@@ -72,19 +72,19 @@ func New(arraySize, hashSize int) *Table {
 // Get retrieves the value for the given key. Returns (value, found).
 // If the key is not present, returns (object.Nil, false).
 // For integer keys in the array range, accesses the array part directly.
-func (t *Table) Get(key objectapi.TValue) (objectapi.TValue, bool) {
+func (t *Table) Get(key object.TValue) (object.TValue, bool) {
 	return t.get(key)
 }
 
 // GetInt retrieves the value for an integer key.
 // Checks the array part first, then the hash part.
-func (t *Table) GetInt(key int64) (objectapi.TValue, bool) {
+func (t *Table) GetInt(key int64) (object.TValue, bool) {
 	return t.getInt(key)
 }
 
 // GetStr retrieves the value for a short string key.
 // Uses pointer equality for interned short strings (O(1) amortized).
-func (t *Table) GetStr(key *objectapi.LuaString) (objectapi.TValue, bool) {
+func (t *Table) GetStr(key *object.LuaString) (object.TValue, bool) {
 	return t.getStr(key)
 }
 
@@ -100,17 +100,17 @@ func (t *Table) RawLen() int64 {
 
 // Set sets the value for the given key. Panics if key is nil or NaN.
 // If the key is new and the hash part is full, triggers a rehash.
-func (t *Table) Set(key, value objectapi.TValue) {
+func (t *Table) Set(key, value object.TValue) {
 	t.set(key, value)
 }
 
 // SetInt sets the value for an integer key.
-func (t *Table) SetInt(key int64, value objectapi.TValue) {
+func (t *Table) SetInt(key int64, value object.TValue) {
 	t.setInt(key, value)
 }
 
 // SetStr sets the value for a short string key.
-func (t *Table) SetStr(key *objectapi.LuaString, value objectapi.TValue) {
+func (t *Table) SetStr(key *object.LuaString, value object.TValue) {
 	t.setStr(key, value)
 }
 
@@ -122,7 +122,7 @@ func (t *Table) SetStr(key *objectapi.LuaString, value objectapi.TValue) {
 // To start iteration, pass object.Nil as key.
 // Returns (key, value, true) for the next entry, or (Nil, Nil, false) when done.
 // Iteration order: array part first (keys 1..N), then hash part.
-func (t *Table) Next(key objectapi.TValue) (nextKey, nextVal objectapi.TValue, ok bool, err error) {
+func (t *Table) Next(key object.TValue) (nextKey, nextVal object.TValue, ok bool, err error) {
 	return t.next(key)
 }
 

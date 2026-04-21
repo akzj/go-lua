@@ -9,7 +9,7 @@
 package api
 
 import (
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // CFunction is the type for Go functions callable from Lua.
@@ -21,7 +21,7 @@ type CFunction func(L *State) int
 type State struct {
 	// Internal fields set during construction — not exported.
 	// The implementation file will define these.
-	Internal any // *stateapi.LuaState (avoids circular import)
+	Internal any // *state.LuaState (avoids circular import)
 }
 
 // --- Pseudo-Indices ---
@@ -108,8 +108,8 @@ type DebugInfo struct {
 	ExtraArgs       int    // number of extra arguments (vararg)
 	FTransfer       int    // index of first transferred value (for call/return hooks)
 	NTransfer       int    // number of transferred values (for call/return hooks)
-	CI              interface{} // internal: *stateapi.CallInfo
-	ThreadState     interface{} // internal: *stateapi.LuaState (set by GetStack)
+	CI              interface{} // internal: *state.CallInfo
+	ThreadState     interface{} // internal: *state.LuaState (set by GetStack)
 }
 
 // Status codes
@@ -126,4 +126,4 @@ const (
 const MultiRet = -1
 
 // TypeNone is the type for invalid indices.
-const TypeNone objectapi.Type = 0xFF
+const TypeNone object.Type = 0xFF

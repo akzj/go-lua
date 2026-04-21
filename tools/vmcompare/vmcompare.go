@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	stdlibapi "github.com/akzj/go-lua/internal/stdlib"
+	"github.com/akzj/go-lua/internal/stdlib"
 )
 
 // cLuaPath is the reference C Lua 5.5.1 binary.
@@ -43,7 +43,7 @@ func RunCLua(t *testing.T, code string) string {
 func RunGoLua(t *testing.T, code string) string {
 	t.Helper()
 	L := luaapi.NewState()
-	stdlibapi.OpenAll(L)
+	stdlib.OpenAll(L)
 
 	// Replace print with a buffer-capturing version
 	var buf bytes.Buffer

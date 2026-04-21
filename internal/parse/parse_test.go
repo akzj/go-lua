@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	lexapi "github.com/akzj/go-lua/internal/lex"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/lex"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/opcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -34,12 +34,12 @@ func (r *stringReader) NextByte() int {
 }
 
 // parseString compiles a Lua source string and returns the Proto.
-func parseString(src string) *objectapi.Proto {
+func parseString(src string) *object.Proto {
 	return Parse("test", newStringReader(src))
 }
 
 // expectParse verifies that source compiles without panic.
-func expectParse(t *testing.T, src string) *objectapi.Proto {
+func expectParse(t *testing.T, src string) *object.Proto {
 	t.Helper()
 	p := parseString(src)
 	if p == nil {
@@ -56,7 +56,7 @@ func expectParseError(t *testing.T, src string) {
 		if r == nil {
 			t.Fatal("expected parse error, got none")
 		}
-		if _, ok := r.(*lexapi.SyntaxError); !ok {
+		if _, ok := r.(*lex.SyntaxError); !ok {
 			t.Fatalf("expected *SyntaxError, got %T: %v", r, r)
 		}
 	}()
@@ -247,11 +247,11 @@ func TestParseForNumeric(t *testing.T) {
 	hasForPrep := false
 	hasForLoop := false
 	for _, inst := range p.Code {
-		op := opcodeapi.OpCode(inst & 0x7F)
-		if op == opcodeapi.OP_FORPREP {
+		op := opcode.OpCode(inst & 0x7F)
+		if op == opcode.OP_FORPREP {
 			hasForPrep = true
 		}
-		if op == opcodeapi.OP_FORLOOP {
+		if op == opcode.OP_FORLOOP {
 			hasForLoop = true
 		}
 	}
@@ -271,8 +271,8 @@ func TestParseForGeneric(t *testing.T) {
 	p := expectParse(t, "for k, v in next, t do end")
 	hasTForPrep := false
 	for _, inst := range p.Code {
-		op := opcodeapi.OpCode(inst & 0x7F)
-		if op == opcodeapi.OP_TFORPREP {
+		op := opcode.OpCode(inst & 0x7F)
+		if op == opcode.OP_TFORPREP {
 			hasTForPrep = true
 		}
 	}
@@ -654,8 +654,8 @@ func TestProtoReturnInstruction(t *testing.T) {
 	if len(p.Code) == 0 {
 		t.Fatal("expected at least one instruction")
 	}
-	lastOp := opcodeapi.OpCode(p.Code[len(p.Code)-1] & 0x7F)
-	if lastOp != opcodeapi.OP_RETURN && lastOp != opcodeapi.OP_RETURN0 && lastOp != opcodeapi.OP_RETURN1 {
+	lastOp := opcode.OpCode(p.Code[len(p.Code)-1] & 0x7F)
+	if lastOp != opcode.OP_RETURN && lastOp != opcode.OP_RETURN0 && lastOp != opcode.OP_RETURN1 {
 		t.Errorf("last instruction should be RETURN variant, got opcode %d", lastOp)
 	}
 }

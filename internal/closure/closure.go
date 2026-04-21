@@ -4,8 +4,8 @@
 package closure
 
 import (
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // FindUpval finds or creates an open upvalue at the given stack level.
-func FindUpval(L *stateapi.LuaState, level int) *UpVal {
+func FindUpval(L *state.LuaState, level int) *UpVal {
 	// Walk the open upvalue list (sorted descending by StackIdx)
 	var prev *UpVal
 	p := openUpvalHead(L)
@@ -36,7 +36,7 @@ func FindUpval(L *stateapi.LuaState, level int) *UpVal {
 	// Not found — create new upvalue at this level
 	uv := &UpVal{
 		StackIdx: level,
-		Own:      objectapi.Nil,
+		Own:      object.Nil,
 		Next:     p,     // link to rest of list (lower levels)
 		Stack:    &L.Stack, // reference to owning thread's stack for cross-thread access
 	}
@@ -64,7 +64,7 @@ func FindUpval(L *stateapi.LuaState, level int) *UpVal {
 // ---------------------------------------------------------------------------
 
 // CloseUpvals closes all open upvalues at or above the given stack level.
-func CloseUpvals(L *stateapi.LuaState, level int) {
+func CloseUpvals(L *state.LuaState, level int) {
 	for {
 		uv := openUpvalHead(L)
 		if uv == nil || uv.StackIdx < level {
@@ -83,7 +83,7 @@ func CloseUpvals(L *stateapi.LuaState, level int) {
 		if uv.StackIdx >= 0 && uv.StackIdx < len(L.Stack) {
 			uv.Close(L.Stack[uv.StackIdx].Val)
 		} else {
-			uv.Close(objectapi.Nil)
+			uv.Close(object.Nil)
 		}
 	}
 }
@@ -104,7 +104,7 @@ func InitUpvals(cl *LClosure) {
 		if cl.UpVals[i] == nil {
 			cl.UpVals[i] = &UpVal{
 				StackIdx: -1, // closed
-				Own:      objectapi.Nil,
+				Own:      object.Nil,
 			}
 		}
 	}
@@ -116,7 +116,7 @@ func InitUpvals(cl *LClosure) {
 // ---------------------------------------------------------------------------
 
 // openUpvalHead returns the head of the open upvalue list, or nil.
-func openUpvalHead(L *stateapi.LuaState) *UpVal {
+func openUpvalHead(L *state.LuaState) *UpVal {
 	if L.OpenUpval == nil {
 		return nil
 	}

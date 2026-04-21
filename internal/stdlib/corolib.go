@@ -2,9 +2,9 @@ package stdlib
 
 import (
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,12 +54,12 @@ func coroResume(L *luaapi.State) int {
 func auxResume(L *luaapi.State, co *luaapi.State, nArgs int) int {
 	// Check that the coroutine is resumable
 	coStatus := co.Status()
-	if coStatus != stateapi.StatusOK && coStatus != stateapi.StatusYield {
+	if coStatus != state.StatusOK && coStatus != state.StatusYield {
 		L.PushBoolean(false)
 		L.PushString("cannot resume dead coroutine")
 		return 2
 	}
-	if coStatus == stateapi.StatusOK && co.GetTop() == 0 {
+	if coStatus == state.StatusOK && co.GetTop() == 0 {
 		L.PushBoolean(false)
 		L.PushString("cannot resume dead coroutine")
 		return 2
@@ -73,7 +73,7 @@ func auxResume(L *luaapi.State, co *luaapi.State, nArgs int) int {
 	// Resume the coroutine
 	status, nresults := co.Resume(L, nArgs)
 
-	if status == stateapi.StatusOK || status == stateapi.StatusYield {
+	if status == state.StatusOK || status == state.StatusYield {
 		// Success: transfer results back
 		// Results are on co's stack
 		if nresults > 0 {
@@ -131,7 +131,7 @@ func coroWrapAux(L *luaapi.State) int {
 	// Resume
 	status, nresults := co.Resume(L, nArgs)
 
-	if status == stateapi.StatusOK || status == stateapi.StatusYield {
+	if status == state.StatusOK || status == state.StatusYield {
 		// Success: transfer results back
 		if nresults > 0 {
 			co.XMove(L, nresults)
@@ -141,17 +141,17 @@ func coroWrapAux(L *luaapi.State) int {
 
 	// Error: close coroutine's TBC variables, then propagate
 	// Mirrors: luaB_auxwrap in lcorolib.c:77-92
-	coState := co.Internal.(*stateapi.LuaState)
-	callerState := L.Internal.(*stateapi.LuaState)
+	coState := co.Internal.(*state.LuaState)
+	callerState := L.Internal.(*state.LuaState)
 	stat := coState.Status
-	if stat != stateapi.StatusOK && stat != stateapi.StatusYield {
-		vmapi.CloseThread(coState, callerState)
+	if stat != state.StatusOK && stat != state.StatusYield {
+		vm.CloseThread(coState, callerState)
 		co.XMove(L, 1) // move error message to caller
 	} else {
 		co.XMove(L, 1)
 	}
 	// Add context only for real strings (no coercion), mirroring C lua_type check.
-	if L.Type(-1) == objectapi.TypeString {
+	if L.Type(-1) == object.TypeString {
 		s, _ := L.ToString(-1)
 		L.SetTop(0)
 		L.Errorf("%s", s)
@@ -180,9 +180,9 @@ func auxStatus(L *luaapi.State, co *luaapi.State) int {
 	}
 	status := co.Status()
 	switch status {
-	case stateapi.StatusYield:
+	case state.StatusYield:
 		return cosYld
-	case stateapi.StatusOK:
+	case state.StatusOK:
 		// Check if it has frames above base CI (= normal, i.e. it resumed another coroutine)
 		if co.HasCallFrames() {
 			return cosNorm
@@ -220,7 +220,7 @@ func coroRunning(L *luaapi.State) int {
 // coroutine.isyieldable([co]) → boolean
 // Mirrors: luaB_yieldable in lcorolib.c
 func coroIsYieldable(L *luaapi.State) int {
-	if L.Type(1) == objectapi.TypeThread {
+	if L.Type(1) == object.TypeThread {
 		co := L.ToThread(1)
 		L.PushBoolean(co.IsYieldable())
 	} else {
@@ -252,10 +252,10 @@ func coroClose(L *luaapi.State) int {
 	case cosDead, cosYld:
 		// Can close dead or suspended coroutines
 		// Mirrors: luaB_close → lua_closethread in lcorolib.c:176
-		coState := co.Internal.(*stateapi.LuaState)
-		callerState := L.Internal.(*stateapi.LuaState)
-		status := vmapi.CloseThread(coState, callerState)
-		if status == stateapi.StatusOK {
+		coState := co.Internal.(*state.LuaState)
+		callerState := L.Internal.(*state.LuaState)
+		status := vm.CloseThread(coState, callerState)
+		if status == state.StatusOK {
 			L.PushBoolean(true)
 			return 1
 		}
@@ -268,7 +268,7 @@ func coroClose(L *luaapi.State) int {
 		return 0
 	case cosRun:
 		// Check if it's the main thread
-		L.RawGetI(luaapi.RegistryIndex, int64(stateapi.RegistryIndexMainThread))
+		L.RawGetI(luaapi.RegistryIndex, int64(state.RegistryIndexMainThread))
 		mainThread := L.ToThread(-1)
 		L.Pop(1)
 		if mainThread != nil && mainThread.Internal == co.Internal {
@@ -280,9 +280,9 @@ func coroClose(L *luaapi.State) int {
 		// Mirrors: luaB_close COS_RUN case in lcorolib.c:194-198
 		// CloseThread with L == from will panic(LuaBaseLevel) to unwind
 		// past all inner pcalls back to Resume.
-		coState := co.Internal.(*stateapi.LuaState)
-		callerState := L.Internal.(*stateapi.LuaState)
-		vmapi.CloseThread(coState, callerState)
+		coState := co.Internal.(*state.LuaState)
+		callerState := L.Internal.(*state.LuaState)
+		vm.CloseThread(coState, callerState)
 		// CloseThread panics when L == from, so this is unreachable
 		return 0
 	default:

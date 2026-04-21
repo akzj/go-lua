@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 func OpenDebug(L *luaapi.State) int {
@@ -185,7 +185,7 @@ func debugTraceback(L *luaapi.State) int {
 	// Handle optional thread argument (mirrors getthread in ldblib.c)
 	arg := 1
 	L1 := L // target state for traceback
-	if L.Type(1) == objectapi.TypeThread {
+	if L.Type(1) == object.TypeThread {
 		L1 = L.ToThread(1)
 		arg = 2
 	}
@@ -197,7 +197,7 @@ func debugTraceback(L *luaapi.State) int {
 		defaultLevel = 0
 	}
 	level := defaultLevel
-	if L.Type(arg) == objectapi.TypeNumber { // number as first arg = level
+	if L.Type(arg) == object.TypeNumber { // number as first arg = level
 		level = int(L.CheckInteger(arg))
 		hasMsg = false
 	} else {
@@ -308,7 +308,7 @@ func debugGetinfo(L *luaapi.State) int {
 	// Handle optional thread argument (mirrors getthread in ldblib.c)
 	arg := 1
 	L1 := L // target state
-	if L.Type(1) == objectapi.TypeThread {
+	if L.Type(1) == object.TypeThread {
 		L1 = L.ToThread(1)
 		arg = 2
 	}
@@ -318,7 +318,7 @@ func debugGetinfo(L *luaapi.State) int {
 	var ok bool
 	what := "flnStu" // default: all options (matches C Lua)
 
-	if L.Type(arg) == objectapi.TypeNumber { // number = stack level
+	if L.Type(arg) == object.TypeNumber { // number = stack level
 		level := int(L.CheckInteger(arg))
 		if L.GetTop() >= arg+1 {
 			what = L.CheckString(arg + 1)
@@ -482,7 +482,7 @@ func debugGetinfo(L *luaapi.State) int {
 
 // debug.getupvalue(f, up) — returns name and value of upvalue
 func debugGetupvalue(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeFunction)
+	L.CheckType(1, object.TypeFunction)
 	n := int(L.CheckInteger(2))
 	name, ok := L.GetUpvalue(1, n)
 	if !ok {
@@ -496,7 +496,7 @@ func debugGetupvalue(L *luaapi.State) int {
 // debug.setupvalue(f, up, value) — sets upvalue and returns its name
 func debugSetupvalue(L *luaapi.State) int {
 	L.CheckAny(3)
-	L.CheckType(1, objectapi.TypeFunction)
+	L.CheckType(1, object.TypeFunction)
 	n := int(L.CheckInteger(2))
 	// SetUpvalue pops the value from the top of the stack
 	L.PushValue(3) // push the value to top for SetUpvalue to consume
@@ -510,9 +510,9 @@ func debugSetupvalue(L *luaapi.State) int {
 
 // debug.upvaluejoin(f1, n1, f2, n2) — make f1's n1-th upvalue share f2's n2-th upvalue
 func debugUpvaluejoin(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeFunction)
+	L.CheckType(1, object.TypeFunction)
 	n1 := int(L.CheckInteger(2))
-	L.CheckType(3, objectapi.TypeFunction)
+	L.CheckType(3, object.TypeFunction)
 	n2 := int(L.CheckInteger(4))
 	f1 := L.GetLClosure(1)
 	f2 := L.GetLClosure(3)
@@ -535,7 +535,7 @@ func debugUpvaluejoin(L *luaapi.State) int {
 // debug.upvalueid(f, n) — returns a unique identifier for the n-th upvalue
 // Mirrors: db_upvalueid in ldblib.c
 func debugUpvalueid(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeFunction)
+	L.CheckType(1, object.TypeFunction)
 	n := int(L.CheckInteger(2))
 	f := L.GetLClosure(1)
 	if f == nil {
@@ -566,27 +566,27 @@ func debugUpvalueid(L *luaapi.State) int {
 func debugGethook(L *luaapi.State) int {
 	// getthread: check if arg 1 is a thread
 	arg := 0
-	var L1 *stateapi.LuaState
-	if L.Type(1) == objectapi.TypeThread {
+	var L1 *state.LuaState
+	if L.Type(1) == object.TypeThread {
 		t := L.ToThread(1)
-		L1 = t.Internal.(*stateapi.LuaState)
+		L1 = t.Internal.(*state.LuaState)
 		arg = 1
 	} else {
-		L1 = L.Internal.(*stateapi.LuaState)
+		L1 = L.Internal.(*state.LuaState)
 		arg = 0
 	}
 	_ = arg // arg not used for gethook (no further args)
 
 	mask := L1.HookMask
 	// Get hook function from target thread's Hook field
-	hookVal, ok := L1.Hook.(objectapi.TValue)
-	if !ok || hookVal.Val == nil || hookVal.Tt == objectapi.TagNil {
+	hookVal, ok := L1.Hook.(object.TValue)
+	if !ok || hookVal.Val == nil || hookVal.Tt == object.TagNil {
 		L.PushBoolean(false) // luaL_pushfail — no hook
 		return 1
 	}
 	// Push hook function onto calling thread's stack (safely)
-	ls := L.Internal.(*stateapi.LuaState)
-	vmapi.CheckStack(ls, 1)
+	ls := L.Internal.(*state.LuaState)
+	vm.CheckStack(ls, 1)
 	ls.Stack[ls.Top].Val = hookVal
 	ls.Top++
 
@@ -609,13 +609,13 @@ func debugGethook(L *luaapi.State) int {
 func debugSethook(L *luaapi.State) int {
 	// getthread: check if arg 1 is a thread
 	arg := 0
-	var L1 *stateapi.LuaState
-	if L.Type(1) == objectapi.TypeThread {
+	var L1 *state.LuaState
+	if L.Type(1) == object.TypeThread {
 		t := L.ToThread(1)
-		L1 = t.Internal.(*stateapi.LuaState)
+		L1 = t.Internal.(*state.LuaState)
 		arg = 1
 	} else {
-		L1 = L.Internal.(*stateapi.LuaState)
+		L1 = L.Internal.(*state.LuaState)
 		arg = 0
 	}
 
@@ -630,7 +630,7 @@ func debugSethook(L *luaapi.State) int {
 	}
 
 	// debug.sethook([thread,] func, mask [, count])
-	L.CheckType(arg+1, objectapi.TypeFunction)
+	L.CheckType(arg+1, object.TypeFunction)
 	smask := L.CheckString(arg + 2)
 	count := 0
 	if L.IsNumber(arg + 3) {
@@ -657,7 +657,7 @@ func debugSethook(L *luaapi.State) int {
 	// Store hook function as TValue on target thread's Hook field (per-thread).
 	// Push the function value to top, then read the TValue from the stack.
 	L.PushValue(arg + 1)
-	callerLS := L.Internal.(*stateapi.LuaState)
+	callerLS := L.Internal.(*state.LuaState)
 	L1.Hook = callerLS.Stack[callerLS.Top-1].Val
 	L.Pop(1)
 
@@ -683,7 +683,7 @@ func debugSethook(L *luaapi.State) int {
 }
 
 // getLocalNameFromProto returns the name of local variable n from prototype p.
-func getLocalNameFromProto(p *objectapi.Proto, idx int) string {
+func getLocalNameFromProto(p *object.Proto, idx int) string {
 	if p == nil {
 		return ""
 	}
@@ -710,7 +710,7 @@ func getLocalNameFromProto(p *objectapi.Proto, idx int) string {
 func debugGetlocal(L *luaapi.State) int {
 	n := int(L.CheckInteger(L.GetTop())) // n is ALWAYS last arg
 
-	if L.Type(1) == objectapi.TypeFunction {
+	if L.Type(1) == object.TypeFunction {
 		// (func, n) — name only, return 1
 		cl := L.GetLClosure(1)
 		if cl == nil || cl.Proto == nil {
@@ -739,9 +739,9 @@ func debugGetlocal(L *luaapi.State) int {
 		return 1
 	}
 
-	if L.Type(1) == objectapi.TypeThread {
+	if L.Type(1) == object.TypeThread {
 		thread := L.ToThread(1)
-		if L.Type(2) == objectapi.TypeFunction {
+		if L.Type(2) == object.TypeFunction {
 			// (co, func, n) — name only from func's proto, return 1
 			// C Lua ignores the coroutine argument entirely here.
 			cl := L.GetLClosure(2)
@@ -809,7 +809,7 @@ func debugGetlocal(L *luaapi.State) int {
 // debug.setlocal(level, n, value) → name or nil
 func debugSetlocal(L *luaapi.State) int {
 	n := int(L.CheckInteger(L.GetTop() - 1)) // n is 2nd to last arg
-	if L.Type(1) == objectapi.TypeThread {
+	if L.Type(1) == object.TypeThread {
 		// (co, level, n, value)
 		thread := L.ToThread(1)
 		level := int(L.CheckInteger(2))
@@ -855,7 +855,7 @@ func debugGetuservalue(L *luaapi.State) int {
 		n = int(L.CheckInteger(2))
 	}
 	tp := L.GetIUserValue(1, n)
-	L.PushBoolean(tp != objectapi.TypeNone)
+	L.PushBoolean(tp != object.TypeNone)
 	return 2
 }
 
@@ -864,7 +864,7 @@ func debugGetuservalue(L *luaapi.State) int {
 // Sets the nth user value of userdata u to value. Returns u on success, or fail.
 func debugSetuservalue(L *luaapi.State) int {
 	n := int(L.OptInteger(3, 1))
-	L.CheckType(1, objectapi.TypeUserdata)
+	L.CheckType(1, object.TypeUserdata)
 	L.CheckAny(2)
 	L.SetTop(2)
 	if !L.SetIUserValue(1, n) {

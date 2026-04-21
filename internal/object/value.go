@@ -55,7 +55,7 @@ func MakeLuaClosure(c any) TValue { return TValue{Tt: TagLuaClosure, Val: c} }
 func MakeCClosure(c any) TValue { return TValue{Tt: TagCClosure, Val: c} }
 
 // MakeLightCFunc creates a light C function TValue (no upvalues).
-// f should be a stateapi.CFunction.
+// f should be a state.CFunction.
 func MakeLightCFunc(f any) TValue { return TValue{Tt: TagLightCFunc, Val: f} }
 
 // MakeUserdata creates a full userdata TValue.
@@ -65,7 +65,7 @@ func MakeUserdata(u *Userdata) TValue { return TValue{Tt: TagUserdata, Val: u} }
 // p is an arbitrary Go value used as an opaque pointer.
 func MakeLightUserdata(p any) TValue { return TValue{Tt: TagLightUserdata, Val: p} }
 
-// MakeThread creates a thread TValue. t should be a *stateapi.LuaState.
+// MakeThread creates a thread TValue. t should be a *state.LuaState.
 func MakeThread(t any) TValue { return TValue{Tt: TagThread, Val: t} }
 
 // MakeProto creates a proto TValue (internal, used by compiler/VM).

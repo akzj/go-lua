@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ func TestPushNil(t *testing.T) {
 	if !L.IsNil(-1) {
 		t.Fatal("PushNil: not nil")
 	}
-	if L.Type(-1) != objectapi.TypeNil {
+	if L.Type(-1) != object.TypeNil {
 		t.Fatalf("PushNil: type = %v, want nil", L.Type(-1))
 	}
 }
@@ -427,7 +427,7 @@ func TestCreateTableAndSetGet(t *testing.T) {
 	L.PushInteger(42)
 	L.SetField(1, "x") // t.x = 42
 	tp := L.GetField(1, "x")
-	if tp != objectapi.TypeNumber {
+	if tp != object.TypeNumber {
 		t.Fatalf("GetField type = %v, want number", tp)
 	}
 	n, ok := L.ToInteger(-1)
@@ -443,7 +443,7 @@ func TestSetGetI(t *testing.T) {
 	L.PushString("hello")
 	L.SetI(1, 1) // t[1] = "hello"
 	tp := L.GetI(1, 1)
-	if tp != objectapi.TypeString {
+	if tp != object.TypeString {
 		t.Fatalf("GetI type = %v, want string", tp)
 	}
 	s, ok := L.ToString(-1)
@@ -459,7 +459,7 @@ func TestRawSetGet(t *testing.T) {
 	L.PushString("value")
 	L.RawSetI(1, 5) // t[5] = "value"
 	tp := L.RawGetI(1, 5)
-	if tp != objectapi.TypeString {
+	if tp != object.TypeString {
 		t.Fatalf("RawGetI type = %v, want string", tp)
 	}
 	L.Pop(1)
@@ -526,7 +526,7 @@ func TestSetGetGlobal(t *testing.T) {
 	L.PushInteger(99)
 	L.SetGlobal("myvar")
 	tp := L.GetGlobal("myvar")
-	if tp != objectapi.TypeNumber {
+	if tp != object.TypeNumber {
 		t.Fatalf("GetGlobal type = %v, want number", tp)
 	}
 	n, ok := L.ToInteger(-1)
@@ -539,7 +539,7 @@ func TestGetGlobalNonExistent(t *testing.T) {
 	L := NewState()
 	defer L.Close()
 	tp := L.GetGlobal("nonexistent")
-	if tp != objectapi.TypeNil {
+	if tp != object.TypeNil {
 		t.Fatalf("GetGlobal(nonexistent) type = %v, want nil", tp)
 	}
 	L.Pop(1)
@@ -553,15 +553,15 @@ func TestTypeName(t *testing.T) {
 	L := NewState()
 	defer L.Close()
 	tests := []struct {
-		tp   objectapi.Type
+		tp   object.Type
 		want string
 	}{
-		{objectapi.TypeNil, "nil"},
-		{objectapi.TypeBoolean, "boolean"},
-		{objectapi.TypeNumber, "number"},
-		{objectapi.TypeString, "string"},
-		{objectapi.TypeTable, "table"},
-		{objectapi.TypeFunction, "function"},
+		{object.TypeNil, "nil"},
+		{object.TypeBoolean, "boolean"},
+		{object.TypeNumber, "number"},
+		{object.TypeString, "string"},
+		{object.TypeTable, "table"},
+		{object.TypeFunction, "function"},
 		{TypeNone, "no value"},
 	}
 	for _, tt := range tests {
@@ -630,7 +630,7 @@ func TestDoStringSimple(t *testing.T) {
 		t.Fatalf("DoString error: %v", err)
 	}
 	tp := L.GetGlobal("x")
-	if tp != objectapi.TypeNumber {
+	if tp != object.TypeNumber {
 		t.Fatalf("x type = %v, want number", tp)
 	}
 	n, ok := L.ToInteger(-1)
@@ -872,7 +872,7 @@ func TestNewLib(t *testing.T) {
 		t.Fatal("NewLib should push a table")
 	}
 	tp := L.GetField(-1, "add")
-	if tp != objectapi.TypeFunction {
+	if tp != object.TypeFunction {
 		t.Fatalf("add field type = %v, want function", tp)
 	}
 	L.Pop(1) // pop add function

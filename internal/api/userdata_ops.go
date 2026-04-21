@@ -1,8 +1,9 @@
+// userdata_ops.go — Userdata and upvalue access operations.
 package api
 
 import (
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -11,19 +12,19 @@ import (
 
 // NewUserdata creates a new full userdata with nUV user values and pushes it.
 // Returns the Userdata object. size is ignored (Go manages memory).
-func (L *State) NewUserdata(size int, nUV int) *objectapi.Userdata {
-	ud := &objectapi.Userdata{
-		UserVals: make([]objectapi.TValue, nUV),
+func (L *State) NewUserdata(size int, nUV int) *object.Userdata {
+	ud := &object.Userdata{
+		UserVals: make([]object.TValue, nUV),
 	}
 	// Initialize user values to nil
 	for i := range ud.UserVals {
-		ud.UserVals[i] = objectapi.Nil
+		ud.UserVals[i] = object.Nil
 	}
 	L.ls().Global.LinkGC(ud) // V5: register in allgc chain
 	// Track allocation: base Userdata struct (~80 bytes) + UserVals slice
 	estimateSize := int64(80 + nUV*24)
 	L.TrackAlloc(estimateSize)
-	L.push(objectapi.TValue{Tt: objectapi.TagUserdata, Val: ud})
+	L.push(object.TValue{Tt: object.TagUserdata, Val: ud})
 	return ud
 }
 
@@ -40,8 +41,8 @@ func (L *State) GetUpvalue(funcIdx, n int) (string, bool) {
 		return "", false
 	}
 	switch v.Tt {
-	case objectapi.TagLuaClosure:
-		cl := v.Val.(*closureapi.LClosure)
+	case object.TagLuaClosure:
+		cl := v.Val.(*closure.LClosure)
 		if n < 1 || n > len(cl.UpVals) {
 			return "", false
 		}
@@ -56,8 +57,8 @@ func (L *State) GetUpvalue(funcIdx, n int) (string, bool) {
 			return cl.Proto.Upvalues[n-1].Name.String(), true
 		}
 		return "(no name)", true
-	case objectapi.TagCClosure:
-		cc := v.Val.(*closureapi.CClosure)
+	case object.TagCClosure:
+		cc := v.Val.(*closure.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
 			return "", false
 		}
@@ -75,8 +76,8 @@ func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 		return "", false
 	}
 	switch v.Tt {
-	case objectapi.TagLuaClosure:
-		cl := v.Val.(*closureapi.LClosure)
+	case object.TagLuaClosure:
+		cl := v.Val.(*closure.LClosure)
 		if n < 1 || n > len(cl.UpVals) {
 			return "", false
 		}
@@ -93,8 +94,8 @@ func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 			return cl.Proto.Upvalues[n-1].Name.String(), true
 		}
 		return "(no name)", true
-	case objectapi.TagCClosure:
-		cc := v.Val.(*closureapi.CClosure)
+	case object.TagCClosure:
+		cc := v.Val.(*closure.CClosure)
 		if n < 1 || n > len(cc.UpVals) {
 			return "", false
 		}

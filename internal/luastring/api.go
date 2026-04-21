@@ -20,7 +20,7 @@ package luastring
 import (
 	"weak"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // MaxShortLen is the maximum length for interned short strings (LUAI_MAXSHORTLEN = 40).
@@ -80,7 +80,7 @@ func HashBytes(data []byte, seed uint32) uint32 {
 // The string table only needs weak references because it's a cache —
 // the actual strong references are in Lua's stack, tables, and upvalues.
 type stringEntry struct {
-	wp weak.Pointer[objectapi.LuaString]
+	wp weak.Pointer[object.LuaString]
 }
 
 // StringTable interns short strings for pointer-equality lookups.
@@ -89,7 +89,7 @@ type StringTable struct {
 	buckets  [][]stringEntry // hash buckets (power-of-2 count)
 	count    int             // number of interned strings (may be stale until sweep)
 	seed     uint32          // hash seed (randomized per state)
-	OnCreate func(objectapi.GCObject) // V5: called when a new string is created (for GC linking)
+	OnCreate func(object.GCObject) // V5: called when a new string is created (for GC linking)
 }
 
 // NewStringTable creates a string table with the given hash seed.
@@ -104,7 +104,7 @@ func NewStringTable(seed uint32) *StringTable {
 // Intern returns the canonical *LuaString for the given Go string.
 // If the string is short (≤ MaxShortLen), it is interned (deduplicated).
 // If long, a new LuaString is created each time (not interned).
-func (st *StringTable) Intern(s string) *objectapi.LuaString {
+func (st *StringTable) Intern(s string) *object.LuaString {
 	if len(s) > MaxShortLen {
 		ts := newLong(s)
 		if st.OnCreate != nil {
@@ -116,7 +116,7 @@ func (st *StringTable) Intern(s string) *objectapi.LuaString {
 }
 
 // InternBytes is like Intern but accepts a byte slice.
-func (st *StringTable) InternBytes(b []byte) *objectapi.LuaString {
+func (st *StringTable) InternBytes(b []byte) *object.LuaString {
 	if len(b) > MaxShortLen {
 		ts := newLong(string(b))
 		if st.OnCreate != nil {
@@ -149,7 +149,7 @@ func (st *StringTable) Seed() uint32 {
 // that are no longer referenced by Lua code. The returned strong pointer is
 // stored by the caller in TValue.Val, keeping the string alive as long as
 // Lua code references it.
-func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
+func (st *StringTable) internShort(s string, h uint32) *object.LuaString {
 	idx := h & uint32(len(st.buckets)-1) // lmod for power-of-2
 
 	// Search existing bucket — check weak pointers
@@ -170,7 +170,7 @@ func (st *StringTable) internShort(s string, h uint32) *objectapi.LuaString {
 	st.buckets[idx] = bucket
 
 	// Not found — create new
-	ts := &objectapi.LuaString{
+	ts := &object.LuaString{
 		Data:    s,
 		Hash_:   h,
 		IsShort: true,
@@ -262,8 +262,8 @@ func (st *StringTable) SweepStrings() {
 
 // newLong creates a non-interned long string.
 // Hash is left at 0 — computed lazily when used as a table key.
-func newLong(s string) *objectapi.LuaString {
-	return &objectapi.LuaString{
+func newLong(s string) *object.LuaString {
+	return &object.LuaString{
 		Data:    s,
 		Hash_:   0,
 		IsShort: false,
@@ -277,7 +277,7 @@ func newLong(s string) *objectapi.LuaString {
 // Equal compares two LuaStrings.
 // For two short strings: pointer equality (both interned in the same table).
 // For any other combination: content comparison.
-func Equal(a, b *objectapi.LuaString) bool {
+func Equal(a, b *object.LuaString) bool {
 	if a == b {
 		return true
 	}

@@ -5,11 +5,11 @@ package vm
 import (
 	"fmt"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	mmapi "github.com/akzj/go-lua/internal/metamethod"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/metamethod"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // funcNameFromCode examines the instruction at pc to determine the function name.
@@ -18,48 +18,48 @@ import (
 // FuncNameFromCode examines the instruction at pc to determine the function name.
 // Returns (kind, name) or ("", "") if unknown.
 // Mirrors: funcnamefromcode in ldebug.c
-func FuncNameFromCode(L *stateapi.LuaState, p *objectapi.Proto, pc int) (string, string) {
+func FuncNameFromCode(L *state.LuaState, p *object.Proto, pc int) (string, string) {
 	if pc < 0 || pc >= len(p.Code) {
 		return "", ""
 	}
 	i := p.Code[pc]
-	op := opcodeapi.GetOpCode(i)
+	op := opcode.GetOpCode(i)
 
 	switch op {
-	case opcodeapi.OP_CALL, opcodeapi.OP_TAILCALL:
-		return BasicGetObjName(p, pc, opcodeapi.GetArgA(i))
-	case opcodeapi.OP_TFORCALL:
+	case opcode.OP_CALL, opcode.OP_TAILCALL:
+		return BasicGetObjName(p, pc, opcode.GetArgA(i))
+	case opcode.OP_TFORCALL:
 		return "for iterator", "for iterator"
-	case opcodeapi.OP_MMBIN, opcodeapi.OP_MMBINI, opcodeapi.OP_MMBINK:
-		tm := opcodeapi.GetArgC(i)
-		if tm < len(mmapi.TMNames) {
-			name := mmapi.TMNames[tm]
+	case opcode.OP_MMBIN, opcode.OP_MMBINI, opcode.OP_MMBINK:
+		tm := opcode.GetArgC(i)
+		if tm < len(metamethod.TMNames) {
+			name := metamethod.TMNames[tm]
 			if len(name) > 2 {
 				name = name[2:] // strip "__" prefix
 			}
 			return "metamethod", name
 		}
-	case opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE, opcodeapi.OP_GETI,
-		opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
+	case opcode.OP_GETTABUP, opcode.OP_GETTABLE, opcode.OP_GETI,
+		opcode.OP_GETFIELD, opcode.OP_SELF:
 		return "metamethod", "index"
-	case opcodeapi.OP_SETTABUP, opcodeapi.OP_SETTABLE, opcodeapi.OP_SETI,
-		opcodeapi.OP_SETFIELD:
+	case opcode.OP_SETTABUP, opcode.OP_SETTABLE, opcode.OP_SETI,
+		opcode.OP_SETFIELD:
 		return "metamethod", "newindex"
-	case opcodeapi.OP_UNM:
+	case opcode.OP_UNM:
 		return "metamethod", "unm"
-	case opcodeapi.OP_BNOT:
+	case opcode.OP_BNOT:
 		return "metamethod", "bnot"
-	case opcodeapi.OP_LEN:
+	case opcode.OP_LEN:
 		return "metamethod", "len"
-	case opcodeapi.OP_CONCAT:
+	case opcode.OP_CONCAT:
 		return "metamethod", "concat"
-	case opcodeapi.OP_EQ:
+	case opcode.OP_EQ:
 		return "metamethod", "eq"
-	case opcodeapi.OP_LT, opcodeapi.OP_LTI, opcodeapi.OP_GTI:
+	case opcode.OP_LT, opcode.OP_LTI, opcode.OP_GTI:
 		return "metamethod", "lt"
-	case opcodeapi.OP_LE, opcodeapi.OP_LEI, opcodeapi.OP_GEI:
+	case opcode.OP_LE, opcode.OP_LEI, opcode.OP_GEI:
 		return "metamethod", "le"
-	case opcodeapi.OP_CLOSE, opcodeapi.OP_RETURN:
+	case opcode.OP_CLOSE, opcode.OP_RETURN:
 		return "metamethod", "close"
 	}
 	return "", ""
@@ -68,10 +68,10 @@ func FuncNameFromCode(L *stateapi.LuaState, p *objectapi.Proto, pc int) (string,
 // callErrorExtra builds the extra info string for a call error.
 // Mirrors: luaG_callerror in ldebug.c
 // Returns e.g. " (metamethod 'add')" or " (global 'foo')" or "".
-func callErrorExtra(L *stateapi.LuaState, funcIdx int) string {
+func callErrorExtra(L *state.LuaState, funcIdx int) string {
 	// Try funcNameFromCode first (examines calling instruction)
 	if L.CI != nil && L.CI.IsLua() {
-		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closureapi.LClosure); ok && cl.Proto != nil {
+		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closure.LClosure); ok && cl.Proto != nil {
 			pc := L.CI.SavedPC - 1 // -1 to get the calling instruction
 			kind, name := FuncNameFromCode(L, cl.Proto, pc)
 			if kind != "" {
@@ -95,8 +95,8 @@ func callErrorExtra(L *stateapi.LuaState, funcIdx int) string {
 // Mirrors: luaG_typeerror in ldebug.c
 // reg is the register index (relative to CI base) holding the offending value.
 // If reg < 0, no variable info is added.
-func RunTypeError(L *stateapi.LuaState, val objectapi.TValue, op string, reg int) {
-	typeName := mmapi.ObjTypeName(L.Global, val)
+func RunTypeError(L *state.LuaState, val object.TValue, op string, reg int) {
+	typeName := metamethod.ObjTypeName(L.Global, val)
 	extra := ""
 	if reg >= 0 {
 		extra = VarInfo(L, reg)
@@ -107,30 +107,30 @@ func RunTypeError(L *stateapi.LuaState, val objectapi.TValue, op string, reg int
 // RunTypeErrorByVal raises a type error, finding the variable name by examining
 // the current VM instruction to determine which register holds the offending value.
 // Mirrors: luaG_typeerror → varinfo in ldebug.c
-func RunTypeErrorByVal(L *stateapi.LuaState, val objectapi.TValue, op string) {
-	typeName := mmapi.ObjTypeName(L.Global, val)
+func RunTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
+	typeName := metamethod.ObjTypeName(L.Global, val)
 	extra := ""
 	if L.CI != nil && L.CI.IsLua() {
-		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closureapi.LClosure); ok && cl.Proto != nil {
+		if cl, ok := L.Stack[L.CI.Func].Val.Val.(*closure.LClosure); ok && cl.Proto != nil {
 			pc := L.CI.SavedPC - 1
 			if pc >= 0 && pc < len(cl.Proto.Code) {
 				inst := cl.Proto.Code[pc]
-				iop := opcodeapi.GetOpCode(inst)
+				iop := opcode.GetOpCode(inst)
 				reg := -1
 				switch iop {
 				// For GET* ops, the table is in register B (or upvalue B for GETTABUP)
-				case opcodeapi.OP_GETTABLE, opcodeapi.OP_GETI, opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
-					reg = opcodeapi.GetArgB(inst)
-				case opcodeapi.OP_GETTABUP:
+				case opcode.OP_GETTABLE, opcode.OP_GETI, opcode.OP_GETFIELD, opcode.OP_SELF:
+					reg = opcode.GetArgB(inst)
+				case opcode.OP_GETTABUP:
 					// Table is an upvalue — check upvalue name
-					b := opcodeapi.GetArgB(inst)
+					b := opcode.GetArgB(inst)
 					if b < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[b].Name != nil {
 						uname := cl.Proto.Upvalues[b].Name.Data
 						if uname == "_ENV" {
 							// For _ENV access, use the key (field C) as the global name
-							k := opcodeapi.GetArgC(inst)
+							k := opcode.GetArgC(inst)
 							if k < len(cl.Proto.Constants) && cl.Proto.Constants[k].IsString() {
-								gname := cl.Proto.Constants[k].Val.(*objectapi.LuaString).Data
+								gname := cl.Proto.Constants[k].Val.(*object.LuaString).Data
 								extra = " (global '" + gname + "')"
 							}
 						} else {
@@ -138,16 +138,16 @@ func RunTypeErrorByVal(L *stateapi.LuaState, val objectapi.TValue, op string) {
 						}
 					}
 				// For SET* ops, the table is in register A (or upvalue A for SETTABUP)
-				case opcodeapi.OP_SETTABLE, opcodeapi.OP_SETI, opcodeapi.OP_SETFIELD:
-					reg = opcodeapi.GetArgA(inst)
-				case opcodeapi.OP_SETTABUP:
-					a := opcodeapi.GetArgA(inst)
+				case opcode.OP_SETTABLE, opcode.OP_SETI, opcode.OP_SETFIELD:
+					reg = opcode.GetArgA(inst)
+				case opcode.OP_SETTABUP:
+					a := opcode.GetArgA(inst)
 					if a < len(cl.Proto.Upvalues) && cl.Proto.Upvalues[a].Name != nil {
 						uname := cl.Proto.Upvalues[a].Name.Data
 						if uname == "_ENV" {
-							k := opcodeapi.GetArgB(inst)
+							k := opcode.GetArgB(inst)
 							if k < len(cl.Proto.Constants) && cl.Proto.Constants[k].IsString() {
-								gname := cl.Proto.Constants[k].Val.(*objectapi.LuaString).Data
+								gname := cl.Proto.Constants[k].Val.(*object.LuaString).Data
 								extra = " (global '" + gname + "')"
 							}
 						} else {

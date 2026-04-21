@@ -6,9 +6,9 @@ package state
 import (
 	"math/rand"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	luastringapi "github.com/akzj/go-lua/internal/luastring"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/luastring"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,12 +27,12 @@ func NewState() *LuaState {
 	g.Seed = rand.Uint32()
 
 	// Initialize V5 GC state (before any objects are created)
-	g.CurrentWhite = objectapi.WhiteBit0
-	g.GCState = objectapi.GCSpause
+	g.CurrentWhite = object.WhiteBit0
+	g.GCState = object.GCSpause
 
 	// String table
-	strtab := luastringapi.NewStringTable(g.Seed)
-	strtab.OnCreate = func(obj objectapi.GCObject) {
+	strtab := luastring.NewStringTable(g.Seed)
+	strtab.OnCreate = func(obj object.GCObject) {
 		g.LinkGC(obj) // V5: register new strings in allgc chain
 	}
 	g.StringTable = strtab
@@ -75,9 +75,9 @@ func NewState() *LuaState {
 func stackInit(L *LuaState) {
 	// Allocate stack with extra space
 	size := BasicStackSize + ExtraStack
-	L.Stack = make([]objectapi.StackValue, size)
+	L.Stack = make([]object.StackValue, size)
 	for i := range L.Stack {
-		L.Stack[i].Val = objectapi.Nil
+		L.Stack[i].Val = object.Nil
 	}
 
 	// Reset CI to base
@@ -93,7 +93,7 @@ func resetCI(L *LuaState) {
 	ci := &L.BaseCI
 	L.CI = ci
 	ci.Func = 0 // function slot at stack[0]
-	L.Stack[0].Val = objectapi.Nil // nil function entry for base CI
+	L.Stack[0].Val = object.Nil // nil function entry for base CI
 	ci.Top = 1 + 20 // func + LUA_MINSTACK (20)
 	ci.K = nil
 	ci.CallStatus = CISTC // base CI is a "C" frame
@@ -107,38 +107,38 @@ func resetCI(L *LuaState) {
 func initRegistry(L *LuaState, g *GlobalState) {
 	// Create registry table pre-sized for LUA_RIDX_LAST entries
 	// Matches C: luaH_resize(L, registry, LUA_RIDX_LAST, 0)
-	registry := tableapi.New(RegistryIndexLast, 0)
+	registry := table.New(RegistryIndexLast, 0)
 	g.LinkGC(registry) // link to allgc so sweep resets mark bits each cycle
 	g.GCTotalBytes += registry.EstimateBytes()
 
 	// Store as TValue in GlobalState
-	g.Registry = objectapi.TValue{
-		Tt:  objectapi.TagTable,
+	g.Registry = object.TValue{
+		Tt:  object.TagTable,
 		Val: registry,
 	}
 
 	// registry[1] = false (placeholder, matches C)
-	registry.SetInt(1, objectapi.False)
+	registry.SetInt(1, object.False)
 
 	// registry[LUA_RIDX_GLOBALS] = new table (the global table _G)
-	globals := tableapi.New(0, 0)
+	globals := table.New(0, 0)
 	g.LinkGC(globals) // link to allgc so sweep resets mark bits each cycle
 	g.GCTotalBytes += globals.EstimateBytes()
-	registry.SetInt(int64(RegistryIndexGlobals), objectapi.TValue{
-		Tt:  objectapi.TagTable,
+	registry.SetInt(int64(RegistryIndexGlobals), object.TValue{
+		Tt:  object.TagTable,
 		Val: globals,
 	})
 
 	// registry[LUA_RIDX_MAINTHREAD] = L (as thread TValue)
-	registry.SetInt(int64(RegistryIndexMainThread), objectapi.TValue{
-		Tt:  objectapi.TagThread,
+	registry.SetInt(int64(RegistryIndexMainThread), object.TValue{
+		Tt:  object.TagThread,
 		Val: L,
 	})
 }
 
 // initTMNames interns all 25 metamethod name strings.
 // Mirrors: luaT_init in ltm.c
-func initTMNames(g *GlobalState, strtab *luastringapi.StringTable) {
+func initTMNames(g *GlobalState, strtab *luastring.StringTable) {
 	// TMNames string array is defined in metamethod/api/api.go
 	eventNames := [25]string{
 		"__index", "__newindex", "__gc", "__mode", "__len", "__eq",
@@ -167,8 +167,8 @@ func GrowStack(L *LuaState, n int) {
 
 	// If we're already in error stack space (size > MaxStack), we can't grow further
 	if len(L.Stack) > MaxStack+ExtraStack {
-		panic(LuaError{Status: StatusErrMem, Message: objectapi.MakeString(
-			&objectapi.LuaString{Data: "stack overflow", IsShort: true})})
+		panic(LuaError{Status: StatusErrMem, Message: object.MakeString(
+			&object.LuaString{Data: "stack overflow", IsShort: true})})
 	}
 
 	// Calculate new size — at least double, but enough for needed
@@ -184,8 +184,8 @@ func GrowStack(L *LuaState, n int) {
 		if needed <= errorStackSize+ExtraStack {
 			newSize = errorStackSize + ExtraStack
 		} else {
-			panic(LuaError{Status: StatusErrMem, Message: objectapi.MakeString(
-				&objectapi.LuaString{Data: "stack overflow", IsShort: true})})
+			panic(LuaError{Status: StatusErrMem, Message: object.MakeString(
+				&object.LuaString{Data: "stack overflow", IsShort: true})})
 		}
 	} else {
 		if newSize > MaxStack+ExtraStack {
@@ -200,12 +200,12 @@ func GrowStack(L *LuaState, n int) {
 // Since upvalues use StackIdx (not pointers), no upvalue fixup is needed.
 func reallocStack(L *LuaState, newSize int) {
 	oldSize := len(L.Stack)
-	newStack := make([]objectapi.StackValue, newSize)
+	newStack := make([]object.StackValue, newSize)
 	copy(newStack, L.Stack)
 
 	// Initialize new slots to nil
 	for i := oldSize; i < newSize; i++ {
-		newStack[i].Val = objectapi.Nil
+		newStack[i].Val = object.Nil
 	}
 
 	L.Stack = newStack
@@ -227,7 +227,7 @@ func EnsureStack(L *LuaState, n int) {
 
 // PushValue pushes a TValue onto the stack and increments Top.
 // Panics if stack overflow.
-func PushValue(L *LuaState, v objectapi.TValue) {
+func PushValue(L *LuaState, v object.TValue) {
 	if L.Top >= len(L.Stack) {
 		GrowStack(L, 1)
 	}
@@ -338,7 +338,7 @@ func NewThread(L *LuaState) *LuaState {
 // initial white mark. This is the Go equivalent of C Lua's luaC_newobj.
 // Must be called for every new collectable object immediately after creation.
 // ---------------------------------------------------------------------------
-func (g *GlobalState) LinkGC(obj objectapi.GCObject) {
+func (g *GlobalState) LinkGC(obj object.GCObject) {
 	h := obj.GC()
 	h.Marked = g.CurrentWhite
 	h.Next = g.Allgc

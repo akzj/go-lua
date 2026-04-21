@@ -9,7 +9,7 @@ import (
 	"unicode"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -601,7 +601,7 @@ func gRead(L *luaapi.State, f *os.File, first int) int {
 	n := first
 	success := true
 	for i := 0; i < nargs && success; i++ {
-		if L.Type(n) == objectapi.TypeNumber {
+		if L.Type(n) == object.TypeNumber {
 			count := L.CheckInteger(n)
 			if count == 0 {
 				success = testEOF(L, f)
@@ -896,7 +896,7 @@ func gWrite(L *luaapi.State, stream *ioStream, arg int) int {
 	nargs := L.GetTop() - arg // matches C Lua: excludes file handle at top
 	for i := 0; i < nargs; i++ {
 		idx := arg + i
-		if L.Type(idx) == objectapi.TypeNumber {
+		if L.Type(idx) == object.TypeNumber {
 			// Format number as string (like C Lua's lua_numbertocstring)
 			if v, ok := L.ToInteger(idx); ok && float64(v) == func() float64 { f, _ := L.ToNumber(idx); return f }() {
 				str := fmt.Sprintf("%d", v)

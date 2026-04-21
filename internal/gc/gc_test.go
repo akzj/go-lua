@@ -5,18 +5,18 @@ import (
 	"testing"
 	"weak"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 func TestWeakPointerAfterSweep(t *testing.T) {
 	// Create a minimal GlobalState with allgc chain
-	g := &stateapi.GlobalState{}
-	g.CurrentWhite = objectapi.WhiteBit0
-	g.GCState = objectapi.GCSpause
+	g := &state.GlobalState{}
+	g.CurrentWhite = object.WhiteBit0
+	g.GCState = object.GCSpause
 
 	// Create an object and link it into allgc
-	s := &objectapi.LuaString{Data: "hello"}
+	s := &object.LuaString{Data: "hello"}
 	g.LinkGC(s)
 
 	// Create a weak pointer to track it
@@ -49,7 +49,7 @@ func TestWeakPointerAfterSweep(t *testing.T) {
 
 func TestSweepPreservesLiveObjects(t *testing.T) {
 	// Create a full Lua state
-	L := stateapi.NewState()
+	L := state.NewState()
 	g := L.Global
 
 	// Count objects on allgc chain

@@ -1,3 +1,4 @@
+// call.go — Call and load operations (Call, PCall, Load, DoFile, DoString).
 package api
 
 import (
@@ -6,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 
-	stateapi "github.com/akzj/go-lua/internal/state"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -22,7 +23,7 @@ func (L *State) Call(nArgs, nResults int) {
 	funcIdx := ls.Top - nArgs - 1
 	// C Lua's lua_callk with k==NULL calls luaD_callnoyield.
 	// This marks the call as non-yieldable.
-	vmapi.CallNoYield(ls, funcIdx, nResults)
+	vm.CallNoYield(ls, funcIdx, nResults)
 	// Ensure Top >= CI.Func + 1 so the API stack is valid
 	base := ls.CI.Func + 1
 	if ls.Top < base {
@@ -35,7 +36,7 @@ func (L *State) Call(nArgs, nResults int) {
 // and the continuation k will be invoked upon resume after a yield.
 // Otherwise behaves identically to Call (non-yieldable).
 // Mirrors: lua_callk in lapi.c
-func (L *State) CallK(nArgs, nResults int, ctx int, k stateapi.KFunction) {
+func (L *State) CallK(nArgs, nResults int, ctx int, k state.KFunction) {
 	ls := L.ls()
 	funcIdx := ls.Top - nArgs - 1
 	if k != nil && ls.Yieldable() {
@@ -43,10 +44,10 @@ func (L *State) CallK(nArgs, nResults int, ctx int, k stateapi.KFunction) {
 		// function (or anything it calls) yields, the VM can resume via k.
 		ls.CI.K = k
 		ls.CI.Ctx = ctx
-		vmapi.Call(ls, funcIdx, nResults)
+		vm.Call(ls, funcIdx, nResults)
 	} else {
 		// No continuation or not yieldable — same as Call().
-		vmapi.CallNoYield(ls, funcIdx, nResults)
+		vm.CallNoYield(ls, funcIdx, nResults)
 	}
 	// Ensure Top >= CI.Func + 1 so the API stack is valid
 	base := ls.CI.Func + 1
@@ -63,7 +64,7 @@ func (L *State) PCall(nArgs, nResults, msgHandler int) int {
 	if msgHandler != 0 {
 		errFunc = L.index2stack(msgHandler)
 	}
-	status := vmapi.PCall(ls, funcIdx, nResults, errFunc)
+	status := vm.PCall(ls, funcIdx, nResults, errFunc)
 	// Ensure Top >= CI.Func + 1 so the API stack is valid
 	base := ls.CI.Func + 1
 	if ls.Top < base {
@@ -98,20 +99,20 @@ func (L *State) Load(code string, name string, mode string) int {
 			return StatusErrSyntax
 		}
 		// Binary chunk — use undump
-		cl, err := vmapi.UndumpProto(ls, []byte(code), name)
+		cl, err := vm.UndumpProto(ls, []byte(code), name)
 		if err != nil {
 			L.PushString(err.Error())
 			return StatusErrSyntax
 		}
 		// Push the closure onto the stack
-		L.push(objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
+		L.push(object.TValue{Tt: object.TagLuaClosure, Val: cl})
 		// Set _ENV (first upvalue) to the global table.
 		// C Lua's lua_load does this after luaD_protectedparser:
 		//   if (f->nupvalues >= 1) { setobj(L, f->upvals[0]->v.p, &gt); }
 		if len(cl.UpVals) > 0 && cl.UpVals[0] != nil {
-			gt := vmapi.GetGlobalTable(ls)
-			cl.UpVals[0].Own = objectapi.TValue{
-				Tt:  objectapi.TagTable,
+			gt := vm.GetGlobalTable(ls)
+			cl.UpVals[0].Own = object.TValue{
+				Tt:  object.TagTable,
 				Val: gt,
 			}
 		}
@@ -124,7 +125,7 @@ func (L *State) Load(code string, name string, mode string) int {
 		return StatusErrSyntax
 	}
 	reader := &stringReader{data: code}
-	return vmapi.Load(ls, reader, name)
+	return vm.Load(ls, reader, name)
 }
 
 // DoString loads and executes a string.
@@ -192,6 +193,6 @@ func (L *State) DoFile(filename string) error {
 
 // Error raises a Lua error with the value at the top of the stack.
 func (L *State) Error() int {
-	vmapi.ErrorMsg(L.ls())
+	vm.ErrorMsg(L.ls())
 	return 0 // unreachable
 }

@@ -7,19 +7,19 @@ import (
 	"fmt"
 	"strings"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/opcode"
 )
 
 // DumpProto produces a text disassembly of a Proto in the same format
 // as tools/disasm.lua (C Lua reference disassembler).
-func DumpProto(p *objectapi.Proto) string {
+func DumpProto(p *object.Proto) string {
 	var sb strings.Builder
 	dumpProto(&sb, p, "")
 	return sb.String()
 }
 
-func dumpProto(sb *strings.Builder, p *objectapi.Proto, indent string) {
+func dumpProto(sb *strings.Builder, p *object.Proto, indent string) {
 	src := "?"
 	if p.Source != nil {
 		src = p.Source.Data
@@ -33,11 +33,11 @@ func dumpProto(sb *strings.Builder, p *objectapi.Proto, indent string) {
 
 	// Instructions
 	for pc, inst := range p.Code {
-		op := opcodeapi.GetOpCode(opcodeapi.Instruction(inst))
-		name := opcodeapi.OpName(op)
+		op := opcode.GetOpCode(opcode.Instruction(inst))
+		name := opcode.OpName(op)
 		line := getLine(p, pc+1) // 1-based PC for line lookup
-		mode := opcodeapi.GetMode(op)
-		args := formatArgs(opcodeapi.Instruction(inst), mode)
+		mode := opcode.GetMode(op)
+		args := formatArgs(opcode.Instruction(inst), mode)
 
 		fmt.Fprintf(sb, "%s\t%d\t[%d]\t%-12s\t%s\n",
 			indent, pc+1, line, name, args)
@@ -81,47 +81,47 @@ func dumpProto(sb *strings.Builder, p *objectapi.Proto, indent string) {
 	}
 }
 
-func formatArgs(inst opcodeapi.Instruction, mode opcodeapi.OpMode) string {
+func formatArgs(inst opcode.Instruction, mode opcode.OpMode) string {
 	switch mode {
-	case opcodeapi.IABC:
-		a := opcodeapi.GetArgA(inst)
-		b := opcodeapi.GetArgB(inst)
-		c := opcodeapi.GetArgC(inst)
-		k := opcodeapi.GetArgK(inst)
+	case opcode.IABC:
+		a := opcode.GetArgA(inst)
+		b := opcode.GetArgB(inst)
+		c := opcode.GetArgC(inst)
+		k := opcode.GetArgK(inst)
 		if k != 0 {
 			return fmt.Sprintf("%d %d %d ; k=1", a, b, c)
 		}
 		return fmt.Sprintf("%d %d %d", a, b, c)
-	case opcodeapi.IVABC:
-		a := opcodeapi.GetArgA(inst)
-		vb := opcodeapi.GetArgVB(inst)
-		vc := opcodeapi.GetArgVC(inst)
-		k := opcodeapi.GetArgK(inst)
+	case opcode.IVABC:
+		a := opcode.GetArgA(inst)
+		vb := opcode.GetArgVB(inst)
+		vc := opcode.GetArgVC(inst)
+		k := opcode.GetArgK(inst)
 		if k != 0 {
 			return fmt.Sprintf("%d %d %d ; k=1", a, vb, vc)
 		}
 		return fmt.Sprintf("%d %d %d", a, vb, vc)
-	case opcodeapi.IABx:
-		return fmt.Sprintf("%d %d", opcodeapi.GetArgA(inst), opcodeapi.GetArgBx(inst))
-	case opcodeapi.IAsBx:
-		return fmt.Sprintf("%d %d", opcodeapi.GetArgA(inst), opcodeapi.GetArgSBx(inst))
-	case opcodeapi.IAx:
-		return fmt.Sprintf("%d", opcodeapi.GetArgAx(inst))
-	case opcodeapi.ISJ:
-		return fmt.Sprintf("%d", opcodeapi.GetArgSJ(inst))
+	case opcode.IABx:
+		return fmt.Sprintf("%d %d", opcode.GetArgA(inst), opcode.GetArgBx(inst))
+	case opcode.IAsBx:
+		return fmt.Sprintf("%d %d", opcode.GetArgA(inst), opcode.GetArgSBx(inst))
+	case opcode.IAx:
+		return fmt.Sprintf("%d", opcode.GetArgAx(inst))
+	case opcode.ISJ:
+		return fmt.Sprintf("%d", opcode.GetArgSJ(inst))
 	default:
 		return "?"
 	}
 }
 
-func fmtConstant(v objectapi.TValue) string {
+func fmtConstant(v object.TValue) string {
 	if v.IsNil() {
 		return "nil"
 	}
-	if v.Tag() == objectapi.TagFalse {
+	if v.Tag() == object.TagFalse {
 		return "false"
 	}
-	if v.Tag() == objectapi.TagTrue {
+	if v.Tag() == object.TagTrue {
 		return "true"
 	}
 	if v.IsInteger() {
@@ -141,7 +141,7 @@ func fmtConstant(v objectapi.TValue) string {
 }
 
 // getLine computes the absolute line number for 1-based PC.
-func getLine(p *objectapi.Proto, pc int) int {
+func getLine(p *object.Proto, pc int) int {
 	if len(p.LineInfo) == 0 || pc < 1 || pc > len(p.LineInfo) {
 		return 0
 	}

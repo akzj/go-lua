@@ -1,3 +1,4 @@
+// vmhelpers.go — VM helper functions (arithmetic, comparison, coercion, table access).
 package vm
 
 import (
@@ -5,12 +6,12 @@ import (
 	"strings"
 	"sync/atomic"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	luastringapi "github.com/akzj/go-lua/internal/luastring"
-	mmapi "github.com/akzj/go-lua/internal/metamethod"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/luastring"
+	"github.com/akzj/go-lua/internal/metamethod"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -18,14 +19,14 @@ import (
 // ---------------------------------------------------------------------------
 
 // ToNumber tries to convert a TValue to float64.
-func ToNumber(v objectapi.TValue) (float64, bool) {
+func ToNumber(v object.TValue) (float64, bool) {
 	switch v.Tt {
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		return v.Val.(float64), true
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		return float64(v.Val.(int64)), true
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		return stringToNumber(v.Val.(*objectapi.LuaString).Data)
+	case object.TagShortStr, object.TagLongStr:
+		return stringToNumber(v.Val.(*object.LuaString).Data)
 	}
 	return 0, false
 }
@@ -33,24 +34,24 @@ func ToNumber(v objectapi.TValue) (float64, bool) {
 // ToInteger tries to convert a TValue to int64.
 // toIntegerStrict converts a TValue to int64 without string coercion.
 // Used for bitwise ops which in Lua 5.5 do NOT coerce strings.
-func toIntegerStrict(v objectapi.TValue) (int64, bool) {
+func toIntegerStrict(v object.TValue) (int64, bool) {
 	switch v.Tt {
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		return v.Val.(int64), true
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		return FloatToInteger(v.Val.(float64))
 	}
 	return 0, false
 }
 
-func ToInteger(v objectapi.TValue) (int64, bool) {
+func ToInteger(v object.TValue) (int64, bool) {
 	switch v.Tt {
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		return v.Val.(int64), true
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		return FloatToInteger(v.Val.(float64))
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		return stringToInteger(v.Val.(*objectapi.LuaString).Data)
+	case object.TagShortStr, object.TagLongStr:
+		return stringToInteger(v.Val.(*object.LuaString).Data)
 	}
 	return 0, false
 }
@@ -72,7 +73,7 @@ func FloatToInteger(f float64) (int64, bool) {
 }
 
 // toFloat extracts a float64 from a TValue that may hold int64 or float64.
-func toFloat(v objectapi.TValue) float64 {
+func toFloat(v object.TValue) float64 {
 	switch val := v.Val.(type) {
 	case float64:
 		return val
@@ -105,35 +106,35 @@ func floatToIntegerCeil(f float64) (int64, bool) {
 // toNumberTV converts a TValue to a numeric TValue, preserving int/float type.
 // For strings, uses StringToNumber which returns int for "10", float for "10.5".
 // This is used for arithmetic coercion where type preservation matters.
-func toNumberTV(v objectapi.TValue) (objectapi.TValue, bool) {
+func toNumberTV(v object.TValue) (object.TValue, bool) {
 	switch v.Tt {
-	case objectapi.TagFloat, objectapi.TagInteger:
+	case object.TagFloat, object.TagInteger:
 		return v, true
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		return objectapi.StringToNumber(v.Val.(*objectapi.LuaString).Data)
+	case object.TagShortStr, object.TagLongStr:
+		return object.StringToNumber(v.Val.(*object.LuaString).Data)
 	}
-	return objectapi.Nil, false
+	return object.Nil, false
 }
 
 // toNumberNS converts a TValue to a numeric TValue WITHOUT string coercion.
 // This mirrors C Lua's tonumberns: only handles int64 and float64 types.
 // Strings and all other types return failure, causing fallthrough to metamethod dispatch.
-func toNumberNS(v objectapi.TValue) (objectapi.TValue, bool) {
+func toNumberNS(v object.TValue) (object.TValue, bool) {
 	switch v.Tt {
-	case objectapi.TagFloat, objectapi.TagInteger:
+	case object.TagFloat, object.TagInteger:
 		return v, true
 	}
-	return objectapi.Nil, false
+	return object.Nil, false
 }
 
 // ToNumberNS converts a TValue to float64 WITHOUT string coercion.
 // This mirrors C Lua's tonumberns for float-only ops (POW, DIV).
 // Only handles int64 (promoted to float) and float64 types.
-func ToNumberNS(v objectapi.TValue) (float64, bool) {
+func ToNumberNS(v object.TValue) (float64, bool) {
 	switch v.Tt {
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		return v.Float(), true
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		return float64(v.Integer()), true
 	}
 	return 0, false
@@ -142,13 +143,13 @@ func ToNumberNS(v objectapi.TValue) (float64, bool) {
 // arithBinTV performs a binary arithmetic operation on two TValues with proper
 // int/float type preservation. If both operands are integers, uses intOp;
 // otherwise converts both to float and uses floatOp.
-func arithBinTV(a, b objectapi.TValue, intOp func(int64, int64) int64, floatOp func(float64, float64) float64) objectapi.TValue {
+func arithBinTV(a, b object.TValue, intOp func(int64, int64) int64, floatOp func(float64, float64) float64) object.TValue {
 	if a.IsInteger() && b.IsInteger() {
-		return objectapi.MakeInteger(intOp(a.Integer(), b.Integer()))
+		return object.MakeInteger(intOp(a.Integer(), b.Integer()))
 	}
 	fa := toFloat(a)
 	fb := toFloat(b)
-	return objectapi.MakeFloat(floatOp(fa, fb))
+	return object.MakeFloat(floatOp(fa, fb))
 }
 
 // stringToNumber tries to parse a string as a number (float64).
@@ -295,7 +296,7 @@ func stringToInteger(s string) (int64, bool) {
 // ---------------------------------------------------------------------------
 
 // IDiv performs integer floor division (m // n).
-func IDiv(L *stateapi.LuaState, m, n int64) int64 {
+func IDiv(L *state.LuaState, m, n int64) int64 {
 	if uint64(n)+1 <= 1 { // n == 0 or n == -1
 		if n == 0 {
 			RunError(L, "attempt to divide by zero")
@@ -310,7 +311,7 @@ func IDiv(L *stateapi.LuaState, m, n int64) int64 {
 }
 
 // IMod performs integer modulus (m % n).
-func IMod(L *stateapi.LuaState, m, n int64) int64 {
+func IMod(L *state.LuaState, m, n int64) int64 {
 	if uint64(n)+1 <= 1 {
 		if n == 0 {
 			RunError(L, "attempt to perform 'n%0'")
@@ -424,7 +425,7 @@ func leFloatInt(f float64, i int64) bool {
 }
 
 // ltNum compares two numbers (l < r).
-func ltNum(l, r objectapi.TValue) bool {
+func ltNum(l, r object.TValue) bool {
 	if l.IsInteger() {
 		li := l.Val.(int64)
 		if r.IsInteger() {
@@ -440,7 +441,7 @@ func ltNum(l, r objectapi.TValue) bool {
 }
 
 // leNum compares two numbers (l <= r).
-func leNum(l, r objectapi.TValue) bool {
+func leNum(l, r object.TValue) bool {
 	if l.IsInteger() {
 		li := l.Val.(int64)
 		if r.IsInteger() {
@@ -456,40 +457,40 @@ func leNum(l, r objectapi.TValue) bool {
 }
 
 // LessThan performs l < r with metamethods.
-func LessThan(L *stateapi.LuaState, l, r objectapi.TValue) bool {
+func LessThan(L *state.LuaState, l, r object.TValue) bool {
 	if l.IsNumber() && r.IsNumber() {
 		return ltNum(l, r)
 	}
 	if l.IsString() && r.IsString() {
-		return l.Val.(*objectapi.LuaString).Data < r.Val.(*objectapi.LuaString).Data
+		return l.Val.(*object.LuaString).Data < r.Val.(*object.LuaString).Data
 	}
 	// Try metamethod
-	return callOrderTM(L, l, r, mmapi.TM_LT)
+	return callOrderTM(L, l, r, metamethod.TM_LT)
 }
 
 // LessEqual performs l <= r with metamethods.
-func LessEqual(L *stateapi.LuaState, l, r objectapi.TValue) bool {
+func LessEqual(L *state.LuaState, l, r object.TValue) bool {
 	if l.IsNumber() && r.IsNumber() {
 		return leNum(l, r)
 	}
 	if l.IsString() && r.IsString() {
-		return l.Val.(*objectapi.LuaString).Data <= r.Val.(*objectapi.LuaString).Data
+		return l.Val.(*object.LuaString).Data <= r.Val.(*object.LuaString).Data
 	}
-	return callOrderTM(L, l, r, mmapi.TM_LE)
+	return callOrderTM(L, l, r, metamethod.TM_LE)
 }
 
 // callOrderTM calls an order metamethod (__lt or __le).
-func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) bool {
-	tm := mmapi.GetTMByObj(L.Global, l, event)
+func callOrderTM(L *state.LuaState, l, r object.TValue, event metamethod.TMS) bool {
+	tm := metamethod.GetTMByObj(L.Global, l, event)
 	if tm.IsNil() {
-		tm = mmapi.GetTMByObj(L.Global, r, event)
+		tm = metamethod.GetTMByObj(L.Global, r, event)
 	}
 	if tm.IsNil() {
-		if event == mmapi.TM_LE {
+		if event == metamethod.TM_LE {
 			// Try __lt with swapped operands: a <= b iff !(b < a)
-			tm = mmapi.GetTMByObj(L.Global, r, mmapi.TM_LT)
+			tm = metamethod.GetTMByObj(L.Global, r, metamethod.TM_LT)
 			if tm.IsNil() {
-				tm = mmapi.GetTMByObj(L.Global, l, mmapi.TM_LT)
+				tm = metamethod.GetTMByObj(L.Global, l, metamethod.TM_LT)
 			}
 			if !tm.IsNil() {
 				result := callTMRes(L, tm, r, l)
@@ -497,8 +498,8 @@ func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) b
 			}
 		}
 		// Build comparison error message: "two <type> values" or "<type1> with <type2> values"
-		lt := mmapi.ObjTypeName(L.Global, l)
-		rt := mmapi.ObjTypeName(L.Global, r)
+		lt := metamethod.ObjTypeName(L.Global, l)
+		rt := metamethod.ObjTypeName(L.Global, r)
 		if lt == rt {
 			RunError(L, "attempt to compare two "+lt+" values")
 		} else {
@@ -514,13 +515,13 @@ func callOrderTM(L *stateapi.LuaState, l, r objectapi.TValue, event mmapi.TMS) b
 // p1 is the register value, im is the immediate integer, flip indicates whether
 // arguments should be swapped (for GT/GE), isf indicates the immediate is float,
 // event is TM_LT or TM_LE.
-func callOrderITM(L *stateapi.LuaState, p1 objectapi.TValue, im int64, flip bool, isf bool, event mmapi.TMS) bool {
+func callOrderITM(L *state.LuaState, p1 object.TValue, im int64, flip bool, isf bool, event metamethod.TMS) bool {
 	// Create TValue for the immediate
-	var p2 objectapi.TValue
+	var p2 object.TValue
 	if isf {
-		p2 = objectapi.MakeFloat(float64(im))
+		p2 = object.MakeFloat(float64(im))
 	} else {
-		p2 = objectapi.MakeInteger(im)
+		p2 = object.MakeInteger(im)
 	}
 	// Flip arguments if needed (GT/GE use flip)
 	if flip {
@@ -530,7 +531,7 @@ func callOrderITM(L *stateapi.LuaState, p1 objectapi.TValue, im int64, flip bool
 }
 
 // EqualObj performs t1 == t2 with metamethods.
-func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
+func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 	if t1.Tt != t2.Tt {
 		// Different tags — check int/float cross-comparison
 		if t1.IsNumber() && t2.IsNumber() {
@@ -547,11 +548,11 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 	}
 	// Same base type
 	switch t1.Tt {
-	case objectapi.TagNil:
+	case object.TagNil:
 		return true
-	case objectapi.TagFalse, objectapi.TagTrue:
+	case object.TagFalse, object.TagTrue:
 		return t1.Tt == t2.Tt
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		i1, ok1 := t1.Val.(int64)
 		i2, ok2 := t2.Val.(int64)
 		if ok1 && ok2 {
@@ -561,7 +562,7 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 		f1 := toFloat(t1)
 		f2 := toFloat(t2)
 		return f1 == f2
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		f1, ok1 := t1.Val.(float64)
 		f2, ok2 := t2.Val.(float64)
 		if ok1 && ok2 {
@@ -570,13 +571,13 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 		ff1 := toFloat(t1)
 		ff2 := toFloat(t2)
 		return ff1 == ff2
-	case objectapi.TagShortStr:
-		return t1.Val.(*objectapi.LuaString).Data == t2.Val.(*objectapi.LuaString).Data
-	case objectapi.TagLongStr:
-		return t1.Val.(*objectapi.LuaString).Data == t2.Val.(*objectapi.LuaString).Data
-	case objectapi.TagTable:
-		h1 := t1.Val.(*tableapi.Table)
-		h2 := t2.Val.(*tableapi.Table)
+	case object.TagShortStr:
+		return t1.Val.(*object.LuaString).Data == t2.Val.(*object.LuaString).Data
+	case object.TagLongStr:
+		return t1.Val.(*object.LuaString).Data == t2.Val.(*object.LuaString).Data
+	case object.TagTable:
+		h1 := t1.Val.(*table.Table)
+		h2 := t2.Val.(*table.Table)
 		if h1 == h2 {
 			return true
 		}
@@ -584,22 +585,22 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 			return false
 		}
 		// Try __eq metamethod
-		tm := getTableTM(L.Global, h1, mmapi.TM_EQ)
+		tm := getTableTM(L.Global, h1, metamethod.TM_EQ)
 		if tm.IsNil() {
-			tm = getTableTM(L.Global, h2, mmapi.TM_EQ)
+			tm = getTableTM(L.Global, h2, metamethod.TM_EQ)
 		}
 		if tm.IsNil() {
 			return false
 		}
 		result := callTMRes(L, tm, t1, t2)
 		return !result.IsFalsy()
-	case objectapi.TagLuaClosure, objectapi.TagCClosure:
+	case object.TagLuaClosure, object.TagCClosure:
 		return t1.Val == t2.Val // pointer comparison — struct pointers are comparable
-	case objectapi.TagLightCFunc:
+	case object.TagLightCFunc:
 		// Use interface data word for unique closure identity (reflect.Pointer is shared)
-		return objectapi.LightCFuncEqual(t1.Val, t2.Val)
+		return object.LightCFuncEqual(t1.Val, t2.Val)
 	default:
-		if t1.Tt == objectapi.TagLightCFunc || t2.Tt == objectapi.TagLightCFunc {
+		if t1.Tt == object.TagLightCFunc || t2.Tt == object.TagLightCFunc {
 			return false // different tags already checked above
 		}
 		return t1.Val == t2.Val
@@ -607,7 +608,7 @@ func EqualObj(L *stateapi.LuaState, t1, t2 objectapi.TValue) bool {
 }
 
 // RawEqualObj performs raw equality (no metamethods).
-func RawEqualObj(t1, t2 objectapi.TValue) bool {
+func RawEqualObj(t1, t2 object.TValue) bool {
 	if t1.Tt != t2.Tt {
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
@@ -622,11 +623,11 @@ func RawEqualObj(t1, t2 objectapi.TValue) bool {
 		return false
 	}
 	switch t1.Tt {
-	case objectapi.TagNil:
+	case object.TagNil:
 		return true
-	case objectapi.TagFalse, objectapi.TagTrue:
+	case object.TagFalse, object.TagTrue:
 		return t1.Tt == t2.Tt
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		i1, ok1 := t1.Val.(int64)
 		i2, ok2 := t2.Val.(int64)
 		if ok1 && ok2 {
@@ -636,7 +637,7 @@ func RawEqualObj(t1, t2 objectapi.TValue) bool {
 		f1 := toFloat(t1)
 		f2 := toFloat(t2)
 		return f1 == f2
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		f1, ok1 := t1.Val.(float64)
 		f2, ok2 := t2.Val.(float64)
 		if ok1 && ok2 {
@@ -645,29 +646,29 @@ func RawEqualObj(t1, t2 objectapi.TValue) bool {
 		ff1 := toFloat(t1)
 		ff2 := toFloat(t2)
 		return ff1 == ff2
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		return t1.Val.(*objectapi.LuaString).Data == t2.Val.(*objectapi.LuaString).Data
-	case objectapi.TagLuaClosure, objectapi.TagCClosure:
+	case object.TagShortStr, object.TagLongStr:
+		return t1.Val.(*object.LuaString).Data == t2.Val.(*object.LuaString).Data
+	case object.TagLuaClosure, object.TagCClosure:
 		return t1.Val == t2.Val // pointer comparison
-	case objectapi.TagLightCFunc:
-		return objectapi.LightCFuncEqual(t1.Val, t2.Val)
+	case object.TagLightCFunc:
+		return object.LightCFuncEqual(t1.Val, t2.Val)
 	default:
 		return t1.Val == t2.Val
 	}
 }
 
 // getTableTM gets a metamethod from a table's metatable.
-func getTableTM(g *stateapi.GlobalState, t *tableapi.Table, event mmapi.TMS) objectapi.TValue {
+func getTableTM(g *state.GlobalState, t *table.Table, event metamethod.TMS) object.TValue {
 	mt := t.GetMetatable()
 	if mt == nil {
-		return objectapi.Nil
+		return object.Nil
 	}
 	if g == nil {
-		return objectapi.Nil
+		return object.Nil
 	}
 	tmName := g.TMNames[event]
 	if tmName == nil {
-		return objectapi.Nil
+		return object.Nil
 	}
 	v, _ := mt.GetStr(tmName)
 	return v
@@ -680,7 +681,7 @@ func getTableTM(g *stateapi.GlobalState, t *tableapi.Table, event mmapi.TMS) obj
 // callTMRes calls a metamethod with two arguments and returns the result.
 // IMPORTANT: Uses L.Top as scratch space. Callers must ensure L.Top is above
 // any registers they need preserved (PosCall moves result to the func slot).
-func callTMRes(L *stateapi.LuaState, tm, p1, p2 objectapi.TValue) objectapi.TValue {
+func callTMRes(L *state.LuaState, tm, p1, p2 object.TValue) object.TValue {
 	// Push: tm, p1, p2
 	top := L.Top
 	L.Stack[top].Val = tm
@@ -694,7 +695,7 @@ func callTMRes(L *stateapi.LuaState, tm, p1, p2 objectapi.TValue) objectapi.TVal
 }
 
 // callTM calls a metamethod with 3 args (tm, p1, p2, p3) — for __newindex etc.
-func callTM(L *stateapi.LuaState, tm, p1, p2, p3 objectapi.TValue) {
+func callTM(L *state.LuaState, tm, p1, p2, p3 object.TValue) {
 	top := L.Top
 	L.Stack[top].Val = tm
 	L.Stack[top+1].Val = p1
@@ -706,7 +707,7 @@ func callTM(L *stateapi.LuaState, tm, p1, p2, p3 objectapi.TValue) {
 
 // opErrorMsg builds a type error message with optional variable info.
 // Mirrors: luaG_opinterror + luaG_typeerror in ldebug.c
-func opErrorMsg(L *stateapi.LuaState, p1, p2 objectapi.TValue, op string, reg1, reg2 int) string {
+func opErrorMsg(L *state.LuaState, p1, p2 object.TValue, op string, reg1, reg2 int) string {
 	// Pick the wrong operand (first non-number)
 	badReg := reg1
 	badVal := p1
@@ -718,21 +719,21 @@ func opErrorMsg(L *stateapi.LuaState, p1, p2 objectapi.TValue, op string, reg1, 
 	if badReg >= 0 {
 		info = VarInfo(L, badReg)
 	}
-	return "attempt to " + op + " a " + mmapi.ObjTypeName(L.Global, badVal) + " value" + info
+	return "attempt to " + op + " a " + metamethod.ObjTypeName(L.Global, badVal) + " value" + info
 }
 
 // tryBinTM tries a binary metamethod.
 // reg1, reg2 are register hints for p1, p2 (-1 if not a register).
-func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmapi.TMS, reg1, reg2 int) {
-	tm := mmapi.GetTMByObj(L.Global, p1, event)
+func tryBinTM(L *state.LuaState, p1, p2 object.TValue, res int, event metamethod.TMS, reg1, reg2 int) {
+	tm := metamethod.GetTMByObj(L.Global, p1, event)
 	if tm.IsNil() {
-		tm = mmapi.GetTMByObj(L.Global, p2, event)
+		tm = metamethod.GetTMByObj(L.Global, p2, event)
 	}
 	if tm.IsNil() {
-		if event == mmapi.TM_CONCAT {
+		if event == metamethod.TM_CONCAT {
 			RunError(L, opErrorMsg(L, p1, p2, "concatenate", reg1, reg2))
 		}
-		if event >= mmapi.TM_BAND && event <= mmapi.TM_SHR || event == mmapi.TM_BNOT {
+		if event >= metamethod.TM_BAND && event <= metamethod.TM_SHR || event == metamethod.TM_BNOT {
 			// If both are numbers but can't convert to int, give specific error
 			// Mirrors: luaG_tointerror in ldebug.c
 			if p1.IsNumber() && p2.IsNumber() {
@@ -757,8 +758,8 @@ func tryBinTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, res int, event mmap
 }
 
 // tryBiniTM tries a binary metamethod with an integer immediate operand.
-func tryBiniTM(L *stateapi.LuaState, p1 objectapi.TValue, imm int, flip bool, res int, event mmapi.TMS, reg1 int) {
-	p2 := objectapi.MakeInteger(int64(imm))
+func tryBiniTM(L *state.LuaState, p1 object.TValue, imm int, flip bool, res int, event metamethod.TMS, reg1 int) {
+	p2 := object.MakeInteger(int64(imm))
 	if flip {
 		tryBinTM(L, p2, p1, res, event, -1, reg1)
 	} else {
@@ -767,7 +768,7 @@ func tryBiniTM(L *stateapi.LuaState, p1 objectapi.TValue, imm int, flip bool, re
 }
 
 // tryBinKTM tries a binary metamethod with a constant operand (possibly flipped).
-func tryBinKTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, flip bool, res int, event mmapi.TMS, reg1 int) {
+func tryBinKTM(L *state.LuaState, p1, p2 object.TValue, flip bool, res int, event metamethod.TMS, reg1 int) {
 	if flip {
 		tryBinTM(L, p2, p1, res, event, -1, reg1)
 	} else {
@@ -776,13 +777,13 @@ func tryBinKTM(L *stateapi.LuaState, p1, p2 objectapi.TValue, flip bool, res int
 }
 
 // tryConcatTM tries the __concat metamethod for two values.
-func tryConcatTM(L *stateapi.LuaState) {
+func tryConcatTM(L *state.LuaState) {
 	top := L.Top
 	p1 := L.Stack[top-2].Val
 	p2 := L.Stack[top-1].Val
-	tm := mmapi.GetTMByObj(L.Global, p1, mmapi.TM_CONCAT)
+	tm := metamethod.GetTMByObj(L.Global, p1, metamethod.TM_CONCAT)
 	if tm.IsNil() {
-		tm = mmapi.GetTMByObj(L.Global, p2, mmapi.TM_CONCAT)
+		tm = metamethod.GetTMByObj(L.Global, p2, metamethod.TM_CONCAT)
 	}
 	if tm.IsNil() {
 		// Report the type of the non-string/non-number operand
@@ -790,7 +791,7 @@ func tryConcatTM(L *stateapi.LuaState) {
 		if p1.IsString() || p1.IsNumber() {
 			errType = p2
 		}
-		RunError(L, "attempt to concatenate a "+mmapi.ObjTypeName(L.Global, errType)+" value")
+		RunError(L, "attempt to concatenate a "+metamethod.ObjTypeName(L.Global, errType)+" value")
 	}
 	result := callTMRes(L, tm, p1, p2)
 	L.Stack[top-2].Val = result
@@ -801,13 +802,13 @@ func tryConcatTM(L *stateapi.LuaState) {
 // String/Number coercion for concat
 // ---------------------------------------------------------------------------
 
-func toStringForConcat(v objectapi.TValue) (string, bool) {
+func toStringForConcat(v object.TValue) (string, bool) {
 	switch v.Tt {
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		return v.Val.(*objectapi.LuaString).Data, true
-	case objectapi.TagInteger:
+	case object.TagShortStr, object.TagLongStr:
+		return v.Val.(*object.LuaString).Data, true
+	case object.TagInteger:
 		return intToString(v.Val.(int64)), true
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		return floatToString(v.Val.(float64)), true
 	}
 	return "", false
@@ -922,18 +923,18 @@ func appendFloat(buf []byte, f float64) []byte {
 
 // internString creates a properly interned LuaString via the global string table.
 // This ensures correct hash values for table key lookups.
-func internString(L *stateapi.LuaState, s string) *objectapi.LuaString {
-	st := L.Global.StringTable.(*luastringapi.StringTable)
+func internString(L *state.LuaState, s string) *object.LuaString {
+	st := L.Global.StringTable.(*luastring.StringTable)
 	return st.Intern(s)
 }
 
 // makeInternedString creates a TValue string that is properly interned.
-func makeInternedString(L *stateapi.LuaState, s string) objectapi.TValue {
-	return objectapi.MakeString(internString(L, s))
+func makeInternedString(L *state.LuaState, s string) object.TValue {
+	return object.MakeString(internString(L, s))
 }
 
 // Concat concatenates 'total' values on the stack from L.Top-total to L.Top-1.
-func Concat(L *stateapi.LuaState, total int) {
+func Concat(L *state.LuaState, total int) {
 	if total == 1 {
 		return
 	}
@@ -991,13 +992,13 @@ func Concat(L *stateapi.LuaState, total int) {
 // ---------------------------------------------------------------------------
 
 // ObjLen computes #rb and stores in L.Stack[ra].
-func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
+func ObjLen(L *state.LuaState, ra int, rb object.TValue) {
 	switch rb.Tt {
-	case objectapi.TagTable:
-		h := rb.Val.(*tableapi.Table)
+	case object.TagTable:
+		h := rb.Val.(*table.Table)
 		mt := h.GetMetatable()
 		if mt != nil {
-			tm := getTableTM(L.Global, h, mmapi.TM_LEN)
+			tm := getTableTM(L.Global, h, metamethod.TM_LEN)
 			if !tm.IsNil() {
 				// Ensure L.Top is above ra so callTMRes doesn't clobber live registers
 				if L.Top <= ra {
@@ -1008,14 +1009,14 @@ func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
 				return
 			}
 		}
-		L.Stack[ra].Val = objectapi.MakeInteger(h.RawLen())
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		s := rb.Val.(*objectapi.LuaString)
-		L.Stack[ra].Val = objectapi.MakeInteger(int64(len(s.Data)))
+		L.Stack[ra].Val = object.MakeInteger(h.RawLen())
+	case object.TagShortStr, object.TagLongStr:
+		s := rb.Val.(*object.LuaString)
+		L.Stack[ra].Val = object.MakeInteger(int64(len(s.Data)))
 	default:
-		tm := mmapi.GetTMByObj(L.Global, rb, mmapi.TM_LEN)
+		tm := metamethod.GetTMByObj(L.Global, rb, metamethod.TM_LEN)
 		if tm.IsNil() {
-			RunError(L, "attempt to get length of a "+mmapi.ObjTypeName(L.Global, rb)+" value")
+			RunError(L, "attempt to get length of a "+metamethod.ObjTypeName(L.Global, rb)+" value")
 		}
 		// Ensure L.Top is above ra so callTMRes doesn't clobber live registers
 		if L.Top <= ra {
@@ -1031,18 +1032,18 @@ func ObjLen(L *stateapi.LuaState, ra int, rb objectapi.TValue) {
 // ---------------------------------------------------------------------------
 
 // FinishGet completes a table get with __index metamethod chain.
-func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
+func FinishGet(L *state.LuaState, t, key object.TValue, ra int) {
 	for loop := 0; loop < maxTagLoop; loop++ {
-		var tm objectapi.TValue
+		var tm object.TValue
 		if t.IsTable() {
-			h := t.Val.(*tableapi.Table)
-			tm = getTableTM(L.Global, h, mmapi.TM_INDEX)
+			h := t.Val.(*table.Table)
+			tm = getTableTM(L.Global, h, metamethod.TM_INDEX)
 			if tm.IsNil() {
-				L.Stack[ra].Val = objectapi.Nil
+				L.Stack[ra].Val = object.Nil
 				return
 			}
 		} else {
-			tm = mmapi.GetTMByObj(L.Global, t, mmapi.TM_INDEX)
+			tm = metamethod.GetTMByObj(L.Global, t, metamethod.TM_INDEX)
 			if tm.IsNil() {
 				RunTypeErrorByVal(L, t, "index")
 			}
@@ -1061,7 +1062,7 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 		// tm is a table — repeat with tm as the new table
 		t = tm
 		if t.IsTable() {
-			h := t.Val.(*tableapi.Table)
+			h := t.Val.(*table.Table)
 			val, found := h.Get(key)
 			if found && !val.IsNil() {
 				L.Stack[ra].Val = val
@@ -1075,7 +1076,7 @@ func FinishGet(L *stateapi.LuaState, t, key objectapi.TValue, ra int) {
 // tableSetWithMeta sets a key in a table, checking for __newindex metamethod
 // when the key doesn't already exist. This is the "fast set + fallback" pattern
 // matching C Lua's luaV_fastset / luaV_finishset.
-func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val objectapi.TValue) {
+func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TValue) {
 	// Check for nil/NaN key — C Lua raises luaG_runerror, not panic
 	if key.IsNil() {
 		RunError(L, "table index is nil")
@@ -1083,7 +1084,7 @@ func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val obje
 	if key.IsFloat() && math.IsNaN(key.Float()) {
 		RunError(L, "table index is NaN")
 	}
-	h := tval.Val.(*tableapi.Table)
+	h := tval.Val.(*table.Table)
 	// Fast path: key already exists → just overwrite
 	_, found := h.Get(key)
 	if found {
@@ -1091,7 +1092,7 @@ func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val obje
 		return
 	}
 	// Key absent — check for __newindex metamethod
-	tm := getTableTM(L.Global, h, mmapi.TM_NEWINDEX)
+	tm := getTableTM(L.Global, h, metamethod.TM_NEWINDEX)
 	if tm.IsNil() {
 		// No metamethod — raw set
 		h.Set(key, val)
@@ -1102,18 +1103,18 @@ func tableSetWithMeta(L *stateapi.LuaState, tval objectapi.TValue, key, val obje
 }
 
 // FinishSet completes a table set with __newindex metamethod chain.
-func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
+func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 	for loop := 0; loop < maxTagLoop; loop++ {
-		var tm objectapi.TValue
+		var tm object.TValue
 		if t.IsTable() {
-			h := t.Val.(*tableapi.Table)
-			tm = getTableTM(L.Global, h, mmapi.TM_NEWINDEX)
+			h := t.Val.(*table.Table)
+			tm = getTableTM(L.Global, h, metamethod.TM_NEWINDEX)
 			if tm.IsNil() {
 				h.Set(key, val)
 				return
 			}
 		} else {
-			tm = mmapi.GetTMByObj(L.Global, t, mmapi.TM_NEWINDEX)
+			tm = metamethod.GetTMByObj(L.Global, t, metamethod.TM_NEWINDEX)
 			if tm.IsNil() {
 				RunTypeErrorByVal(L, t, "index")
 			}
@@ -1125,7 +1126,7 @@ func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 		// tm is a table — repeat
 		t = tm
 		if t.IsTable() {
-			h := t.Val.(*tableapi.Table)
+			h := t.Val.(*table.Table)
 			_, found := h.Get(key)
 			if found {
 				h.Set(key, val)
@@ -1142,14 +1143,14 @@ func FinishSet(L *stateapi.LuaState, t, key, val objectapi.TValue) {
 
 // forerror raises a for-loop type error matching C Lua's luaG_forerror:
 // "bad 'for' <what> (number expected, got <typename>)"
-func forerror(L *stateapi.LuaState, val objectapi.TValue, what string) {
-	RunError(L, "bad 'for' "+what+" (number expected, got "+mmapi.ObjTypeName(L.Global, val)+")")
+func forerror(L *state.LuaState, val object.TValue, what string) {
+	RunError(L, "bad 'for' "+what+" (number expected, got "+metamethod.ObjTypeName(L.Global, val)+")")
 }
 
 // forLimit implements C Lua's forlimit: convert a for-loop limit to integer
 // using floor (step>0) or ceil (step<0) rounding. Returns true to skip the loop.
 // This matches lvm.c forlimit exactly.
-func forLimit(L *stateapi.LuaState, init int64, plimit objectapi.TValue, limit *int64, step int64) bool {
+func forLimit(L *state.LuaState, init int64, plimit object.TValue, limit *int64, step int64) bool {
 	// First try exact integer conversion (handles integer values and exact float-to-int)
 	if li, ok := flttointeger(plimit, step); ok {
 		*limit = li
@@ -1181,16 +1182,16 @@ func forLimit(L *stateapi.LuaState, init int64, plimit objectapi.TValue, limit *
 
 // flttointeger converts a TValue to integer using floor (step>0) or ceil (step<0)
 // rounding mode, matching C Lua's luaV_tointeger with F2Ifloor/F2Iceil.
-func flttointeger(v objectapi.TValue, step int64) (int64, bool) {
+func flttointeger(v object.TValue, step int64) (int64, bool) {
 	switch v.Tt {
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		return v.Val.(int64), true
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		f := v.Val.(float64)
 		return floatToIntegerRounded(f, step)
-	case objectapi.TagShortStr, objectapi.TagLongStr:
+	case object.TagShortStr, object.TagLongStr:
 		// String: try to parse as number, then convert with rounding
-		s := v.Val.(*objectapi.LuaString).Data
+		s := v.Val.(*object.LuaString).Data
 		if n, ok := stringToInteger(s); ok {
 			return n, true
 		}
@@ -1223,7 +1224,7 @@ func floatToIntegerRounded(f float64, step int64) (int64, bool) {
 }
 
 // ForPrep prepares a numeric for loop. Returns true to skip the loop.
-func ForPrep(L *stateapi.LuaState, ra int) bool {
+func ForPrep(L *state.LuaState, ra int) bool {
 	pinit := L.Stack[ra].Val
 	plimit := L.Stack[ra+1].Val
 	pstep := L.Stack[ra+2].Val
@@ -1252,9 +1253,9 @@ func ForPrep(L *stateapi.LuaState, ra int) bool {
 			count /= uint64(-(step + 1)) + 1
 		}
 		// Rearrange: ra=count, ra+1=step, ra+2=init (control variable)
-		L.Stack[ra].Val = objectapi.MakeInteger(int64(count))
-		L.Stack[ra+1].Val = objectapi.MakeInteger(step)
-		L.Stack[ra+2].Val = objectapi.MakeInteger(init)
+		L.Stack[ra].Val = object.MakeInteger(int64(count))
+		L.Stack[ra+1].Val = object.MakeInteger(step)
+		L.Stack[ra+2].Val = object.MakeInteger(init)
 	} else {
 		// Float loop
 		finit, ok1 := ToNumber(pinit)
@@ -1279,25 +1280,25 @@ func ForPrep(L *stateapi.LuaState, ra int) bool {
 			return true
 		}
 		// Rearrange: ra=limit, ra+1=step, ra+2=init (control variable)
-		L.Stack[ra].Val = objectapi.MakeFloat(flimit)
-		L.Stack[ra+1].Val = objectapi.MakeFloat(fstep)
-		L.Stack[ra+2].Val = objectapi.MakeFloat(finit)
+		L.Stack[ra].Val = object.MakeFloat(flimit)
+		L.Stack[ra+1].Val = object.MakeFloat(fstep)
+		L.Stack[ra+2].Val = object.MakeFloat(finit)
 	}
 	return false
 }
 
 // ForLoop performs one iteration of a numeric for loop.
 // Returns true if the loop should continue (jump back).
-func ForLoop(L *stateapi.LuaState, ra int) bool {
+func ForLoop(L *state.LuaState, ra int) bool {
 	if L.Stack[ra+1].Val.IsInteger() {
 		// Integer loop: ra=count, ra+1=step, ra+2=control
 		count := uint64(L.Stack[ra].Val.Integer())
 		if count > 0 {
 			step := L.Stack[ra+1].Val.Integer()
 			idx := L.Stack[ra+2].Val.Integer()
-			L.Stack[ra].Val = objectapi.MakeInteger(int64(count - 1))
+			L.Stack[ra].Val = object.MakeInteger(int64(count - 1))
 			idx += step
-			L.Stack[ra+2].Val = objectapi.MakeInteger(idx)
+			L.Stack[ra+2].Val = object.MakeInteger(idx)
 			return true
 		}
 	} else {
@@ -1308,12 +1309,12 @@ func ForLoop(L *stateapi.LuaState, ra int) bool {
 		idx += step
 		if step > 0 {
 			if idx <= limit {
-				L.Stack[ra+2].Val = objectapi.MakeFloat(idx)
+				L.Stack[ra+2].Val = object.MakeFloat(idx)
 				return true
 			}
 		} else {
 			if limit <= idx {
-				L.Stack[ra+2].Val = objectapi.MakeFloat(idx)
+				L.Stack[ra+2].Val = object.MakeFloat(idx)
 				return true
 			}
 		}
@@ -1326,14 +1327,14 @@ func ForLoop(L *stateapi.LuaState, ra int) bool {
 // ---------------------------------------------------------------------------
 
 // PushClosure creates a new Lua closure and stores it in L.Stack[ra].
-func PushClosure(L *stateapi.LuaState, p *objectapi.Proto, encup []*closureapi.UpVal, base, ra int) {
+func PushClosure(L *state.LuaState, p *object.Proto, encup []*closure.UpVal, base, ra int) {
 	nup := len(p.Upvalues)
-	ncl := closureapi.NewLClosure(p, nup)
+	ncl := closure.NewLClosure(p, nup)
 	L.Global.LinkGC(ncl) // V5: register in allgc chain
-	L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: ncl}
+	L.Stack[ra].Val = object.TValue{Tt: object.TagLuaClosure, Val: ncl}
 	for i := 0; i < nup; i++ {
 		if p.Upvalues[i].InStack {
-			ncl.UpVals[i] = closureapi.FindUpval(L, base+int(p.Upvalues[i].Idx))
+			ncl.UpVals[i] = closure.FindUpval(L, base+int(p.Upvalues[i].Idx))
 		} else {
 			ncl.UpVals[i] = encup[p.Upvalues[i].Idx]
 		}
@@ -1350,39 +1351,39 @@ func PushClosure(L *stateapi.LuaState, p *objectapi.Proto, encup []*closureapi.U
 //
 //	[old ci.Func] ... [extra args] [func copy] [fixed params] ...
 //	ci.Func now points to the func copy (after the extra args).
-func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Proto) {
+func AdjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 	nfixparams := int(p.NumParams)
 	totalargs := L.Top - ci.Func - 1
 	nextra := totalargs - nfixparams
 	if nextra < 0 {
 		// Fill missing fixed params with nil
 		for i := totalargs; i < nfixparams; i++ {
-			L.Stack[L.Top].Val = objectapi.Nil
+			L.Stack[L.Top].Val = object.Nil
 			L.Top++
 		}
 		nextra = 0
 		totalargs = nfixparams
 	}
 
-	if p.Flag&objectapi.PF_VATAB != 0 {
+	if p.Flag&object.PF_VATAB != 0 {
 		// === PF_VATAB path: create vararg table ===
 		// Mirrors: luaT_adjustvarargs + createvarargtab in ltm.c
 		CheckStack(L, int(p.MaxStackSize)+1)
-		t := tableapi.New(nextra, 1)
+		t := table.New(nextra, 1)
 		L.Global.LinkGC(t) // V5: register in allgc chain
 		size := t.EstimateBytes()
 		atomic.AddInt64(&L.Global.GCTotalBytes, size)
 		// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 		// Set t.n = nextra
-		st := L.Global.StringTable.(*luastringapi.StringTable)
-		nKey := objectapi.MakeString(st.Intern("n"))
-		t.Set(nKey, objectapi.MakeInteger(int64(nextra)))
+		st := L.Global.StringTable.(*luastring.StringTable)
+		nKey := object.MakeString(st.Intern("n"))
+		t.Set(nKey, object.MakeInteger(int64(nextra)))
 		// Set t[1..nextra] = extra args
 		for i := 0; i < nextra; i++ {
 			t.SetInt(int64(i+1), L.Stack[ci.Func+nfixparams+1+i].Val)
 		}
 		// Place table at the vararg parameter slot (after fixed params)
-		L.Stack[ci.Func+nfixparams+1].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
+		L.Stack[ci.Func+nfixparams+1].Val = object.TValue{Tt: object.TagTable, Val: t}
 		// Set top to after all params (fixed + vararg table)
 		L.Top = ci.Func + 1 + nfixparams + 1
 		ci.Top = ci.Func + 1 + int(p.MaxStackSize)
@@ -1398,14 +1399,14 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		// Copy fixed parameters above extra args
 		for i := 1; i <= nfixparams; i++ {
 			L.Stack[L.Top].Val = L.Stack[ci.Func+i].Val
-			L.Stack[ci.Func+i].Val = objectapi.Nil // erase original (for GC)
+			L.Stack[ci.Func+i].Val = object.Nil // erase original (for GC)
 			L.Top++
 		}
 		// ci.Func now lives after the hidden (extra) arguments
 		ci.Func += totalargs + 1
 		ci.Top = ci.Func + 1 + int(p.MaxStackSize)
 		// Set vararg parameter slot to nil (mirrors C Lua: setnilvalue)
-		L.Stack[ci.Func+nfixparams+1].Val = objectapi.Nil
+		L.Stack[ci.Func+nfixparams+1].Val = object.Nil
 	}
 }
 
@@ -1413,10 +1414,10 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 // When vatab >= 0, reads from the vararg table at ci.Func+vatab+1.
 // When vatab < 0, reads from hidden stack args below ci.Func.
 // Mirrors: luaT_getvarargs in ltm.c
-func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vatab int) {
-	var h *tableapi.Table
+func GetVarargs(L *state.LuaState, ci *state.CallInfo, ra int, n int, vatab int) {
+	var h *table.Table
 	if vatab >= 0 {
-		h = L.Stack[ci.Func+vatab+1].Val.Val.(*tableapi.Table)
+		h = L.Stack[ci.Func+vatab+1].Val.Val.(*table.Table)
 	}
 
 	// Get number of available vararg args — mirrors getnumargs() in ltm.c
@@ -1425,10 +1426,10 @@ func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vata
 		nExtra = ci.NExtraArgs
 	} else {
 		// Read t.n from the vararg table and validate
-		st := L.Global.StringTable.(*luastringapi.StringTable)
-		nKey := objectapi.MakeString(st.Intern("n"))
+		st := L.Global.StringTable.(*luastring.StringTable)
+		nKey := object.MakeString(st.Intern("n"))
 		nVal, ok := h.Get(nKey)
-		if !ok || nVal.Tt != objectapi.TagInteger {
+		if !ok || nVal.Tt != object.TagInteger {
 			RunError(L, "vararg table has no proper 'n'")
 		}
 		iv := nVal.Integer()
@@ -1465,12 +1466,12 @@ func GetVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, ra int, n int, vata
 			if ok {
 				L.Stack[ra+i].Val = val
 			} else {
-				L.Stack[ra+i].Val = objectapi.Nil
+				L.Stack[ra+i].Val = object.Nil
 			}
 		}
 	}
 	// Fill remaining with nil
 	for i := touse; i < n; i++ {
-		L.Stack[ra+i].Val = objectapi.Nil
+		L.Stack[ra+i].Val = object.Nil
 	}
 }

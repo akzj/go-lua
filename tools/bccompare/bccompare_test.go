@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	parseapi "github.com/akzj/go-lua/internal/parse"
+	"github.com/akzj/go-lua/internal/parse"
 )
 
-// stringReader implements lexapi.LexReader for test strings.
+// stringReader implements lex.LexReader for test strings.
 type stringReader struct {
 	data string
 	pos  int
@@ -48,7 +48,7 @@ func getCLuaDisasm(t *testing.T, source string) string {
 // getGoLuaDisasm compiles source with go-lua parser and returns disassembly text.
 func getGoLuaDisasm(t *testing.T, source string) string {
 	t.Helper()
-	proto := parseapi.Parse("=input", newStringReader(source))
+	proto := parse.Parse("=input", newStringReader(source))
 	return DumpProto(proto)
 }
 

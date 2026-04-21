@@ -4,12 +4,12 @@ import (
 	"math"
 	"testing"
 
-	obj "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // Helper: make a short string key (simulates interning).
-func mkstr(s string) *obj.LuaString {
-	return &obj.LuaString{Data: s, Hash_: simpleHash(s), IsShort: true}
+func mkstr(s string) *object.LuaString {
+	return &object.LuaString{Data: s, Hash_: simpleHash(s), IsShort: true}
 }
 
 func simpleHash(s string) uint32 {
@@ -54,8 +54,8 @@ func TestNewWithSizes(t *testing.T) {
 
 func TestSetGetInt(t *testing.T) {
 	tbl := New(10, 0)
-	tbl.SetInt(1, obj.MakeInteger(100))
-	tbl.SetInt(5, obj.MakeInteger(500))
+	tbl.SetInt(1, object.MakeInteger(100))
+	tbl.SetInt(5, object.MakeInteger(500))
 
 	v, ok := tbl.GetInt(1)
 	if !ok || v.Integer() != 100 {
@@ -73,9 +73,9 @@ func TestSetGetInt(t *testing.T) {
 
 func TestSetGetIntViaGet(t *testing.T) {
 	tbl := New(10, 0)
-	tbl.Set(obj.MakeInteger(3), obj.MakeFloat(3.14))
+	tbl.Set(object.MakeInteger(3), object.MakeFloat(3.14))
 
-	v, ok := tbl.Get(obj.MakeInteger(3))
+	v, ok := tbl.Get(object.MakeInteger(3))
 	if !ok || v.Float() != 3.14 {
 		t.Errorf("Get(3) = %v, %v; want 3.14, true", v, ok)
 	}
@@ -88,7 +88,7 @@ func TestSetGetIntViaGet(t *testing.T) {
 func TestSetGetStr(t *testing.T) {
 	tbl := New(0, 4)
 	key := mkstr("hello")
-	tbl.SetStr(key, obj.MakeInteger(42))
+	tbl.SetStr(key, object.MakeInteger(42))
 
 	v, ok := tbl.GetStr(key)
 	if !ok || v.Integer() != 42 {
@@ -108,10 +108,10 @@ func TestSetGetStr(t *testing.T) {
 func TestSetGetStrViaGeneric(t *testing.T) {
 	tbl := New(0, 4)
 	key := mkstr("world")
-	tbl.Set(obj.MakeString(key), obj.MakeBoolean(true))
+	tbl.Set(object.MakeString(key), object.MakeBoolean(true))
 
-	v, ok := tbl.Get(obj.MakeString(key))
-	if !ok || v.Tt != obj.TagTrue {
+	v, ok := tbl.Get(object.MakeString(key))
+	if !ok || v.Tt != object.TagTrue {
 		t.Errorf("Get('world') = %v, %v; want true, true", v, ok)
 	}
 }
@@ -123,16 +123,16 @@ func TestSetGetStrViaGeneric(t *testing.T) {
 func TestFloatAsIntegerKey(t *testing.T) {
 	tbl := New(10, 0)
 	// Set via integer key 3
-	tbl.SetInt(3, obj.MakeInteger(300))
+	tbl.SetInt(3, object.MakeInteger(300))
 
 	// Get via float 3.0 — should find same value
-	v, ok := tbl.Get(obj.MakeFloat(3.0))
+	v, ok := tbl.Get(object.MakeFloat(3.0))
 	if !ok || v.Integer() != 300 {
 		t.Errorf("Get(3.0) = %v, %v; want 300, true", v, ok)
 	}
 
 	// Set via float 3.0 — should overwrite same slot
-	tbl.Set(obj.MakeFloat(3.0), obj.MakeInteger(999))
+	tbl.Set(object.MakeFloat(3.0), object.MakeInteger(999))
 	v, ok = tbl.GetInt(3)
 	if !ok || v.Integer() != 999 {
 		t.Errorf("GetInt(3) after Set(3.0) = %v, %v; want 999, true", v, ok)
@@ -141,9 +141,9 @@ func TestFloatAsIntegerKey(t *testing.T) {
 
 func TestNonIntegerFloat(t *testing.T) {
 	tbl := New(0, 4)
-	tbl.Set(obj.MakeFloat(1.5), obj.MakeInteger(15))
+	tbl.Set(object.MakeFloat(1.5), object.MakeInteger(15))
 
-	v, ok := tbl.Get(obj.MakeFloat(1.5))
+	v, ok := tbl.Get(object.MakeFloat(1.5))
 	if !ok || v.Integer() != 15 {
 		t.Errorf("Get(1.5) = %v, %v; want 15, true", v, ok)
 	}
@@ -161,14 +161,14 @@ func TestNonIntegerFloat(t *testing.T) {
 
 func TestBooleanKeys(t *testing.T) {
 	tbl := New(0, 4)
-	tbl.Set(obj.True, obj.MakeInteger(1))
-	tbl.Set(obj.False, obj.MakeInteger(0))
+	tbl.Set(object.True, object.MakeInteger(1))
+	tbl.Set(object.False, object.MakeInteger(0))
 
-	v, ok := tbl.Get(obj.True)
+	v, ok := tbl.Get(object.True)
 	if !ok || v.Integer() != 1 {
 		t.Errorf("Get(true) = %v, %v; want 1, true", v, ok)
 	}
-	v, ok = tbl.Get(obj.False)
+	v, ok = tbl.Get(object.False)
 	if !ok || v.Integer() != 0 {
 		t.Errorf("Get(false) = %v, %v; want 0, true", v, ok)
 	}
@@ -186,7 +186,7 @@ func TestNaNKeyPanics(t *testing.T) {
 			t.Error("Set(NaN, ...) should panic")
 		}
 	}()
-	tbl.Set(obj.MakeFloat(math.NaN()), obj.MakeInteger(1))
+	tbl.Set(object.MakeFloat(math.NaN()), object.MakeInteger(1))
 }
 
 func TestNilKeyPanics(t *testing.T) {
@@ -197,7 +197,7 @@ func TestNilKeyPanics(t *testing.T) {
 			t.Error("Set(nil, ...) should panic")
 		}
 	}()
-	tbl.Set(obj.Nil, obj.MakeInteger(1))
+	tbl.Set(object.Nil, object.MakeInteger(1))
 }
 
 // ---------------------------------------------------------------------------
@@ -207,17 +207,17 @@ func TestNilKeyPanics(t *testing.T) {
 func TestSetNilRemovesKey(t *testing.T) {
 	tbl := New(0, 4)
 	key := mkstr("remove_me")
-	tbl.Set(obj.MakeString(key), obj.MakeInteger(42))
+	tbl.Set(object.MakeString(key), object.MakeInteger(42))
 
-	v, ok := tbl.Get(obj.MakeString(key))
+	v, ok := tbl.Get(object.MakeString(key))
 	if !ok {
 		t.Fatal("key should exist before removal")
 	}
 	_ = v
 
 	// Set to nil
-	tbl.Set(obj.MakeString(key), obj.Nil)
-	_, ok = tbl.Get(obj.MakeString(key))
+	tbl.Set(object.MakeString(key), object.Nil)
+	_, ok = tbl.Get(object.MakeString(key))
 	if ok {
 		t.Error("key should be removed after setting to nil")
 	}
@@ -225,7 +225,7 @@ func TestSetNilRemovesKey(t *testing.T) {
 
 func TestSetNilRemovesArrayKey(t *testing.T) {
 	tbl := New(10, 0)
-	tbl.SetInt(5, obj.MakeInteger(500))
+	tbl.SetInt(5, object.MakeInteger(500))
 
 	v, ok := tbl.GetInt(5)
 	if !ok || v.Integer() != 500 {
@@ -233,7 +233,7 @@ func TestSetNilRemovesArrayKey(t *testing.T) {
 	}
 
 	// Set to nil via generic Set
-	tbl.Set(obj.MakeInteger(5), obj.Nil)
+	tbl.Set(object.MakeInteger(5), object.Nil)
 	_, ok = tbl.GetInt(5)
 	if ok {
 		t.Error("key 5 should be removed after setting to nil")
@@ -247,7 +247,7 @@ func TestSetNilRemovesArrayKey(t *testing.T) {
 func TestArraySequential100(t *testing.T) {
 	tbl := New(0, 0)
 	for i := int64(1); i <= 100; i++ {
-		tbl.Set(obj.MakeInteger(i), obj.MakeInteger(i*10))
+		tbl.Set(object.MakeInteger(i), object.MakeInteger(i*10))
 	}
 	for i := int64(1); i <= 100; i++ {
 		v, ok := tbl.GetInt(i)
@@ -263,13 +263,13 @@ func TestArraySequential100(t *testing.T) {
 
 func TestHashStringKeys(t *testing.T) {
 	tbl := New(0, 0)
-	keys := make([]*obj.LuaString, 20)
+	keys := make([]*object.LuaString, 20)
 	for i := 0; i < 20; i++ {
 		keys[i] = mkstr(string(rune('a' + i)))
-		tbl.Set(obj.MakeString(keys[i]), obj.MakeInteger(int64(i)))
+		tbl.Set(object.MakeString(keys[i]), object.MakeInteger(int64(i)))
 	}
 	for i := 0; i < 20; i++ {
-		v, ok := tbl.Get(obj.MakeString(keys[i]))
+		v, ok := tbl.Get(object.MakeString(keys[i]))
 		if !ok || v.Integer() != int64(i) {
 			t.Errorf("Get('%c') = %v, %v; want %d, true", rune('a'+i), v, ok, i)
 		}
@@ -290,7 +290,7 @@ func TestRawLenEmpty(t *testing.T) {
 func TestRawLenSequential(t *testing.T) {
 	tbl := New(10, 0)
 	for i := int64(1); i <= 10; i++ {
-		tbl.SetInt(i, obj.MakeInteger(i))
+		tbl.SetInt(i, object.MakeInteger(i))
 	}
 	l := tbl.RawLen()
 	if l != 10 {
@@ -300,11 +300,11 @@ func TestRawLenSequential(t *testing.T) {
 
 func TestRawLenWithGap(t *testing.T) {
 	tbl := New(10, 0)
-	tbl.SetInt(1, obj.MakeInteger(1))
-	tbl.SetInt(2, obj.MakeInteger(2))
-	tbl.SetInt(3, obj.MakeInteger(3))
+	tbl.SetInt(1, object.MakeInteger(1))
+	tbl.SetInt(2, object.MakeInteger(2))
+	tbl.SetInt(3, object.MakeInteger(3))
 	// Gap at 4
-	tbl.SetInt(5, obj.MakeInteger(5))
+	tbl.SetInt(5, object.MakeInteger(5))
 
 	l := tbl.RawLen()
 	// Lua # can return ANY valid boundary.
@@ -317,7 +317,7 @@ func TestRawLenWithGap(t *testing.T) {
 func TestRawLenFirstNil(t *testing.T) {
 	tbl := New(10, 0)
 	// t[1] is nil, so boundary is 0
-	tbl.SetInt(2, obj.MakeInteger(2))
+	tbl.SetInt(2, object.MakeInteger(2))
 	l := tbl.RawLen()
 	// Boundary: t[0+1]=nil → 0, but t[2] exists...
 	// The # operator can return 0 or 2 here (both are valid boundaries)
@@ -332,7 +332,7 @@ func TestRawLenFirstNil(t *testing.T) {
 
 func TestNextEmptyTable(t *testing.T) {
 	tbl := New(0, 0)
-	_, _, ok, _ := tbl.Next(obj.Nil)
+	_, _, ok, _ := tbl.Next(object.Nil)
 	if ok {
 		t.Error("Next on empty table should return false")
 	}
@@ -341,11 +341,11 @@ func TestNextEmptyTable(t *testing.T) {
 func TestNextArrayOnly(t *testing.T) {
 	tbl := New(5, 0)
 	for i := int64(1); i <= 5; i++ {
-		tbl.SetInt(i, obj.MakeInteger(i*10))
+		tbl.SetInt(i, object.MakeInteger(i*10))
 	}
 
 	count := 0
-	key := obj.Nil
+	key := object.Nil
 	for {
 		k, v, ok, _ := tbl.Next(key)
 		if !ok {
@@ -367,13 +367,13 @@ func TestNextArrayOnly(t *testing.T) {
 
 func TestNextMixedKeys(t *testing.T) {
 	tbl := New(0, 0)
-	tbl.Set(obj.MakeInteger(1), obj.MakeInteger(10))
-	tbl.Set(obj.MakeInteger(2), obj.MakeInteger(20))
+	tbl.Set(object.MakeInteger(1), object.MakeInteger(10))
+	tbl.Set(object.MakeInteger(2), object.MakeInteger(20))
 	key := mkstr("x")
-	tbl.Set(obj.MakeString(key), obj.MakeInteger(99))
+	tbl.Set(object.MakeString(key), object.MakeInteger(99))
 
 	count := 0
-	k := obj.Nil
+	k := object.Nil
 	for {
 		var ok bool
 		k, _, ok, _ = tbl.Next(k)
@@ -394,14 +394,14 @@ func TestNextMixedKeys(t *testing.T) {
 func TestRehashManyKeys(t *testing.T) {
 	tbl := New(0, 0)
 	n := 200
-	keys := make([]*obj.LuaString, n)
+	keys := make([]*object.LuaString, n)
 	for i := 0; i < n; i++ {
 		keys[i] = mkstr(string(rune(i + 0x100)))
-		tbl.Set(obj.MakeString(keys[i]), obj.MakeInteger(int64(i)))
+		tbl.Set(object.MakeString(keys[i]), object.MakeInteger(int64(i)))
 	}
 	// Verify all keys are retrievable
 	for i := 0; i < n; i++ {
-		v, ok := tbl.Get(obj.MakeString(keys[i]))
+		v, ok := tbl.Get(object.MakeString(keys[i]))
 		if !ok || v.Integer() != int64(i) {
 			t.Errorf("after rehash: Get(key[%d]) = %v, %v; want %d, true", i, v, ok, i)
 		}
@@ -411,7 +411,7 @@ func TestRehashManyKeys(t *testing.T) {
 func TestRehashIntegerKeys(t *testing.T) {
 	tbl := New(0, 0) // start empty, force rehash
 	for i := int64(1); i <= 100; i++ {
-		tbl.Set(obj.MakeInteger(i), obj.MakeInteger(i*10))
+		tbl.Set(object.MakeInteger(i), object.MakeInteger(i*10))
 	}
 	for i := int64(1); i <= 100; i++ {
 		v, ok := tbl.GetInt(i)
@@ -466,7 +466,7 @@ func TestMetamethodFlags(t *testing.T) {
 
 func TestEmptyTableGet(t *testing.T) {
 	tbl := New(0, 0)
-	v, ok := tbl.Get(obj.MakeInteger(1))
+	v, ok := tbl.Get(object.MakeInteger(1))
 	if ok || !v.IsNil() {
 		t.Errorf("empty table Get(1) = %v, %v; want nil, false", v, ok)
 	}
@@ -484,7 +484,7 @@ func TestLargeTable(t *testing.T) {
 	tbl := New(0, 0)
 	n := 1000
 	for i := 0; i < n; i++ {
-		tbl.Set(obj.MakeInteger(int64(i+1)), obj.MakeInteger(int64(i*i)))
+		tbl.Set(object.MakeInteger(int64(i+1)), object.MakeInteger(int64(i*i)))
 	}
 	for i := 0; i < n; i++ {
 		v, ok := tbl.GetInt(int64(i + 1))
@@ -495,7 +495,7 @@ func TestLargeTable(t *testing.T) {
 
 	// Verify iteration count
 	count := 0
-	k := obj.Nil
+	k := object.Nil
 	for {
 		var ok bool
 		k, _, ok, _ = tbl.Next(k)
@@ -515,8 +515,8 @@ func TestLargeTable(t *testing.T) {
 
 func TestOverwriteExistingKey(t *testing.T) {
 	tbl := New(10, 4)
-	tbl.SetInt(1, obj.MakeInteger(100))
-	tbl.SetInt(1, obj.MakeInteger(200))
+	tbl.SetInt(1, object.MakeInteger(100))
+	tbl.SetInt(1, object.MakeInteger(200))
 
 	v, ok := tbl.GetInt(1)
 	if !ok || v.Integer() != 200 {
@@ -527,8 +527,8 @@ func TestOverwriteExistingKey(t *testing.T) {
 func TestOverwriteStringKey(t *testing.T) {
 	tbl := New(0, 4)
 	key := mkstr("test")
-	tbl.SetStr(key, obj.MakeInteger(1))
-	tbl.SetStr(key, obj.MakeInteger(2))
+	tbl.SetStr(key, object.MakeInteger(1))
+	tbl.SetStr(key, object.MakeInteger(2))
 
 	v, ok := tbl.GetStr(key)
 	if !ok || v.Integer() != 2 {
@@ -543,19 +543,19 @@ func TestOverwriteStringKey(t *testing.T) {
 func TestMixedKeyTypes(t *testing.T) {
 	tbl := New(0, 0)
 	sk := mkstr("key")
-	tbl.Set(obj.MakeInteger(1), obj.MakeInteger(10))
-	tbl.Set(obj.MakeString(sk), obj.MakeInteger(20))
-	tbl.Set(obj.MakeFloat(2.5), obj.MakeInteger(30))
-	tbl.Set(obj.True, obj.MakeInteger(40))
+	tbl.Set(object.MakeInteger(1), object.MakeInteger(10))
+	tbl.Set(object.MakeString(sk), object.MakeInteger(20))
+	tbl.Set(object.MakeFloat(2.5), object.MakeInteger(30))
+	tbl.Set(object.True, object.MakeInteger(40))
 
 	tests := []struct {
-		key  obj.TValue
+		key  object.TValue
 		want int64
 	}{
-		{obj.MakeInteger(1), 10},
-		{obj.MakeString(sk), 20},
-		{obj.MakeFloat(2.5), 30},
-		{obj.True, 40},
+		{object.MakeInteger(1), 10},
+		{object.MakeString(sk), 20},
+		{object.MakeFloat(2.5), 30},
+		{object.True, 40},
 	}
 	for _, tt := range tests {
 		v, ok := tbl.Get(tt.key)
@@ -571,14 +571,14 @@ func TestMixedKeyTypes(t *testing.T) {
 
 func TestNegativeAndZeroKeys(t *testing.T) {
 	tbl := New(5, 0)
-	tbl.Set(obj.MakeInteger(0), obj.MakeInteger(100))
-	tbl.Set(obj.MakeInteger(-1), obj.MakeInteger(200))
+	tbl.Set(object.MakeInteger(0), object.MakeInteger(100))
+	tbl.Set(object.MakeInteger(-1), object.MakeInteger(200))
 
-	v, ok := tbl.Get(obj.MakeInteger(0))
+	v, ok := tbl.Get(object.MakeInteger(0))
 	if !ok || v.Integer() != 100 {
 		t.Errorf("Get(0) = %v, %v; want 100, true", v, ok)
 	}
-	v, ok = tbl.Get(obj.MakeInteger(-1))
+	v, ok = tbl.Get(object.MakeInteger(-1))
 	if !ok || v.Integer() != 200 {
 		t.Errorf("Get(-1) = %v, %v; want 200, true", v, ok)
 	}
@@ -591,8 +591,8 @@ func TestNegativeAndZeroKeys(t *testing.T) {
 func TestRawLenHashOnly(t *testing.T) {
 	tbl := New(0, 0)
 	// No array part, just hash
-	tbl.Set(obj.MakeInteger(1), obj.MakeInteger(10))
-	tbl.Set(obj.MakeInteger(2), obj.MakeInteger(20))
+	tbl.Set(object.MakeInteger(1), object.MakeInteger(10))
+	tbl.Set(object.MakeInteger(2), object.MakeInteger(20))
 	// After rehash, these should go to array, but let's test the boundary
 	l := tbl.RawLen()
 	if l != 2 {
@@ -607,17 +607,17 @@ func TestRawLenHashOnly(t *testing.T) {
 func TestDeleteAndReinsert(t *testing.T) {
 	tbl := New(0, 4)
 	key := mkstr("reuse")
-	tbl.Set(obj.MakeString(key), obj.MakeInteger(1))
-	tbl.Set(obj.MakeString(key), obj.Nil) // delete
+	tbl.Set(object.MakeString(key), object.MakeInteger(1))
+	tbl.Set(object.MakeString(key), object.Nil) // delete
 
-	_, ok := tbl.Get(obj.MakeString(key))
+	_, ok := tbl.Get(object.MakeString(key))
 	if ok {
 		t.Error("key should be deleted")
 	}
 
 	// Re-insert
-	tbl.Set(obj.MakeString(key), obj.MakeInteger(2))
-	v, ok := tbl.Get(obj.MakeString(key))
+	tbl.Set(object.MakeString(key), object.MakeInteger(2))
+	v, ok := tbl.Get(object.MakeString(key))
 	if !ok || v.Integer() != 2 {
 		t.Errorf("after re-insert: Get = %v, %v; want 2, true", v, ok)
 	}

@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"testing"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	parseapi "github.com/akzj/go-lua/internal/parse"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/parse"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
 )
 
-// stringReader implements lexapi.LexReader for test strings.
+// stringReader implements lex.LexReader for test strings.
 type stringReader struct {
 	data string
 	pos  int
@@ -32,7 +32,7 @@ func (r *stringReader) NextByte() int {
 
 // luaResult holds a Lua execution result.
 type luaResult struct {
-	L       *stateapi.LuaState
+	L       *state.LuaState
 	top     int // Top after execution
 	funcIdx int // Where the function was placed (results start here)
 }
@@ -40,30 +40,30 @@ type luaResult struct {
 // runLua compiles and executes Lua source code.
 func runLua(t *testing.T, src string) luaResult {
 	t.Helper()
-	L := stateapi.NewState()
+	L := state.NewState()
 	reader := newStringReader(src)
-	proto := parseapi.Parse("test", reader)
-	cl := closureapi.NewLClosure(proto, len(proto.Upvalues))
+	proto := parse.Parse("test", reader)
+	cl := closure.NewLClosure(proto, len(proto.Upvalues))
 	if len(cl.UpVals) > 0 {
 		gt := GetGlobalTable(L)
-		uv := &closureapi.UpVal{}
-		uv.Close(objectapi.TValue{Tt: objectapi.TagTable, Val: gt})
+		uv := &closure.UpVal{}
+		uv.Close(object.TValue{Tt: object.TagTable, Val: gt})
 		cl.UpVals[0] = uv
 	}
 	funcIdx := L.Top
-	stateapi.PushValue(L, objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
-	Call(L, funcIdx, stateapi.MultiRet)
+	state.PushValue(L, object.TValue{Tt: object.TagLuaClosure, Val: cl})
+	Call(L, funcIdx, state.MultiRet)
 	return luaResult{L: L, top: L.Top, funcIdx: funcIdx}
 }
 
 // get returns the i-th result (0-based).
 // After Call with MultiRet, results start at funcIdx.
-func (r luaResult) get(i int) objectapi.TValue {
+func (r luaResult) get(i int) object.TValue {
 	idx := r.funcIdx + i
 	if idx < r.top {
 		return r.L.Stack[idx].Val
 	}
-	return objectapi.Nil
+	return object.Nil
 }
 
 func (r luaResult) nResults() int {
@@ -105,14 +105,14 @@ func TestReturnString(t *testing.T) {
 
 func TestReturnTrue(t *testing.T) {
 	r := runLua(t, "return true")
-	if r.get(0).Tt != objectapi.TagTrue {
+	if r.get(0).Tt != object.TagTrue {
 		t.Fatalf("expected true, got tag %d", r.get(0).Tt)
 	}
 }
 
 func TestReturnFalse(t *testing.T) {
 	r := runLua(t, "return false")
-	if r.get(0).Tt != objectapi.TagFalse {
+	if r.get(0).Tt != object.TagFalse {
 		t.Fatalf("expected false, got tag %d", r.get(0).Tt)
 	}
 }
@@ -374,11 +374,11 @@ func TestComparisons(t *testing.T) {
 			r := runLua(t, tt.src)
 			v := r.get(0)
 			if tt.expect {
-				if v.Tt != objectapi.TagTrue {
+				if v.Tt != object.TagTrue {
 					t.Fatalf("expected true, got tag %d", v.Tt)
 				}
 			} else {
-				if v.Tt != objectapi.TagFalse {
+				if v.Tt != object.TagFalse {
 					t.Fatalf("expected false, got tag %d", v.Tt)
 				}
 			}
@@ -405,7 +405,7 @@ func TestMultipleReturns(t *testing.T) {
 
 func TestNotOperator(t *testing.T) {
 	r := runLua(t, "return not false")
-	if r.get(0).Tt != objectapi.TagTrue {
+	if r.get(0).Tt != object.TagTrue {
 		t.Fatalf("expected true, got tag %d", r.get(0).Tt)
 	}
 }
@@ -471,29 +471,29 @@ func TestLogicalOr(t *testing.T) {
 // --- Test: C function call ---
 
 func TestCFunction(t *testing.T) {
-	L := stateapi.NewState()
+	L := state.NewState()
 	// Register a simple C function in globals
 	gt := GetGlobalTable(L)
-	addFn := func(L2 *stateapi.LuaState) int {
+	addFn := func(L2 *state.LuaState) int {
 		a := L2.Stack[L2.CI.Func+1].Val.Integer()
 		b := L2.Stack[L2.CI.Func+2].Val.Integer()
-		stateapi.PushValue(L2, objectapi.MakeInteger(a+b))
+		state.PushValue(L2, object.MakeInteger(a+b))
 		return 1
 	}
-	gt.Set(objectapi.MakeString(&objectapi.LuaString{Data: "myadd", IsShort: true}),
-		objectapi.TValue{Tt: objectapi.TagLightCFunc, Val: stateapi.CFunction(addFn)})
+	gt.Set(object.MakeString(&object.LuaString{Data: "myadd", IsShort: true}),
+		object.TValue{Tt: object.TagLightCFunc, Val: state.CFunction(addFn)})
 
 	reader := newStringReader("return myadd(10, 20)")
-	proto := parseapi.Parse("test", reader)
-	cl := closureapi.NewLClosure(proto, len(proto.Upvalues))
+	proto := parse.Parse("test", reader)
+	cl := closure.NewLClosure(proto, len(proto.Upvalues))
 	if len(cl.UpVals) > 0 {
-		uv := &closureapi.UpVal{}
-		uv.Close(objectapi.TValue{Tt: objectapi.TagTable, Val: gt})
+		uv := &closure.UpVal{}
+		uv.Close(object.TValue{Tt: object.TagTable, Val: gt})
 		cl.UpVals[0] = uv
 	}
 	funcIdx := L.Top
-	stateapi.PushValue(L, objectapi.TValue{Tt: objectapi.TagLuaClosure, Val: cl})
-	Call(L, funcIdx, stateapi.MultiRet)
+	state.PushValue(L, object.TValue{Tt: object.TagLuaClosure, Val: cl})
+	Call(L, funcIdx, state.MultiRet)
 	v := L.Stack[funcIdx].Val
 	if !v.IsInteger() || v.Integer() != 30 {
 		t.Fatalf("expected 30, got %v (tag %d)", v.Val, v.Tt)
@@ -501,5 +501,5 @@ func TestCFunction(t *testing.T) {
 }
 
 // Ensure unused imports don't cause build errors
-var _ = tableapi.New
+var _ = table.New
 var _ = fmt.Sprintf
