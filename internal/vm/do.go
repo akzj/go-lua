@@ -1393,6 +1393,20 @@ func closeTBC(L *state.LuaState, level int) {
 	closeTBCWithError(L, level, state.StatusOK, object.Nil, true)
 }
 
+// MarkTBC is the exported wrapper for markTBC.
+// Used by the API layer (lua_toclose) to mark a stack slot as to-be-closed.
+func MarkTBC(L *state.LuaState, level int) {
+	markTBC(L, level)
+}
+
+// CloseTBC is the exported wrapper for closeTBC.
+// Closes all TBC variables from L.TBCList down to (but not including) level.
+// Used by the API layer (lua_settop, lua_closeslot).
+func CloseTBC(L *state.LuaState, level int) {
+	closeTBC(L, level)
+}
+
+
 // closeTBCWithError is closeTBC with error status and error object.
 // For normal close: status=StatusOK, errObj=Nil → __close(obj) with 1 arg
 // For error close: status!=StatusOK, errObj=error → __close(obj, err) with 2 args

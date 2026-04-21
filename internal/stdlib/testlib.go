@@ -629,12 +629,12 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "toclose":
 			// lua_toclose — mark slot as to-be-closed
-			_ = p.getNum(L, L1)
-			// no-op stub for now
+			idx := p.getNum(L, L1)
+			L1.ToClose(idx)
 
 		case "closeslot":
-			_ = p.getNum(L, L1)
-			// no-op stub for now
+			idx := p.getNum(L, L1)
+			L1.CloseSlot(idx)
 
 		case "sethook":
 			_ = p.getNum(L, L1)

@@ -14,6 +14,7 @@ import (
 	"github.com/akzj/go-lua/internal/parse"
 	"github.com/akzj/go-lua/internal/state"
 	"github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -180,21 +181,53 @@ func (L *State) GetTop() int {
 }
 
 // SetTop sets the stack top to idx. Fills with nil if growing.
+// When shrinking, closes any to-be-closed variables above the new top.
+// Mirrors: lua_settop in lapi.c:179-203
 func (L *State) SetTop(idx int) {
 	ls := L.ls()
 	ci := ls.CI
 	base := ci.Func + 1
+	var newTop int
+	var diff int
 	if idx >= 0 {
-		newTop := base + idx
+		newTop = base + idx
+		diff = newTop - ls.Top
 		// Fill new slots with nil
 		for ls.Top < newTop {
 			ls.Stack[ls.Top].Val = object.Nil
 			ls.Top++
 		}
-		ls.Top = newTop
 	} else {
-		ls.Top = ls.Top + idx + 1
+		diff = idx + 1 // negative
+		newTop = ls.Top + diff
 	}
+	// When shrinking and TBC variables exist at or above newTop, close them.
+	// Mirrors C Lua: if (diff < 0 && L->tbclist.p >= newtop)
+	if diff < 0 && ls.TBCList >= newTop {
+		// Close TBC vars from TBCList down to newTop (CLOSEKTOP semantics).
+		vm.CloseTBC(ls, newTop)
+	}
+	ls.Top = newTop
+}
+
+// ToClose marks the value at the given index as to-be-closed.
+// Its __close metamethod will be called when the slot goes out of scope.
+// Mirrors: lua_toclose in lapi.c:1288-1296
+func (L *State) ToClose(idx int) {
+	ls := L.ls()
+	level := L.index2stack(idx)
+	vm.MarkTBC(ls, level)
+	ls.CI.CallStatus |= state.CISTTBC
+}
+
+// CloseSlot closes the to-be-closed variable at the given index and sets
+// the slot to nil. The index must be the last marked to-be-closed slot.
+// Mirrors: lua_closeslot in lapi.c:206-214
+func (L *State) CloseSlot(idx int) {
+	ls := L.ls()
+	level := L.index2stack(idx)
+	vm.CloseTBC(ls, level)
+	ls.Stack[level].Val = object.Nil
 }
 
 // AbsIndex converts a possibly-negative index to absolute.
