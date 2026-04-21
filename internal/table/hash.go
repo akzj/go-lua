@@ -393,32 +393,44 @@ func rehash(t *Table, extraKey object.TValue) {
 		}
 	}
 
-	// Count keys in array part
-	if len(t.Array) > 0 {
-		asize := uint(len(t.Array))
-		var i uint = 1
-		for lg := uint8(0); lg < 32; lg++ {
-			lim := uint(1) << lg
-			if lim > asize {
-				lim = asize
-			}
-			if i > lim {
-				break
-			}
-			var count uint
-			for ; i <= lim; i++ {
-				if !t.Array[i-1].Tt.IsNil() {
-					count++
+	// Matches C Lua (ltable.c rehash): if no integer keys were found in
+	// the hash part or extra key that could migrate to the array, keep the
+	// existing array size unchanged.  This prevents a pre-allocated but
+	// empty array (e.g. table.create(1000)) from collapsing to size 0 when
+	// only a hash key is added.
+	var optimalASize uint
+	var naInArray uint
+	if totalNA == 0 {
+		// No new keys to enter array part; keep it with the same size.
+		optimalASize = uint(len(t.Array))
+	} else {
+		// Count keys in array part
+		if len(t.Array) > 0 {
+			asize := uint(len(t.Array))
+			var i uint = 1
+			for lg := uint8(0); lg < 32; lg++ {
+				lim := uint(1) << lg
+				if lim > asize {
+					lim = asize
 				}
+				if i > lim {
+					break
+				}
+				var count uint
+				for ; i <= lim; i++ {
+					if !t.Array[i-1].Tt.IsNil() {
+						count++
+					}
+				}
+				nums[lg] += count
+				totalNA += count
+				total += count
 			}
-			nums[lg] += count
-			totalNA += count
-			total += count
 		}
-	}
 
-	// Compute optimal array size
-	optimalASize, naInArray := computeSizes(nums[:], totalNA)
+		// Compute optimal array size
+		optimalASize, naInArray = computeSizes(nums[:], totalNA)
+	}
 
 	// Hash part gets everything not in array
 	nhsize := total - naInArray
