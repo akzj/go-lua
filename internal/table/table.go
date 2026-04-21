@@ -18,7 +18,7 @@ import (
 // newTable creates a Table with pre-allocated array and hash parts.
 // hashSize is rounded up to the next power of 2.
 func newTable(arraySize, hashSize int) *Table {
-	t := &Table{}
+	t := getTable()
 	if arraySize > 0 {
 		t.Array = make([]object.TValue, arraySize)
 		for i := range t.Array {
