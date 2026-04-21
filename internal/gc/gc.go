@@ -483,6 +483,10 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			if h.ObjSize > 0 {
 				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
 			}
+			// Return dead tables to the pool for reuse
+			if t, ok := obj.(*table.Table); ok {
+				table.PutTable(t)
+			}
 			freed++
 		} else {
 			// Alive — reset to current white for next cycle
