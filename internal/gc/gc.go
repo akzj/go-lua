@@ -71,8 +71,7 @@ func linkGray(g *state.GlobalState, obj object.GCObject) {
 	h := obj.GC()
 	// Clear white bits (now gray — neither white nor black)
 	h.Marked &^= (object.WhiteBits | object.BlackBit)
-	h.GCList = g.Gray
-	g.Gray = obj
+	g.Gray = append(g.Gray, obj)
 }
 
 // markValue marks the value inside a TValue if it's a collectable object.
@@ -93,7 +92,7 @@ func markBlack(h *object.GCHeader) {
 
 // propagateAll drains the gray list, traversing each gray object.
 func propagateAll(g *state.GlobalState) {
-	for g.Gray != nil {
+	for len(g.Gray) > 0 {
 		propagateMark(g)
 	}
 }
@@ -101,11 +100,12 @@ func propagateAll(g *state.GlobalState) {
 // propagateMark takes one object from the gray list, marks it black,
 // and traverses its children.
 func propagateMark(g *state.GlobalState) {
-	obj := g.Gray
+	// Pop from end of gray slice (stack order)
+	n := len(g.Gray)
+	obj := g.Gray[n-1]
+	g.Gray[n-1] = nil // clear reference to help Go GC
+	g.Gray = g.Gray[:n-1]
 	h := obj.GC()
-	// Remove from gray list
-	g.Gray = h.GCList
-	h.GCList = nil
 
 	switch v := obj.(type) {
 	case *table.Table:
@@ -154,11 +154,9 @@ func isCleared(g *state.GlobalState, obj object.GCObject) bool {
 	return h.Marked&object.WhiteBits == otherwhite && h.Marked&object.BlackBit == 0
 }
 
-// linkGCList links a table into a GC list (weak, ephemeron, allweak, grayagain)
-// using the GCList field of its GCHeader.
-func linkGCList(t *table.Table, list *object.GCObject) {
-	t.GCHeader.GCList = *list
-	*list = t
+// linkGCList appends a table to a GC slice (weak, ephemeron, allweak, grayagain).
+func linkGCList(t *table.Table, list *[]object.GCObject) {
+	*list = append(*list, t)
 }
 
 // traverseTable marks references in a table, handling weak modes.
@@ -415,12 +413,12 @@ func traverseThread(g *state.GlobalState, th *state.LuaState) {
 
 // markRoots marks all GC root objects.
 func markRoots(g *state.GlobalState) {
-	// Clear gray lists
-	g.Gray = nil
-	g.GrayAgain = nil
-	g.Weak = nil
-	g.AllWeak = nil
-	g.Ephemeron = nil
+	// Clear gray lists (reuse backing arrays to avoid reallocation)
+	g.Gray = g.Gray[:0]
+	g.GrayAgain = g.GrayAgain[:0]
+	g.Weak = g.Weak[:0]
+	g.AllWeak = g.AllWeak[:0]
+	g.Ephemeron = g.Ephemeron[:0]
 
 	// Mark main thread
 	if g.MainThread != nil {
@@ -482,6 +480,10 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			// Decrement byte counter using pre-computed size (avoids type assertion)
 			if h.ObjSize > 0 {
 				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
+			}
+			// Return dead tables to the pool for reuse
+			if t, ok := obj.(*table.Table); ok {
+				table.PutTable(t)
 			}
 			freed++
 		} else {
@@ -591,8 +593,7 @@ func Udata2Finalize(g *state.GlobalState) object.GCObject {
 // ---------------------------------------------------------------------------
 
 // clearByKeys clears entries with unmarked keys from weak-key tables.
-// Walks the given GC list (linked via GCList/gclist field).
-// Mirrors C Lua's clearbykeys.
+// Walks the given GC slice. Mirrors C Lua's clearbykeys.
 // clearDeadKeysAllEphemerons walks allgc and finobj lists to find ALL tables
 // with WeakKey mode and clears their dead key entries. This is needed because
 // convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
@@ -632,11 +633,9 @@ func clearDeadKeysInList(g *state.GlobalState, list object.GCObject) {
 	}
 }
 
-func clearByKeys(g *state.GlobalState, l object.GCObject) {
-	for l != nil {
-		t := l.(*table.Table)
-		l = t.GCHeader.GCList // next in list
-
+func clearByKeys(g *state.GlobalState, list []object.GCObject) {
+	for _, obj := range list {
+		t := obj.(*table.Table)
 		nodes := t.Nodes
 		for i := range nodes {
 			n := &nodes[i]
@@ -657,12 +656,11 @@ func clearByKeys(g *state.GlobalState, l object.GCObject) {
 }
 
 // clearByValues clears entries with unmarked values from weak-value tables.
-// Walks the GC list from l up to (but not including) f.
+// Processes list[startIdx:] — entries from startIdx to end of slice.
 // Mirrors C Lua's clearbyvalues.
-func clearByValues(g *state.GlobalState, l object.GCObject, f object.GCObject) {
-	for l != nil && l != f {
-		t := l.(*table.Table)
-		l = t.GCHeader.GCList // next in list
+func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
+	for _, obj := range list[startIdx:] {
+		t := obj.(*table.Table)
 
 		// Clear array part
 		for i := range t.Array {
@@ -698,13 +696,19 @@ func clearByValues(g *state.GlobalState, l object.GCObject, f object.GCObject) {
 // Mirrors C Lua's convergeephemerons.
 func convergeEphemerons(g *state.GlobalState) {
 	dir := false
+	// Scratch buffer reused across iterations to avoid allocation.
+	// We swap g.Ephemeron into scratch, then let traverseEphemeron
+	// append new entries into g.Ephemeron (which reuses scratch's old capacity).
+	var scratch []object.GCObject
 	for {
-		next := g.Ephemeron
-		g.Ephemeron = nil
+		// Swap: take current list into scratch, give scratch's (empty) backing to g.Ephemeron.
+		scratch, g.Ephemeron = g.Ephemeron, scratch[:0]
+		if len(scratch) == 0 {
+			break
+		}
 		changed := false
-		for next != nil {
-			t := next.(*table.Table)
-			next = t.GCHeader.GCList
+		for _, obj := range scratch {
+			t := obj.(*table.Table)
 			// Mark black temporarily (out of list)
 			markBlack(&t.GCHeader)
 			if traverseEphemeron(g, t, dir) {
@@ -770,9 +774,9 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 	propagateAll(g) // propagate any new gray objects
 
 	// Process grayagain list (weak tables deferred from propagate phase)
-	grayagain := g.GrayAgain
-	g.GrayAgain = nil
-	g.Gray = grayagain
+	// Append grayagain entries to gray list and drain
+	g.Gray = append(g.Gray, g.GrayAgain...)
+	g.GrayAgain = g.GrayAgain[:0]
 	propagateAll(g)
 
 	// Converge ephemerons (weak-key tables with white-key→white-value entries)
@@ -780,10 +784,10 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 
 	// At this point, all strongly accessible objects are marked.
 	// Clear values from weak-value tables BEFORE checking finalizers.
-	clearByValues(g, g.Weak, nil)
-	clearByValues(g, g.AllWeak, nil)
-	origWeak := g.Weak
-	origAll := g.AllWeak
+	clearByValues(g, g.Weak, 0)
+	clearByValues(g, g.AllWeak, 0)
+	origWeakLen := len(g.Weak)
+	origAllLen := len(g.AllWeak)
 
 	// Separate dead finalizable objects
 	separateTobeFnz(g)
@@ -799,9 +803,9 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 	// Walk allgc+finobj to find ALL ephemeron tables for dead-key clearing.
 	clearDeadKeysAllEphemerons(g)
 	clearByKeys(g, g.AllWeak)
-	// Clear values from resurrected weak tables (only new entries since origWeak)
-	clearByValues(g, g.Weak, origWeak)
-	clearByValues(g, g.AllWeak, origAll)
+	// Clear values from resurrected weak tables (only new entries since pre-resurrection)
+	clearByValues(g, g.Weak, origWeakLen)
+	clearByValues(g, g.AllWeak, origAllLen)
 
 	// Phase 4: Sweep — dead objects have the old white (now "otherwhite")
 	g.GCState = object.GCSswpallgc
@@ -813,8 +817,10 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 
 	// Phase 6: Reset
 	g.GCState = object.GCSpause
-	// Clear weak table lists for next cycle
-	g.Weak = nil
-	g.AllWeak = nil
-	g.Ephemeron = nil
+	// Clear weak table lists for next cycle (reuse backing arrays)
+	g.Gray = g.Gray[:0]
+	g.GrayAgain = g.GrayAgain[:0]
+	g.Weak = g.Weak[:0]
+	g.AllWeak = g.AllWeak[:0]
+	g.Ephemeron = g.Ephemeron[:0]
 }
