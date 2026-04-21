@@ -182,6 +182,9 @@ type LuaState struct {
 	NTransfer     int  // hook value transfer: number of values
 	HookEvent     int  // current hook event (HookCall, HookReturn, etc.)
 	HookLine      int  // current hook line number (-1 if not a line hook)
+	// Saved state for hook yield resume (survives panic/yield)
+	HookSavedTop  int  // L.Top before hook dispatch
+	HookSavedCITop int // ci.Top before hook dispatch
 }
 
 // Hook event constants (matches C LUA_HOOK*)
