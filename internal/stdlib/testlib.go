@@ -509,7 +509,8 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			L1.SetMetatable(idx)
 
 		case "settable":
-			L1.SetTable(p.getIndex(L, L1))
+			idx := p.getIndex(L, L1)
+			L1.SetTableMeta(idx)
 
 		case "settop":
 			L1.SetTop(p.getNum(L, L1))

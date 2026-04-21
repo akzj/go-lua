@@ -157,6 +157,18 @@ func (L *State) SetTable(idx int) {
 	ls.Top -= 2
 }
 
+// SetTableMeta does t[k] = v with __newindex metamethod support.
+// Used by testC's settable instruction. Separate from SetTable to avoid
+// Go call stack overflow in deep metamethod chains (events.lua).
+func (L *State) SetTableMeta(idx int) {
+	ls := L.ls()
+	t := L.index2val(idx)
+	key := ls.Stack[ls.Top-2].Val
+	val := ls.Stack[ls.Top-1].Val
+	ls.Top -= 2
+	vm.APISetTable(ls, *t, key, val)
+}
+
 // SetField does t[key] = v where t is at idx, v at top.
 func (L *State) SetField(idx int, key string) {
 	ls := L.ls()
