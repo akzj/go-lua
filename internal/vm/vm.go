@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/gc"
 	"github.com/akzj/go-lua/internal/metamethod"
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/opcode"
@@ -25,14 +26,21 @@ import (
 const maxTagLoop = 2000
 
 // ---------------------------------------------------------------------------
-// Periodic GC helper
+// Debt-based GC trigger
 // ---------------------------------------------------------------------------
 
-// checkPeriodicGC increments the allocation counter and triggers a GC step
-// every 5000 allocations if a step function is registered.
-func checkPeriodicGC(g *state.GlobalState, L *state.LuaState) {
+// checkGC triggers a GC step when GCDebt has been exhausted (≤ 0).
+// GCDebt is decremented by TrackAllocation (called from LinkGC and table
+// resize paths). After a collection, SetPause resets debt based on live data.
+// Also maintains a counter-based safety net: even if debt hasn't run out,
+// trigger GC every 5000 allocations to prevent Go-heap OOM when Lua's
+// ObjSize estimates undercount actual Go memory usage.
+func checkGC(g *state.GlobalState, L *state.LuaState) {
+	if g.GCStepFn == nil {
+		return
+	}
 	g.GCAllocCount++
-	if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
+	if atomic.LoadInt64(&g.GCDebt) <= 0 || g.GCAllocCount%5000 == 0 {
 		g.GCStepFn(L)
 	}
 }
@@ -196,10 +204,12 @@ startfunc:
 
 		case opcode.OP_SETUPVAL:
 			b := opcode.GetArgB(inst)
-			cl.UpVals[b].Set(L.Stack, L.Stack[ra].Val)
+			uv := cl.UpVals[b]
+			uv.Set(L.Stack, L.Stack[ra].Val)
+			gc.BarrierValue(L.Global, uv, L.Stack[ra].Val) // GC write barrier: upvalue set
 
 		case opcode.OP_CLOSE:
-			closure.CloseUpvals(L, ra)
+			gc.CloseUpvals(L.Global, L, ra) // barrier-aware close
 			closeTBC(L, ra)
 
 		case opcode.OP_TBC:
@@ -352,7 +362,7 @@ startfunc:
 			// Periodic GC: run Lua GC during tight allocation loops.
 			// V5 GC handles __gc via finobj list.
 			if g := L.Global; !g.GCStopped {
-				checkPeriodicGC(g, L)
+				checkGC(g, L)
 			}
 
 		case opcode.OP_SELF:
@@ -764,7 +774,7 @@ startfunc:
 
 			// Periodic GC: string concatenation allocates new strings.
 			if g := L.Global; !g.GCStopped {
-				checkPeriodicGC(g, L)
+				checkGC(g, L)
 			}
 
 		// ===== Comparison =====
@@ -992,7 +1002,7 @@ startfunc:
 				b = L.Top - ra
 			}
 			if opcode.GetArgK(inst) != 0 {
-				closure.CloseUpvals(L, base)
+				gc.CloseUpvals(L.Global, L, base) // barrier-aware close
 			}
 			n := preTailCall(L, ci, ra, b, delta)
 			if n < 0 {
@@ -1019,7 +1029,7 @@ startfunc:
 				if L.Top < ci.Top {
 					L.Top = ci.Top
 				}
-				closure.CloseUpvals(L, base)
+				gc.CloseUpvals(L.Global, L, base) // barrier-aware close
 				closeTBCWithError(L, base, state.StatusCloseKTop, object.Nil, true)
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
@@ -1084,7 +1094,7 @@ startfunc:
 
 			// Periodic GC: closures are heap-allocated objects.
 			if g := L.Global; !g.GCStopped {
-				checkPeriodicGC(g, L)
+				checkGC(g, L)
 			}
 
 		case opcode.OP_VARARG:
@@ -1115,17 +1125,26 @@ startfunc:
 			h := L.Stack[ra].Val.Obj.(*table.Table)
 			if n == 0 {
 				n = L.Top - ra - 1
+			} else {
+				L.Top = ci.Top // correct top in case of emergency GC
 			}
 			last += n
 			if opcode.GetArgK(inst) != 0 {
 				last += opcode.GetArgAx(code[ci.SavedPC]) * (opcode.MaxArgVC + 1)
 				ci.SavedPC++
 			}
+			// Match C Lua: when 'last' exceeds current array size,
+			// pre-allocate the array to exactly 'last' (not power-of-2).
+			// This avoids rehash rounding up to the next power of 2.
+			if last > h.ArrayLen() {
+				h.ResizeArray(last)
+			}
 			for i := n; i > 0; i-- {
 				h.SetInt(int64(last), L.Stack[ra+i].Val)
 				last--
 			}
-			L.Top = ci.Top // restore top
+			gc.BarrierBack(L.Global, h) // GC write barrier: table bulk-set
+			L.Top = ci.Top              // restore top
 
 		// ===== Lua 5.5 new opcodes =====
 

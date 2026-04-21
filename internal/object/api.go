@@ -25,7 +25,8 @@ type GCObject interface {
 // an intrusive GCList pointer, saving 16 bytes per object (interface = 16B).
 type GCHeader struct {
 	Next    GCObject // next in allgc/finobj/tobefnz chain
-	Marked  byte     // GC mark bits: color (white0/white1/black) + age
+	Marked  byte     // GC mark bits: color (white0/white1/black) + finalized
+	Age     byte     // generational GC age (G_NEW through G_TOUCHED2)
 
 	// ObjSize is the pre-computed byte size of this object for GC accounting.
 	// Set at allocation time. Updated on table resize (rehash).
@@ -39,7 +40,18 @@ const (
 	WhiteBit1    byte = 1 << 1 // white bit 1
 	BlackBit     byte = 1 << 2 // black bit
 	FinalizedBit byte = 1 << 3 // has been finalized
-	AgeBits      byte = 7 << 3 // age bits for generational GC (bits 3-5)
+)
+
+// Generational GC age constants (stored in GCHeader.Age, not in Marked).
+// Mirrors C Lua's G_NEW through G_TOUCHED2 (lgc.h:110-116).
+const (
+	G_NEW      byte = 0 // created in current cycle
+	G_SURVIVAL byte = 1 // survived one cycle
+	G_OLD0     byte = 2 // marked old by forward barrier in this cycle
+	G_OLD1     byte = 3 // first full cycle as old
+	G_OLD      byte = 4 // really old object (not visited in minor GC)
+	G_TOUCHED1 byte = 5 // old object touched this cycle
+	G_TOUCHED2 byte = 6 // old object touched in previous cycle
 )
 
 // WhiteBits is the mask for both white bits.
@@ -58,6 +70,15 @@ func (h *GCHeader) IsGray() bool { return !h.IsWhite() && !h.IsBlack() }
 func (h *GCHeader) IsDead(otherwhite byte) bool {
 	return h.Marked&(WhiteBits|BlackBit) == otherwhite
 }
+
+// IsOld returns true if the object is older than SURVIVAL (OLD0, OLD1, OLD, TOUCHED1, TOUCHED2).
+func (h *GCHeader) IsOld() bool { return h.Age > G_SURVIVAL }
+
+// GetAge returns the generational age of the object.
+func (h *GCHeader) GetAge() byte { return h.Age }
+
+// SetAge sets the generational age of the object.
+func (h *GCHeader) SetAge(age byte) { h.Age = age }
 // GC phase constants (matches C Lua's GCState values from lgc.h).
 const (
 	GCSpause       byte = 0 // waiting to start a new cycle
@@ -70,6 +91,14 @@ const (
 	GCSswpend      byte = 7 // sweep finished
 	GCScallfin     byte = 8 // calling finalizers
 )
+
+// GC kind constants (matches C Lua's KGC_* from lgc.h).
+const (
+	KGC_INC      byte = 0 // incremental mode (default)
+	KGC_GENMINOR byte = 1 // generational mode — minor collection
+	KGC_GENMAJOR byte = 2 // generational mode — major collection
+)
+
 
 
 // ---------------------------------------------------------------------------

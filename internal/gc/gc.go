@@ -1,7 +1,12 @@
-// Package api implements Lua's mark-and-sweep garbage collector.
+// Package gc implements Lua's incremental mark-and-sweep garbage collector.
 //
-// This is a stop-the-world, non-incremental GC. It implements the core
-// mark/sweep/finalize cycle from C Lua's lgc.c, adapted for Go.
+// The GC runs as a state machine with the following phases:
+//   GCSpause → GCSpropagate → GCSenteratomic → GCSatomic →
+//   GCSswpallgc → GCSswpfinobj → GCSswptobefnz → GCSswpend →
+//   GCScallfin → GCSpause
+//
+// Each call to SingleStep does bounded work and advances one step.
+// FullGC runs the state machine to completion for stop-the-world collection.
 //
 // Key difference from C Lua: sweep only unlinks objects from the allgc
 // chain. Go's tracing GC handles actual memory deallocation once objects
@@ -17,6 +22,18 @@ import (
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/state"
 	"github.com/akzj/go-lua/internal/table"
+)
+
+// ---------------------------------------------------------------------------
+// Constants for work accounting
+// ---------------------------------------------------------------------------
+
+const (
+	// SWEEPMAX is the maximum number of objects to sweep per incremental step.
+	SWEEPMAX = 20
+
+	// GCFINALIZECOST is the work units charged for calling one finalizer.
+	GCFINALIZECOST int64 = 50
 )
 
 // ---------------------------------------------------------------------------
@@ -86,6 +103,121 @@ func markBlack(h *object.GCHeader) {
 	h.Marked = (h.Marked &^ object.WhiteBits) | object.BlackBit
 }
 
+// genlink handles post-traversal age management for generational GC.
+// In gen mode, TOUCHED1 objects go back on grayagain (re-traverse next cycle).
+// TOUCHED2 objects advance to OLD.
+// In incremental mode, this is a no-op.
+// Mirrors C Lua's genlink (lgc.c:470).
+func genlink(g *state.GlobalState, obj object.GCObject) {
+	if g.GCKind == object.KGC_INC {
+		return // no-op in incremental mode
+	}
+	h := obj.GC()
+	if h.Age == object.G_TOUCHED1 {
+		// Touched in this cycle — link back to grayagain for next cycle
+		g.GrayAgain = append(g.GrayAgain, obj)
+	} else if h.Age == object.G_TOUCHED2 {
+		// Advance age
+		h.Age = object.G_OLD
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Write barriers — maintain the tri-color invariant during mutator execution
+// ---------------------------------------------------------------------------
+
+// Barrier is the forward write barrier.
+// Called when a black parent object gets a reference to a potentially white child.
+// During propagate phase: marks the child (pushes it forward to gray/black).
+// This is a no-op if parent is not black or child is not white.
+//
+// Mirrors C Lua's luaC_barrier_ (lgc.c:246).
+func Barrier(g *state.GlobalState, parent, child object.GCObject) {
+	if parent == nil || child == nil {
+		return
+	}
+	ph := parent.GC()
+	ch := child.GC()
+	// Fast path: most objects aren't black during mutator execution
+	if ph.Marked&object.BlackBit == 0 || ch.Marked&object.WhiteBits == 0 {
+		return
+	}
+	// Gen mode: if parent is old, promote child to OLD0
+	if g.GCKind != object.KGC_INC && ph.IsOld() {
+		ch.Age = object.G_OLD0
+	}
+	// Mark the child (propagate forward)
+	markObject(g, child)
+}
+
+// BarrierBack is the backward write barrier for container objects (tables).
+// Called when a black container is mutated. Sets the container back to gray
+// and adds it to the grayagain list for re-traversal in the atomic phase.
+// This is a no-op if the parent is not black.
+//
+// Mirrors C Lua's luaC_barrierback_ (lgc.c:272).
+func BarrierBack(g *state.GlobalState, parent object.GCObject) {
+	if parent == nil {
+		return
+	}
+	ph := parent.GC()
+	// Fast path: not black → nothing to do
+	if ph.Marked&object.BlackBit == 0 {
+		return
+	}
+	// Gen mode: if parent is old, set to TOUCHED1
+	if g.GCKind != object.KGC_INC && ph.IsOld() {
+		ph.Age = object.G_TOUCHED1
+	}
+	// Set back to gray (clear black bit, keep other bits)
+	ph.Marked &^= object.BlackBit
+	g.GrayAgain = append(g.GrayAgain, parent)
+}
+
+// BarrierValue calls Barrier if val contains a GC-collectable object.
+// Convenience wrapper for TValue children.
+func BarrierValue(g *state.GlobalState, parent object.GCObject, val object.TValue) {
+	if child, ok := val.Obj.(object.GCObject); ok && child != nil {
+		Barrier(g, parent, child)
+	}
+}
+
+// CloseUpvals closes all open upvalues at or above level, applying a forward
+// barrier on each closed upvalue. This wraps closure.CloseUpvals logic with
+// per-upvalue barriers that closure.go can't call (import cycle: gc→closure).
+// Mirrors C Lua's luaF_closeupval + luaC_barrier per upvalue.
+func CloseUpvals(g *state.GlobalState, L *state.LuaState, level int) {
+	for {
+		if L.OpenUpval == nil {
+			break
+		}
+		uv, ok := L.OpenUpval.(*closure.UpVal)
+		if !ok || uv == nil || uv.StackIdx < level {
+			break
+		}
+
+		// Remove from open list
+		if uv.Next == nil {
+			L.OpenUpval = nil
+		} else {
+			L.OpenUpval = uv.Next
+		}
+
+		// Close: capture the current stack value
+		var val object.TValue
+		if uv.StackIdx >= 0 && uv.StackIdx < len(L.Stack) {
+			val = L.Stack[uv.StackIdx].Val
+		} else {
+			val = object.Nil
+		}
+		uv.Close(val)
+
+		// Forward barrier: if upvalue is black and captured value is white
+		BarrierValue(g, uv, val)
+	}
+}
+
+
 // ---------------------------------------------------------------------------
 // Traversal functions — process gray objects, marking their children
 // ---------------------------------------------------------------------------
@@ -98,8 +230,9 @@ func propagateAll(g *state.GlobalState) {
 }
 
 // propagateMark takes one object from the gray list, marks it black,
-// and traverses its children.
-func propagateMark(g *state.GlobalState) {
+// and traverses its children. Returns approximate work units (number
+// of child slots traversed) for incremental step accounting.
+func propagateMark(g *state.GlobalState) int64 {
 	// Pop from end of gray slice (stack order)
 	n := len(g.Gray)
 	obj := g.Gray[n-1]
@@ -107,29 +240,41 @@ func propagateMark(g *state.GlobalState) {
 	g.Gray = g.Gray[:n-1]
 	h := obj.GC()
 
+	var work int64
+
 	switch v := obj.(type) {
 	case *table.Table:
 		// Tables may NOT be marked black — weak tables link to special lists.
 		// traverseTable handles marking black for strong tables.
+		// genlink is called inside traverseTable for strong tables.
 		traverseTable(g, v)
+		work = int64(len(v.Array) + len(v.Nodes) + 1)
 	case *object.Userdata:
 		markBlack(h)
 		traverseUserdata(g, v)
+		genlink(g, obj)
+		work = int64(len(v.UserVals) + 1)
 	case *closure.LClosure:
 		markBlack(h)
 		traverseLClosure(g, v)
+		work = int64(len(v.UpVals) + 1)
 	case *closure.CClosure:
 		markBlack(h)
 		traverseCClosure(g, v)
+		work = int64(len(v.UpVals) + 1)
 	case *object.Proto:
 		markBlack(h)
 		traverseProto(g, v)
+		work = int64(len(v.Constants) + len(v.Protos) + len(v.Upvalues) + len(v.LocVars) + 1)
 	case *state.LuaState:
 		markBlack(h)
 		traverseThread(g, v)
+		work = int64(len(v.Stack) + 1)
 	default:
 		markBlack(h)
+		work = 1
 	}
+	return work
 }
 
 // getWeakMode returns the weak mode of a table (0=strong, 1=weak values,
@@ -173,6 +318,7 @@ func traverseTable(g *state.GlobalState, t *table.Table) {
 	case 0: // not weak — strong table
 		traverseStrongTable(g, t)
 		markBlack(h)
+		genlink(g, t) // gen mode: handle TOUCHED1/TOUCHED2 age transitions
 	case table.WeakValue: // weak values only
 		traverseWeakValue(g, t)
 		// Do NOT mark black — stays in weak/grayagain list
@@ -242,6 +388,7 @@ func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 		linkGCList(t, &g.Weak) // has dead values to clear
 	} else {
 		markBlack(&t.GCHeader) // no clears needed — done
+		genlink(g, t)          // gen mode: handle TOUCHED age transitions
 	}
 }
 
@@ -307,6 +454,7 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 		linkGCList(t, &g.AllWeak) // has white keys to clear
 	} else {
 		markBlack(&t.GCHeader) // fully processed
+		genlink(g, t)          // gen mode: handle TOUCHED age transitions
 	}
 	return marked
 }
@@ -372,6 +520,15 @@ func traverseProto(g *state.GlobalState, p *object.Proto) {
 // active frames) while not marking the entire allocated stack (which would
 // prevent weak tables from collecting dead locals above all active frames).
 func traverseThread(g *state.GlobalState, th *state.LuaState) {
+	// In gen mode, old threads must be visited at every cycle because they
+	// might point to young objects. In inc mode, threads must be revisited
+	// in the atomic phase. Put thread back on grayagain in these cases.
+	// Mirrors C Lua's traversethread (lgc.c:697-698).
+	h := th.GC()
+	if h.IsOld() || g.GCState == object.GCSpropagate {
+		g.GrayAgain = append(g.GrayAgain, th)
+	}
+
 	var top int
 	if g.GCExplicit {
 		// Explicit GC (collectgarbage()): precise — only up to th.Top.
@@ -495,6 +652,51 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 	return freed
 }
 
+// sweepStep sweeps up to SWEEPMAX objects from the list pointed to by
+// g.SweepGC. When the current list is exhausted, advances to nextState.
+// Returns approximate work units (count of objects examined).
+func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int64 {
+	if g.SweepGC == nil {
+		// Point SweepGC at the head of this list
+		g.SweepGC = list
+	}
+
+	otherwhite := otherWhite(g)
+	currentWhite := g.CurrentWhite
+	count := 0
+
+	for count < SWEEPMAX && *g.SweepGC != nil {
+		obj := *g.SweepGC
+		h := obj.GC()
+		marked := h.Marked
+
+		if isDeadMark(otherwhite, marked) {
+			// Dead — unlink from chain
+			*g.SweepGC = h.Next
+			h.Next = nil
+			if h.ObjSize > 0 {
+				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
+			}
+			if t, ok := obj.(*table.Table); ok {
+				table.PutTable(t)
+			}
+		} else {
+			// Alive — reset to current white
+			h.Marked = (marked &^ (object.WhiteBits | object.BlackBit)) | currentWhite
+			g.SweepGC = &h.Next
+		}
+		count++
+	}
+
+	if *g.SweepGC == nil {
+		// List exhausted — advance to next state
+		g.SweepGC = nil
+		g.GCState = nextState
+	}
+
+	return int64(count)
+}
+
 // otherWhite returns the "other" white bit (the one NOT current).
 func otherWhite(g *state.GlobalState) byte {
 	return g.CurrentWhite ^ object.WhiteBits
@@ -513,17 +715,26 @@ func isDeadMark(otherwhite byte, marked byte) bool {
 
 // separateTobeFnz moves dead objects from finobj to tobefnz.
 // These objects have __gc metamethods and need finalization.
+// Objects are appended to the END of tobefnz to preserve finobj order
+// (most recently created first = LIFO finalization order).
+// Mirrors C Lua's separatetobefnz which uses findlast + append.
 func separateTobeFnz(g *state.GlobalState) {
 	otherwhite := otherWhite(g)
+	// Find the tail of tobefnz list (to append, not prepend)
+	lastnext := &g.TobeFnz
+	for *lastnext != nil {
+		lastnext = &(*lastnext).GC().Next
+	}
 	p := &g.FinObj
 	for *p != nil {
 		obj := *p
 		h := obj.GC()
 		if isDeadMark(otherwhite, h.Marked) {
-			// Dead — move to tobefnz
+			// Dead — move to end of tobefnz
 			*p = h.Next
-			h.Next = g.TobeFnz
-			g.TobeFnz = obj
+			h.Next = nil
+			*lastnext = obj
+			lastnext = &h.Next
 		} else {
 			p = &h.Next
 		}
@@ -585,15 +796,9 @@ func Udata2Finalize(g *state.GlobalState) object.GCObject {
 }
 
 // ---------------------------------------------------------------------------
-// Full GC cycle
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Weak table clearing functions
 // ---------------------------------------------------------------------------
 
-// clearByKeys clears entries with unmarked keys from weak-key tables.
-// Walks the given GC slice. Mirrors C Lua's clearbykeys.
 // clearDeadKeysAllEphemerons walks allgc and finobj lists to find ALL tables
 // with WeakKey mode and clears their dead key entries. This is needed because
 // convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
@@ -734,47 +939,31 @@ func markBeingFnz(g *state.GlobalState) {
 }
 
 // ---------------------------------------------------------------------------
-// Full GC cycle
+// Atomic phase
 // ---------------------------------------------------------------------------
 
-// FullGC performs a complete stop-the-world garbage collection cycle.
-// This is the Go equivalent of C Lua's fullinc (luaC_fullgc).
-//
-// Phases:
-//  1. Flip white — switch current white so new objects survive
-//  2. Mark — traverse from roots, color all reachable objects
-//  3. Atomic — process grayagain, ephemerons, weak tables
-//  4. Sweep — remove dead objects from allgc chain
-//  5. Finalize — move dead finobj to tobefnz
-//  6. Reset
-func FullGC(g *state.GlobalState, L *state.LuaState) {
-	// Flip current white BEFORE marking. This is critical for correctness
-	// when FullGC runs during VM execution (periodic GC):
-	// - Existing objects have the OLD white → must be marked to survive
-	// - New objects created during the cycle get the NEW white → survive sweep
-	// - Sweep kills objects with OLD white that weren't marked
-	g.CurrentWhite ^= object.WhiteBits
+// atomic performs the non-interruptible atomic phase of the GC.
+// This includes: re-marking the running thread and registry, draining
+// grayagain, converging ephemerons, clearing weak tables, separating
+// finalizable objects, and flipping the white bit.
+// Returns approximate work units.
+// Mirrors C Lua's atomic() in lgc.c.
+func atomicPhase(g *state.GlobalState, L *state.LuaState) int64 {
+	var work int64
 
-	// Reset ephemeron counter for this cycle (used to skip clearDeadKeysAllEphemerons)
-	g.EphemeronCount = 0
-
-	// Phase 1: Mark roots
-	g.GCState = object.GCSpropagate
-	markRoots(g)
-
-	// Phase 2: Propagate — drain gray list
-	propagateAll(g)
-
-	// Phase 3: Atomic — mirrors C Lua's atomic()
 	g.GCState = object.GCSatomic
+
+	// Re-mark running thread (may differ from main thread)
 	if L != nil {
-		markObject(g, L) // mark running thread (may differ from main)
+		markObject(g, L)
 	}
+	// Re-mark registry
 	markValue(g, g.Registry)
-	propagateAll(g) // propagate any new gray objects
+	propagateAll(g)
+	work += int64(len(g.Gray))
 
 	// Process grayagain list (weak tables deferred from propagate phase)
-	// Append grayagain entries to gray list and drain
+	work += int64(len(g.GrayAgain))
 	g.Gray = append(g.Gray, g.GrayAgain...)
 	g.GrayAgain = g.GrayAgain[:0]
 	propagateAll(g)
@@ -782,7 +971,7 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 	// Converge ephemerons (weak-key tables with white-key→white-value entries)
 	convergeEphemerons(g)
 
-	// At this point, all strongly accessible objects are marked.
+	// All strongly accessible objects are now marked.
 	// Clear values from weak-value tables BEFORE checking finalizers.
 	clearByValues(g, g.Weak, 0)
 	clearByValues(g, g.AllWeak, 0)
@@ -797,30 +986,176 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 	// Second ephemeron convergence (for resurrected objects)
 	convergeEphemerons(g)
 
-	// At this point, all resurrected objects are marked.
 	// Clear dead keys from ephemeron and allweak tables
-	// NOTE: convergeEphemerons empties g.Ephemeron (marks tables black).
-	// Walk allgc+finobj to find ALL ephemeron tables for dead-key clearing.
 	clearDeadKeysAllEphemerons(g)
 	clearByKeys(g, g.AllWeak)
 	// Clear values from resurrected weak tables (only new entries since pre-resurrection)
 	clearByValues(g, g.Weak, origWeakLen)
 	clearByValues(g, g.AllWeak, origAllLen)
 
-	// Phase 4: Sweep — dead objects have the old white (now "otherwhite")
+	// Update GCEstimate with current live bytes
+	g.GCEstimate = atomic.LoadInt64(&g.GCTotalBytes)
+
+	return work
+}
+
+// entersweep sets up the sweep phase by pointing SweepGC at the allgc list.
+func entersweep(g *state.GlobalState) {
 	g.GCState = object.GCSswpallgc
-	sweepList(g, &g.Allgc)
+	g.SweepGC = &g.Allgc
+}
 
-	// Phase 5: Sweep finalizable objects
-	g.GCState = object.GCSswpfinobj
-	sweepList(g, &g.FinObj)
+// ---------------------------------------------------------------------------
+// State machine — SingleStep
+// ---------------------------------------------------------------------------
 
-	// Phase 6: Reset
-	g.GCState = object.GCSpause
-	// Clear weak table lists for next cycle (reuse backing arrays)
-	g.Gray = g.Gray[:0]
-	g.GrayAgain = g.GrayAgain[:0]
-	g.Weak = g.Weak[:0]
-	g.AllWeak = g.AllWeak[:0]
-	g.Ephemeron = g.Ephemeron[:0]
+// SingleStep performs one incremental step of the GC state machine.
+// Returns approximate work units done in this step.
+// Mirrors C Lua's singlestep() in lgc.c.
+func SingleStep(g *state.GlobalState, L *state.LuaState) int64 {
+	switch g.GCState {
+	case object.GCSpause:
+		// Reset ephemeron counter for this cycle
+		g.EphemeronCount = 0
+		// Flip white at cycle start (restartcollection).
+		// Objects created before this point have the OLD white → candidates.
+		// Objects created during mark get the NEW white → survive this cycle.
+		// A second flip happens at the end of atomic() to prepare for sweep.
+		g.CurrentWhite ^= object.WhiteBits
+		// Mark roots, enter propagate
+		markRoots(g)
+		g.GCState = object.GCSpropagate
+		return 1
+
+	case object.GCSpropagate:
+		if len(g.Gray) > 0 {
+			// Propagate one gray object
+			return propagateMark(g)
+		}
+		// Gray list empty → enter atomic
+		g.GCState = object.GCSenteratomic
+		return 0
+
+	case object.GCSenteratomic:
+		// Do the entire atomic phase (non-interruptible)
+		work := atomicPhase(g, L)
+		// Set up sweep
+		entersweep(g)
+		return work
+
+	case object.GCSswpallgc:
+		// Sweep some objects from allgc
+		return sweepStep(g, &g.Allgc, object.GCSswpfinobj)
+
+	case object.GCSswpfinobj:
+		// Sweep some objects from finobj
+		return sweepStep(g, &g.FinObj, object.GCSswptobefnz)
+
+	case object.GCSswptobefnz:
+		// Sweep some objects from tobefnz
+		return sweepStep(g, &g.TobeFnz, object.GCSswpend)
+
+	case object.GCSswpend:
+		// Sweep finished — clear gray lists, enter callfin
+		g.Gray = g.Gray[:0]
+		g.GrayAgain = g.GrayAgain[:0]
+		g.Weak = g.Weak[:0]
+		g.AllWeak = g.AllWeak[:0]
+		g.Ephemeron = g.Ephemeron[:0]
+		g.GCState = object.GCScallfin
+		return 0
+
+	case object.GCScallfin:
+		// Finalizer calling is handled externally by the API layer
+		// (callAllPendingFinalizers). In the state machine, we just
+		// transition to pause. The API layer checks TobeFnz separately.
+		g.GCState = object.GCSpause
+		return 0
+
+	default:
+		// Should never happen — treat as pause
+		g.GCState = object.GCSpause
+		return 0
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Full GC cycle
+// ---------------------------------------------------------------------------
+
+// FullGC performs a complete garbage collection cycle by running the
+// state machine to completion. This is the Go equivalent of C Lua's
+// fullinc (luaC_fullgc).
+//
+// If a cycle is already in progress (state > GCSpause and <= GCSpropagate),
+// it completes the current cycle first, then runs a fresh one.
+func FullGC(g *state.GlobalState, L *state.LuaState) {
+	// If we're in the middle of a mark phase, we need to finish the
+	// current cycle first before starting a new one.
+	if g.GCState <= object.GCSpropagate {
+		// Already in mark phase or pause — finish current cycle
+		// by running through all states until pause
+		for g.GCState != object.GCSpause {
+			SingleStep(g, L)
+		}
+	}
+
+	// Run one complete cycle: from pause through all states back to pause
+	for {
+		SingleStep(g, L)
+		if g.GCState == object.GCSpause {
+			break
+		}
+	}
+
+	// Clear SweepGC for safety (cycle is complete)
+	g.SweepGC = nil
+}
+
+// ---------------------------------------------------------------------------
+// GC Step + Debt-Based Pacing
+// ---------------------------------------------------------------------------
+
+// GCStep performs one GC step triggered by the debt-based pacer.
+// For now (no write barriers), this runs a full collection cycle.
+// Later with barriers, this will run bounded SingleSteps.
+// After the cycle, SetPause recalculates debt for the next trigger.
+func GCStep(g *state.GlobalState, L *state.LuaState) {
+	if g.GCStopped {
+		return
+	}
+	// Run a full collection cycle
+	FullGC(g, L)
+	// Recalculate debt based on live data estimate
+	SetPause(g)
+}
+
+// SetPause calculates the GC debt (allocation credit) after a collection.
+// The debt determines how many bytes can be allocated before the next
+// GC cycle triggers. Based on C Lua's setpause():
+//   threshold = estimate * pause / 100
+//   debt = threshold - current_total_bytes
+// With default pause=200, GC triggers when memory reaches 2x live data.
+func SetPause(g *state.GlobalState) {
+	estimate := atomic.LoadInt64(&g.GCTotalBytes)
+	if estimate < 1 {
+		estimate = 1
+	}
+	g.GCEstimate = estimate
+
+	pause := g.GCPause
+	if pause < 2 {
+		pause = 2 // minimum pause to avoid constant collection
+	}
+
+	// threshold = estimate * pause / 100
+	// debt = threshold - estimate (right after GC, total ≈ estimate)
+	threshold := estimate * int64(pause) / 100
+	debt := threshold - estimate
+	// Minimum debt to avoid thrashing on small heaps
+	const minDebt int64 = 64 * 1024
+	if debt < minDebt {
+		debt = minDebt
+	}
+	g.GCDebt = debt
 }

@@ -18,6 +18,13 @@ func (L *State) GCCollect() {
 	L.s.GCCollect()
 }
 
+// GCStepAPI runs a bounded incremental GC step.
+// Returns true if a full GC cycle completed during this step.
+func (L *State) GCStepAPI() bool {
+	return L.s.GCStepAPI()
+}
+
+
 // GCTotalBytes returns the total number of bytes tracked by the Lua GC.
 func (L *State) GCTotalBytes() int64 {
 	return L.s.GCTotalBytes()
