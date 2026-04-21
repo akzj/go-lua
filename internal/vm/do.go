@@ -610,7 +610,7 @@ func moveResults(L *state.LuaState, res int, nres int, wanted int) {
 // clearStackSlots nils out stack slots in [from, to) so Go's GC can
 // collect objects that are no longer reachable from Lua. This is critical
 // because Lua "pops" values by decrementing Top without clearing slots,
-// which leaves Go pointers alive and prevents runtime.SetFinalizer from firing.
+// which leaves Go pointers alive and prevents runtime.AddCleanup callbacks from firing.
 func clearStackSlots(L *state.LuaState, from, to int) {
 	for i := from; i < to; i++ {
 		L.Stack[i].Val = object.Nil
