@@ -13,7 +13,7 @@ The function is deceptively short (11 lines in C) but delegates to two complex
 helpers: `rethook` (hook dispatch + OldPC restoration) and `moveresults`
 (optimized result placement with TBC variable handling).
 
-The Go equivalent is `PosCall` in `internal/vm/api/do.go:361`.
+The Go equivalent is `PosCall` in `internal/vm/do.go:361`.
 
 ---
 
@@ -476,8 +476,8 @@ debug.sethook()
 ### 6. Go-specific test suite
 ```bash
 cd /home/ubuntu/workspace/go-lua
-go test ./internal/vm/api/... -run TestPosCall -count=1
-go test ./internal/vm/api/... -run TestReturn -count=1
+go test ./internal/vm/... -run TestPosCall -count=1
+go test ./internal/vm/... -run TestReturn -count=1
 go test ./... -run TestHookReturn -count=1
 ```
 

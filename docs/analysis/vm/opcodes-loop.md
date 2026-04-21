@@ -1,6 +1,6 @@
 # Loop Opcodes — Deep Analysis
 
-> C source: `lua-master/lvm.c` | Go source: `internal/vm/api/vm.go`
+> C source: `lua-master/lvm.c` | Go source: `internal/vm/vm.go`
 
 ## Stack Layout for Numeric For
 

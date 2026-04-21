@@ -13,9 +13,9 @@ Three key functions form the pipeline:
 - **`getcurrentline`** (ldebug.c:100) — convenience: current CI → source line
 
 **Go equivalents:**
-- `GetFuncLine` — `internal/vm/api/debug.go:47`
-- `getBaseLine` — `internal/vm/api/debug.go:28`
-- `getCurrentLine` — `internal/vm/api/debug.go:65`
+- `GetFuncLine` — `internal/vm/debug.go:47`
+- `getBaseLine` — `internal/vm/debug.go:28`
+- `getCurrentLine` — `internal/vm/debug.go:65`
 - `changedline` — **not implemented as separate function** (inlined as two `GetFuncLine` calls)
 
 ---
@@ -40,7 +40,7 @@ typedef struct AbsLineInfo {
 } AbsLineInfo;
 ```
 
-**Go (internal/object/api/proto.go):**
+**Go (internal/object/proto.go):**
 ```go
 type Proto struct {
     LineInfo    []int8         // per-instruction delta

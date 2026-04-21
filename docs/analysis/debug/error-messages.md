@@ -5,7 +5,7 @@
 Lua's error message system produces rich diagnostic messages like `"attempt to index a nil value (local 'x')"`. This requires **reverse engineering** the bytecode to find variable names. The system had **8 bugs** in go-lua — the highest bug density of any subsystem.
 
 **C Source:** `lua-master/ldebug.c` — lines 440–815
-**Go Source:** `internal/vm/api/callerror.go`, `internal/vm/api/debug.go:271–400`, `internal/vm/api/vm.go:700–740`
+**Go Source:** `internal/vm/callerror.go`, `internal/vm/debug.go:271–400`, `internal/vm/vm.go:700–740`
 
 ---
 
@@ -62,7 +62,7 @@ static int findsetreg (const Proto *p, int lastpc, int reg) {
 
 ### Go Mapping: `findSetRegForward` (debug.go — not shown in callerror.go)
 
-Go uses a function called `findSetRegForward` in `internal/vm/api/debug.go` that performs the same symbolic walk. Key difference: Go scans **forward** from instruction 0 to `lastpc` (same as C), tracking the last instruction that set the target register.
+Go uses a function called `findSetRegForward` in `internal/vm/debug.go` that performs the same symbolic walk. Key difference: Go scans **forward** from instruction 0 to `lastpc` (same as C), tracking the last instruction that set the target register.
 
 ---
 
@@ -450,15 +450,15 @@ for i = "a", 10 do end
 ```bash
 # Compare error function signatures
 grep -n 'luaG_typeerror\|luaG_callerror\|luaG_forerror\|luaG_tointerror' lua-master/ldebug.c
-grep -n 'RunTypeError\|RunTypeErrorByVal\|callErrorExtra' internal/vm/api/callerror.go
+grep -n 'RunTypeError\|RunTypeErrorByVal\|callErrorExtra' internal/vm/callerror.go
 
 # Verify BasicGetObjName covers all C cases
-grep -c 'case OP_' internal/vm/api/debug.go   # Go opcode cases
+grep -c 'case OP_' internal/vm/debug.go   # Go opcode cases
 grep -c 'case OP_' lua-master/ldebug.c         # C opcode cases (in getobjname+basicgetobjname)
 
 # Check upvalue detection gap
 grep -n 'getupvalname\|upvalname' lua-master/ldebug.c
-grep -n 'upval' internal/vm/api/debug.go
+grep -n 'upval' internal/vm/debug.go
 ```
 
 ### 4. Regression Test

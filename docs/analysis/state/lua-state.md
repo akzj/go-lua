@@ -1,6 +1,6 @@
 # lua_State Fields — Deep Analysis
 
-> C Lua 5.5.1 `lstate.h:284-312` → go-lua `internal/state/api/api.go:148-180`
+> C Lua 5.5.1 `lstate.h:284-312` → go-lua `internal/state/api.go:148-180`
 
 ## Overview
 
@@ -279,19 +279,19 @@ No manual gray lists, no mark bits, no special thread-with-upvalues tracking nee
 
 ```bash
 # Verify LuaState struct
-grep -n "type LuaState struct" internal/state/api/api.go
+grep -n "type LuaState struct" internal/state/api.go
 # Expected: line ~148
 
 # Verify hook fields exist
-grep -n "HookMask\|AllowHook\|OldPC\|BaseHookCount\|HookCount" internal/state/api/api.go
+grep -n "HookMask\|AllowHook\|OldPC\|BaseHookCount\|HookCount" internal/state/api.go
 
 # Verify NCCalls dual encoding
-grep -n "NCCalls\|Yieldable\|CCalls" internal/state/api/api.go
+grep -n "NCCalls\|Yieldable\|CCalls" internal/state/api.go
 
 # Verify no gclist/twups/marked
-grep -n "gclist\|twups\|marked" internal/state/api/api.go
+grep -n "gclist\|twups\|marked" internal/state/api.go
 # Expected: no matches
 
 # Verify error handling uses panic/recover (not longjmp)
-grep -rn "LuaError\|LuaYield" internal/state/api/api.go | head -5
+grep -rn "LuaError\|LuaYield" internal/state/api.go | head -5
 ```

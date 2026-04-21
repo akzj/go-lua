@@ -1,6 +1,6 @@
 # VM Comparison & Test Opcodes
 
-> C source: `lua-master/lvm.c` (1972 lines) | Go source: `internal/vm/api/vm.go` (2591 lines)
+> C source: `lua-master/lvm.c` (1972 lines) | Go source: `internal/vm/vm.go` (2591 lines)
 > Covers: OP_NOT, OP_EQ, OP_LT, OP_LE, OP_EQK, OP_EQI, OP_LTI, OP_LEI, OP_GTI, OP_GEI, OP_TEST, OP_TESTSET, OP_JMP
 
 ---

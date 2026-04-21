@@ -7,9 +7,9 @@ fetch loop whenever `trap` is non-zero. It handles count hooks, line hooks, and 
 It is the single most bug-prone function in go-lua (5 bugs found here).
 
 **Call site (C):** `vmfetch()` macro in lvm.c:1186-1187 — `trap = luaG_traceexec(L, pc)`
-**Call site (Go):** `internal/vm/api/vm.go:1508` — `TraceExec(L, ci)`
+**Call site (Go):** `internal/vm/vm.go:1508` — `TraceExec(L, ci)`
 
-**Go equivalent:** `TraceExec` in `internal/vm/api/do.go:478`
+**Go equivalent:** `TraceExec` in `internal/vm/do.go:478`
 
 ### Key Semantic Contract
 

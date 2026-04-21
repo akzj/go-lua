@@ -1,6 +1,6 @@
 # CallInfo Struct — Field-by-Field Analysis
 
-> C Lua 5.5.1 `lstate.h:187-209` → go-lua `internal/state/api/api.go:87-108`
+> C Lua 5.5.1 `lstate.h:187-209` → go-lua `internal/state/api.go:87-108`
 
 ## Overview
 
@@ -191,11 +191,11 @@ Both C Lua and go-lua use identical bit positions.
 
 ```bash
 # Verify CallInfo struct exists in go-lua
-grep -n "type CallInfo struct" internal/state/api/api.go
+grep -n "type CallInfo struct" internal/state/api.go
 # Verify linked list (Prev/Next fields)
-grep -n "Prev\|Next" internal/state/api/api.go | head -5
+grep -n "Prev\|Next" internal/state/api.go | head -5
 # Verify callstatus flags match
-grep -n "CIST" internal/state/api/api.go | head -20
+grep -n "CIST" internal/state/api.go | head -20
 # Verify no base field in CallInfo
-grep -n "Base " internal/state/api/api.go
+grep -n "Base " internal/state/api.go
 ```

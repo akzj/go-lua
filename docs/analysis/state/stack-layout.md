@@ -1,6 +1,6 @@
 # Stack Layout — StkIdRel, Frame Geometry, Growth
 
-> C Lua 5.5.1 `lstate.h`, `ldo.c`, `ldo.h` → go-lua `internal/state/api/`, `internal/vm/api/do.go`
+> C Lua 5.5.1 `lstate.h`, `ldo.c`, `ldo.h` → go-lua `internal/state/`, `internal/vm/do.go`
 
 ## The Fundamental Difference: Pointers vs Indices
 
@@ -231,14 +231,14 @@ The TBC list is embedded in the stack using `StackValue.delta`/`TBCDelta`:
 
 ```bash
 # Verify stack type
-grep -n "Stack \[\]" internal/state/api/api.go
+grep -n "Stack \[\]" internal/state/api.go
 # Verify StackValue struct
-grep -n "type StackValue struct" internal/object/api/api.go
+grep -n "type StackValue struct" internal/object/api.go
 # Verify no StkIdRel equivalent
 grep -rn "StkIdRel" internal/ --include="*.go"
 # Expected: no matches
 # Verify EXTRA_STACK constant
-grep -n "ExtraStack" internal/state/api/api.go
+grep -n "ExtraStack" internal/state/api.go
 # Verify reallocStack simplicity
-grep -n -A5 "func.*reallocStack" internal/state/api/state.go
+grep -n -A5 "func.*reallocStack" internal/state/state.go
 ```

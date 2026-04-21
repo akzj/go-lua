@@ -1,6 +1,6 @@
 # VM Fetch-Decode-Dispatch Mechanism
 
-> C: `lua-master/lvm.c` lines 1098–1232 | Go: `internal/vm/api/vm.go` Execute() at line 1488
+> C: `lua-master/lvm.c` lines 1098–1232 | Go: `internal/vm/vm.go` Execute() at line 1488
 
 ## Overview
 

@@ -29,7 +29,7 @@ The task description assumed go-lua uses goroutines for coroutines. **This is wr
 
 ### Evidence
 
-**Yield** (`internal/vm/api/do.go:1138-1155`):
+**Yield** (`internal/vm/do.go:1138-1155`):
 ```go
 func Yield(L *stateapi.LuaState, nResults int) {
     // ...
@@ -42,7 +42,7 @@ func Yield(L *stateapi.LuaState, nResults int) {
 }
 ```
 
-**Resume** (`internal/vm/api/do.go:975-1010`):
+**Resume** (`internal/vm/do.go:975-1010`):
 ```go
 func Resume(L, from, nArgs) {
     // ...
@@ -63,7 +63,7 @@ func Resume(L, from, nArgs) {
 }
 ```
 
-**RunProtected** (`internal/vm/api/do.go:728-760`):
+**RunProtected** (`internal/vm/do.go:728-760`):
 ```go
 func RunProtected(L, f func()) (status int) {
     defer func() {
@@ -342,7 +342,7 @@ default: {
 
 ## 5. go-lua's Current FinishOp — Gap Analysis
 
-### Current Implementation (`internal/vm/api/vm.go:2477-2502`)
+### Current Implementation (`internal/vm/vm.go:2477-2502`)
 
 ```go
 func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
@@ -406,7 +406,7 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 
 ## 6. Implementation Plan
 
-### Change 1: Expand `FinishOp` in `internal/vm/api/vm.go`
+### Change 1: Expand `FinishOp` in `internal/vm/vm.go`
 
 Add cases for all metamethod opcodes. The TM result is at `L.Stack[L.Top-1]`
 (placed there by PosCall when the metamethod returned).
@@ -471,7 +471,7 @@ func FinishOp(L *stateapi.LuaState, ci *stateapi.CallInfo) {
 }
 ```
 
-### Change 2: Fix `unroll()` in `internal/vm/api/do.go`
+### Change 2: Fix `unroll()` in `internal/vm/do.go`
 
 ```go
 // BEFORE (line 1126-1133):
@@ -549,8 +549,8 @@ test framework. Verify after main fix.
 
 | File | Change | Lines |
 |------|--------|-------|
-| `internal/vm/api/vm.go` | Expand `FinishOp()` with all metamethod cases | +50-60 |
-| `internal/vm/api/do.go` | Remove `CISTClsRet` guard in `unroll()` | ~2 |
+| `internal/vm/vm.go` | Expand `FinishOp()` with all metamethod cases | +50-60 |
+| `internal/vm/do.go` | Remove `CISTClsRet` guard in `unroll()` | ~2 |
 | `lua-master/testes/coroutine.lua` | Remove `if false` at :858 and `end` at :1055 | -2 |
 | **Total** | | **~60 lines changed** |
 

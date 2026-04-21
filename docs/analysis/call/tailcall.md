@@ -259,11 +259,11 @@ case opcodeapi.OP_TAILCALL:
 
 | Go | C | Location |
 |----|---|----------|
-| `stateapi.CISTTail` | `CIST_TAIL` | internal/state/api/state.go |
-| `stateapi.MultiRet` | `LUA_MULTRET` | internal/state/api/state.go |
-| `closureapi.CloseUpvals` | `luaF_closeupval` | internal/closure/api/closure.go:66 |
-| `ci.NExtraArgs` | `ci->u.l.nextraargs` | internal/state/api/state.go |
-| `ci.SavedPC` | `ci->u.l.savedpc` | internal/state/api/state.go |
+| `stateapi.CISTTail` | `CIST_TAIL` | internal/state/state.go |
+| `stateapi.MultiRet` | `LUA_MULTRET` | internal/state/state.go |
+| `closureapi.CloseUpvals` | `luaF_closeupval` | internal/closure/closure.go:66 |
+| `ci.NExtraArgs` | `ci->u.l.nextraargs` | internal/state/state.go |
+| `ci.SavedPC` | `ci->u.l.savedpc` | internal/state/state.go |
 
 ---
 
