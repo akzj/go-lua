@@ -14,6 +14,7 @@ import (
 
 	luaapi "github.com/akzj/go-lua/internal/api"
 	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -641,9 +642,11 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			// no-op stub
 
 		case "traceback":
-			_ = p.getString()
-			_ = p.getNum(L, L1)
-			L1.PushString("traceback") // stub
+			msg := p.getString()
+			level := p.getNum(L, L1)
+			// luaL_traceback(L1, L1, msg, level) — push traceback string
+			tracebackStr := buildTraceback(L1, msg, level)
+			L1.PushString(tracebackStr)
 
 		case "warningC":
 			msg := p.getString()
@@ -1325,11 +1328,90 @@ func testResume(L *luaapi.State) int {
 }
 
 // ---------------------------------------------------------------------------
-// T.sethook(mask, count, func) — set debug hook (stub)
+// T.sethook(script, mask [, count]) — set debug hook via C-script
+// Mirrors: sethook + sethookaux + Chook in ltests.c
+// T.sethook() with no args turns off hooks.
 // ---------------------------------------------------------------------------
 
 func testSethook(L *luaapi.State) int {
+	if L.IsNoneOrNil(1) {
+		sethookaux(L, L, 0, 0, "")
+		return 0
+	}
+	scpt := L.CheckString(1)
+	smask := L.CheckString(2)
+	count := 0
+	if L.IsNumber(3) {
+		v, _ := L.ToInteger(3)
+		count = int(v)
+	}
+	mask := 0
+	if strings.ContainsRune(smask, 'c') {
+		mask |= 1 // MaskCall
+	}
+	if strings.ContainsRune(smask, 'r') {
+		mask |= 2 // MaskRet
+	}
+	if strings.ContainsRune(smask, 'l') {
+		mask |= 4 // MaskLine
+	}
+	if count > 0 {
+		mask |= 8 // MaskCount
+	}
+	sethookaux(L, L, mask, count, scpt)
 	return 0
+}
+
+// sethookaux sets a C-script hook on the target thread.
+// Mirrors: sethookaux + Chook in ltests.c.
+// hookDispatch (in vm/do.go) calls the hook as a C function with:
+//
+//	arg1 = event name (string)
+//	arg2 = line number (integer, line hooks only)
+//
+// The Go closure captures 'script' and runs it via runC.
+func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script string) {
+	ls1 := L1.Internal.(*state.LuaState)
+	if script == "" {
+		ls1.Hook = nil
+		ls1.HookMask = 0
+		ls1.BaseHookCount = 0
+		ls1.HookCount = 0
+		return
+	}
+	hookFn := state.CFunction(func(hookL *state.LuaState) int {
+		ci := hookL.CI
+		// Read event string (arg 1) and line (arg 2) from the call frame
+		eventIdx := ci.Func + 1
+		var eventStr string
+		if eventIdx < hookL.Top {
+			if s, ok := hookL.Stack[eventIdx].Val.Obj.(*object.LuaString); ok {
+				eventStr = s.String()
+			}
+		}
+		lineIdx := ci.Func + 2
+		var lineVal int64
+		hasLine := false
+		if lineIdx < hookL.Top {
+			lv := hookL.Stack[lineIdx].Val
+			if lv.IsInteger() {
+				lineVal = lv.Integer()
+				hasLine = true
+			}
+		}
+		// Push event and line for the script (mirrors C Lua's Chook)
+		apiL := &luaapi.State{Internal: hookL}
+		apiL.PushString(eventStr)
+		if hasLine {
+			apiL.PushInteger(lineVal)
+		}
+		runC(apiL, apiL, script)
+		return 0
+	})
+	ls1.Hook = object.MakeLightCFunc(hookFn)
+	ls1.HookMask = mask
+	ls1.BaseHookCount = count
+	ls1.HookCount = count
 }
 
 // ---------------------------------------------------------------------------
@@ -1486,6 +1568,42 @@ func ceilLog2(x uint) uint {
 		n++
 	}
 	return n
+}
+
+// buildTraceback mirrors luaL_traceback(L1, L1, msg, level).
+// Reuses findLastLevel and tracebackFrame from debuglib.go (same package).
+func buildTraceback(L1 *luaapi.State, msg string, level int) string {
+	last := findLastLevel(L1)
+	var buf strings.Builder
+	if msg != "" {
+		buf.WriteString(msg)
+		buf.WriteString("\n")
+	}
+	buf.WriteString("stack traceback:")
+	totalVisible := last - level + 1
+	limit2show := -1
+	if totalVisible > tracebackLEVELS1+tracebackLEVELS2 {
+		limit2show = tracebackLEVELS1
+	}
+	for {
+		ar, ok := L1.GetStack(level)
+		if !ok {
+			break
+		}
+		if limit2show == 0 {
+			skip := last - level - tracebackLEVELS2 + 1
+			if skip < 1 {
+				skip = 1
+			}
+			buf.WriteString(fmt.Sprintf("\n\t...\t(skipping %d levels)", skip))
+			level += skip
+		} else {
+			tracebackFrame(L1, ar, &buf)
+			level++
+		}
+		limit2show--
+	}
+	return buf.String()
 }
 
 // suppress unused import warning
