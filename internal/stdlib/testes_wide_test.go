@@ -67,7 +67,7 @@ func TestTestesWide(t *testing.T) {
 			// Register T (testC library) for test files that use it.
 			// T provides testC, gcstate, gccolor, gcage, newuserdata, etc.
 			// Files NOT enabled for T and why:
-			//   nextvar.lua   — T.querytab exposes Go computesizes differences (array/hash split)
+			//   nextvar.lua   — T enabled; OP_SETLIST pre-resize + checktab fix
 			//   errors.lua    — T.totalmem memory-limit feature not supported in Go
 			//   calls.lua     — T.listk string pointer identity differs (Go interning)
 			//   cstack.lua    — T blocks use T.sethook (not implemented); hangs
