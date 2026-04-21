@@ -104,6 +104,94 @@ func markBlack(h *object.GCHeader) {
 }
 
 // ---------------------------------------------------------------------------
+// Write barriers — maintain the tri-color invariant during mutator execution
+// ---------------------------------------------------------------------------
+
+// Barrier is the forward write barrier.
+// Called when a black parent object gets a reference to a potentially white child.
+// During propagate phase: marks the child (pushes it forward to gray/black).
+// This is a no-op if parent is not black or child is not white.
+//
+// Mirrors C Lua's luaC_barrier_ (lgc.c:246).
+func Barrier(g *state.GlobalState, parent, child object.GCObject) {
+	if parent == nil || child == nil {
+		return
+	}
+	ph := parent.GC()
+	ch := child.GC()
+	// Fast path: most objects aren't black during mutator execution
+	if ph.Marked&object.BlackBit == 0 || ch.Marked&object.WhiteBits == 0 {
+		return
+	}
+	// Phase 3: propagate-only — mark the child
+	markObject(g, child)
+}
+
+// BarrierBack is the backward write barrier for container objects (tables).
+// Called when a black container is mutated. Sets the container back to gray
+// and adds it to the grayagain list for re-traversal in the atomic phase.
+// This is a no-op if the parent is not black.
+//
+// Mirrors C Lua's luaC_barrierback_ (lgc.c:272).
+func BarrierBack(g *state.GlobalState, parent object.GCObject) {
+	if parent == nil {
+		return
+	}
+	ph := parent.GC()
+	// Fast path: not black → nothing to do
+	if ph.Marked&object.BlackBit == 0 {
+		return
+	}
+	// Set back to gray (clear black bit, keep other bits)
+	ph.Marked &^= object.BlackBit
+	g.GrayAgain = append(g.GrayAgain, parent)
+}
+
+// BarrierValue calls Barrier if val contains a GC-collectable object.
+// Convenience wrapper for TValue children.
+func BarrierValue(g *state.GlobalState, parent object.GCObject, val object.TValue) {
+	if child, ok := val.Obj.(object.GCObject); ok && child != nil {
+		Barrier(g, parent, child)
+	}
+}
+
+// CloseUpvals closes all open upvalues at or above level, applying a forward
+// barrier on each closed upvalue. This wraps closure.CloseUpvals logic with
+// per-upvalue barriers that closure.go can't call (import cycle: gc→closure).
+// Mirrors C Lua's luaF_closeupval + luaC_barrier per upvalue.
+func CloseUpvals(g *state.GlobalState, L *state.LuaState, level int) {
+	for {
+		if L.OpenUpval == nil {
+			break
+		}
+		uv, ok := L.OpenUpval.(*closure.UpVal)
+		if !ok || uv == nil || uv.StackIdx < level {
+			break
+		}
+
+		// Remove from open list
+		if uv.Next == nil {
+			L.OpenUpval = nil
+		} else {
+			L.OpenUpval = uv.Next
+		}
+
+		// Close: capture the current stack value
+		var val object.TValue
+		if uv.StackIdx >= 0 && uv.StackIdx < len(L.Stack) {
+			val = L.Stack[uv.StackIdx].Val
+		} else {
+			val = object.Nil
+		}
+		uv.Close(val)
+
+		// Forward barrier: if upvalue is black and captured value is white
+		BarrierValue(g, uv, val)
+	}
+}
+
+
+// ---------------------------------------------------------------------------
 // Traversal functions — process gray objects, marking their children
 // ---------------------------------------------------------------------------
 

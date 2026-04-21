@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/gc"
 	"github.com/akzj/go-lua/internal/luastring"
 	"github.com/akzj/go-lua/internal/metamethod"
 	"github.com/akzj/go-lua/internal/object"
@@ -1090,6 +1091,7 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 	_, found := h.Get(key)
 	if found {
 		h.Set(key, val)
+		gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
 		return
 	}
 	// Key absent — check for __newindex metamethod
@@ -1097,6 +1099,7 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 	if tm.IsNil() {
 		// No metamethod — raw set
 		h.Set(key, val)
+		gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
 		return
 	}
 	// Has __newindex — delegate to FinishSet which handles the chain
@@ -1112,6 +1115,7 @@ func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 			tm = getTableTM(L.Global, h, metamethod.TM_NEWINDEX)
 			if tm.IsNil() {
 				h.Set(key, val)
+				gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
 				return
 			}
 		} else {
@@ -1131,6 +1135,7 @@ func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 			_, found := h.Get(key)
 			if found {
 				h.Set(key, val)
+				gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
 				return
 			}
 		}

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/gc"
 	"github.com/akzj/go-lua/internal/metamethod"
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/opcode"
@@ -196,10 +197,12 @@ startfunc:
 
 		case opcode.OP_SETUPVAL:
 			b := opcode.GetArgB(inst)
-			cl.UpVals[b].Set(L.Stack, L.Stack[ra].Val)
+			uv := cl.UpVals[b]
+			uv.Set(L.Stack, L.Stack[ra].Val)
+			gc.BarrierValue(L.Global, uv, L.Stack[ra].Val) // GC write barrier: upvalue set
 
 		case opcode.OP_CLOSE:
-			closure.CloseUpvals(L, ra)
+			gc.CloseUpvals(L.Global, L, ra) // barrier-aware close
 			closeTBC(L, ra)
 
 		case opcode.OP_TBC:
@@ -992,7 +995,7 @@ startfunc:
 				b = L.Top - ra
 			}
 			if opcode.GetArgK(inst) != 0 {
-				closure.CloseUpvals(L, base)
+				gc.CloseUpvals(L.Global, L, base) // barrier-aware close
 			}
 			n := preTailCall(L, ci, ra, b, delta)
 			if n < 0 {
@@ -1019,7 +1022,7 @@ startfunc:
 				if L.Top < ci.Top {
 					L.Top = ci.Top
 				}
-				closure.CloseUpvals(L, base)
+				gc.CloseUpvals(L.Global, L, base) // barrier-aware close
 				closeTBCWithError(L, base, state.StatusCloseKTop, object.Nil, true)
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
@@ -1125,7 +1128,8 @@ startfunc:
 				h.SetInt(int64(last), L.Stack[ra+i].Val)
 				last--
 			}
-			L.Top = ci.Top // restore top
+			gc.BarrierBack(L.Global, h) // GC write barrier: table bulk-set
+			L.Top = ci.Top              // restore top
 
 		// ===== Lua 5.5 new opcodes =====
 
