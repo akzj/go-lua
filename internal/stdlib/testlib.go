@@ -515,9 +515,9 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "tocfunction":
 			idx := p.getIndex(L, L1)
-			fn := L1.ToGoFunction(idx)
-			if fn != nil {
-				L1.PushCFunction(fn)
+			if L1.IsCFunction(idx) {
+				// Push a copy of the C function value
+				L1.PushValue(idx)
 			} else {
 				L1.PushNil()
 			}
@@ -534,8 +534,22 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "topointer":
 			idx := p.getIndex(L, L1)
-			ptr := L1.ToPointer(idx)
-			L1.PushLightUserdata(ptr)
+			tp := L1.Type(idx)
+			switch tp {
+			case object.TypeLightUserdata:
+				ud := L1.ToUserdata(idx)
+				L1.PushLightUserdata(ud)
+			case object.TypeNil, object.TypeBoolean, object.TypeNumber:
+				L1.PushLightUserdata(uintptr(0))
+			default:
+				// Tables, functions, userdata, threads, strings — all have identity
+				ptrStr := L1.ToPointer(idx)
+				if ptrStr == "" {
+					L1.PushLightUserdata(uintptr(0))
+				} else {
+					L1.PushLightUserdata(ptrStr)
+				}
+			}
 
 		case "touserdata":
 			idx := p.getIndex(L, L1)
@@ -544,8 +558,12 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "tostring":
 			idx := p.getIndex(L, L1)
-			s, _ := L1.ToString(idx)
-			L1.PushString(s)
+			s, ok := L1.ToString(idx)
+			if ok {
+				L1.PushString(s)
+			} else {
+				L1.PushNil()
+			}
 
 		case "Ltolstring":
 			idx := p.getIndex(L, L1)
@@ -637,8 +655,26 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			L1.ArgError(arg, msg)
 
 		case "func2num":
-			_ = p.getIndex(L, L1)
-			L1.PushInteger(0) // stub
+			idx := p.getIndex(L, L1)
+			if L1.IsCFunction(idx) {
+				// Return a non-zero identifier for C functions
+				ptrStr := L1.ToPointer(idx)
+				if ptrStr != "" {
+					// Hash the pointer string to get a stable integer
+					var h int64 = 1
+					for _, c := range ptrStr {
+						h = h*31 + int64(c)
+					}
+					if h == 0 {
+						h = 1
+					}
+					L1.PushInteger(h)
+				} else {
+					L1.PushInteger(1) // non-zero for any C function
+				}
+			} else {
+				L1.PushInteger(0)
+			}
 
 		case "abort":
 			// don't actually abort in Go
@@ -823,14 +859,42 @@ func testUpvalue(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testCheckpanic(L *luaapi.State) int {
-	// Simplified stub — just run the code in protected mode
 	code := L.CheckString(1)
-	err := L.DoString(code)
-	if err != nil {
-		L.PushString(err.Error())
-		return 1
+	// paniccode is an optional second arg — testC code to run during panic handling
+	// (not fully supported yet — we ignore it)
+	_ = L.OptString(2, "")
+
+	// Create a new state, run the testC code, catch errors
+	L1 := luaapi.NewState()
+	defer L1.Close()
+	OpenAll(L1)
+
+	// Run the testC program in protected mode
+	// We use recover to catch panics from L.Error() calls
+	var errMsg string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Try to get error from L1's stack
+				if s, ok := L1.ToString(-1); ok {
+					errMsg = s
+				} else {
+					errMsg = fmt.Sprintf("%v", r)
+				}
+			}
+		}()
+		// Run the testC code on L1, with L as the "caller" state
+		runC(L, L1, code)
+		errMsg = "no errors"
+	}()
+
+	// If runC didn't panic but also didn't set errMsg, try pcall approach
+	if errMsg == "" {
+		errMsg = "no errors"
 	}
-	return 0
+
+	L.PushString(errMsg)
+	return 1
 }
 
 // ---------------------------------------------------------------------------

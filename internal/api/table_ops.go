@@ -395,21 +395,6 @@ func (L *State) RawEqual(idx1, idx2 int) bool {
 	return v1.Obj == v2.Obj
 }
 
-// Compare compares two values.
-func (L *State) Compare(idx1, idx2 int, op CompareOp) bool {
-	v1 := L.index2val(idx1)
-	v2 := L.index2val(idx2)
-	switch op {
-	case OpEQ:
-		return vm.EqualObj(L.ls(), *v1, *v2)
-	case OpLT:
-		return vm.LessThan(L.ls(), *v1, *v2)
-	case OpLE:
-		return vm.LessEqual(L.ls(), *v1, *v2)
-	}
-	return false
-}
-
 // Concat concatenates the n values at the top of the stack.
 func (L *State) Concat(n int) {
 	ls := L.ls()
@@ -428,29 +413,107 @@ func (L *State) Arith(op ArithOp) {
 	// For binary ops, operands are top-2 and top-1.
 	var p1, p2 object.TValue
 	if op == OpUnm || op == OpBNot {
-		// Unary: operand is at top of stack
 		p1 = ls.Stack[ls.Top-1].Val
 		p2 = p1
 	} else {
-		// Binary: operands at top-2 and top-1
 		p1 = ls.Stack[ls.Top-2].Val
 		p2 = ls.Stack[ls.Top-1].Val
 	}
 
-	// Try raw arithmetic (includes string→number coercion via ToNumber)
-	result, ok := object.RawArith(int(op), p1, p2)
-	if !ok {
-		// Raw arithmetic failed — error (metamethods should have been tried
-		// before reaching lua_arith in the string metamethod path)
+	// lua_arith coerces strings to numbers (mirrors luaO_arith in C Lua).
+	cp1 := arithCoerceToNumber(p1)
+	cp2 := arithCoerceToNumber(p2)
+
+	// Try raw arithmetic first
+	result, ok := object.RawArith(int(op), cp1, cp2)
+	if ok {
+		if op == OpUnm || op == OpBNot {
+			ls.Top--
+		} else {
+			ls.Top -= 2
+		}
+		ls.Stack[ls.Top].Val = result
+		ls.Top++
+		return
+	}
+
+	// Raw arithmetic failed — try metamethods (mirrors luaT_trybinTM).
+	event := metamethod.TMS(int(metamethod.TM_ADD) + int(op))
+	tm := metamethod.GetTMByObj(ls.Global, p1, event)
+	if tm.IsNil() {
+		tm = metamethod.GetTMByObj(ls.Global, p2, event)
+	}
+	if tm.IsNil() {
+		if op == OpIDiv {
+			vm.RunError(ls, "attempt to divide by zero")
+		}
+		if op == OpMod {
+			vm.RunError(ls, "attempt to perform 'n%%0'")
+		}
 		vm.RunError(ls, "attempt to perform arithmetic on incompatible types")
 	}
 
-	// Pop operands and push result
+	// Call metamethod: tm(p1, p2) → result
+	top := ls.Top
+	ls.Stack[top].Val = tm
+	ls.Stack[top+1].Val = p1
+	ls.Stack[top+2].Val = p2
+	ls.Top = top + 3
+	vm.Call(ls, top, 1)
+	tmResult := ls.Stack[top].Val
+	ls.Top = top
+
 	if op == OpUnm || op == OpBNot {
 		ls.Top--
 	} else {
 		ls.Top -= 2
 	}
-	ls.Stack[ls.Top].Val = result
+	ls.Stack[ls.Top].Val = tmResult
 	ls.Top++
+}
+
+// arithCoerceToNumber converts a string TValue to numeric if possible.
+func arithCoerceToNumber(v object.TValue) object.TValue {
+	if v.Tt == object.TagShortStr || v.Tt == object.TagLongStr {
+		if s, ok := v.Obj.(*object.LuaString); ok {
+			if tv, cvt := object.StringToNumber(s.Data); cvt {
+				return tv
+			}
+		}
+	}
+	return v
+}
+
+// Compare compares two values.
+func (L *State) Compare(idx1, idx2 int, op CompareOp) bool {
+	// C Lua: lua_compare returns 0 for non-valid indices.
+	if !L.isValidIndex(idx1) || !L.isValidIndex(idx2) {
+		return false
+	}
+	v1 := L.index2val(idx1)
+	v2 := L.index2val(idx2)
+	switch op {
+	case OpEQ:
+		return vm.EqualObj(L.ls(), *v1, *v2)
+	case OpLT:
+		return vm.LessThan(L.ls(), *v1, *v2)
+	case OpLE:
+		return vm.LessEqual(L.ls(), *v1, *v2)
+	}
+	return false
+}
+
+// isValidIndex checks if an index refers to an acceptable stack position.
+func (L *State) isValidIndex(idx int) bool {
+	if idx == RegistryIndex {
+		return true
+	}
+	ls := L.ls()
+	ci := ls.CI
+	if idx > 0 {
+		return ci.Func+idx < ls.Top
+	} else if idx > RegistryIndex {
+		return ls.Top+idx >= ci.Func+1
+	}
+	return true // upvalue pseudo-index
 }

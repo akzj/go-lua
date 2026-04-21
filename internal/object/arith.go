@@ -105,6 +105,10 @@ func RawArith(op int, p1, p2 TValue) (TValue, bool) {
 	default:
 		// Other operations: try integer first, then float
 		if p1.IsInteger() && p2.IsInteger() {
+			// Guard against integer divide/mod by zero (would panic in Go)
+			if (op == LuaOpIDiv || op == LuaOpMod) && p2.Integer() == 0 {
+				return Nil, false
+			}
 			return MakeInteger(intArith(op, p1.Integer(), p2.Integer())), true
 		}
 		n1, ok1 := p1.ToNumber()
