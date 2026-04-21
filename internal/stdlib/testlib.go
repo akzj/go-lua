@@ -862,37 +862,49 @@ func testCheckpanic(L *luaapi.State) int {
 	code := L.CheckString(1)
 	panicCode := L.OptString(2, "")
 
-	// Create a new state, run the testC code, catch errors
+	// Mirrors C Lua's checkpanic from ltests.c:
+	// 1. Create new state L1
+	// 2. Run code on L1 (unprotected)
+	// 3. If error: panic handler runs panicCode on L1
+	// 4. Take L1's top value, push to L, return 1
 	L1 := luaapi.NewState()
 	defer L1.Close()
 	OpenAll(L1)
 	OpenTestLib(L1)
 
-	var nResults int
+	hadError := false
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// Error occurred. If panicCode is provided, run it on L1.
+				hadError = true
+				// Set L1's status to ERRRUN so threadstatus reports correctly
+				L1.SetStatus(luaapi.StatusErrRun)
+
+				// Ensure error message is on L1's stack
+				if _, ok := L1.ToString(-1); !ok {
+					L1.PushString(fmt.Sprintf("%v", r))
+				}
+
 				if panicCode != "" {
-					// The error message should be on L1's stack
-					nResults = runC(L, L1, panicCode)
-				} else {
-					// Transfer error message to L
-					if s, ok := L1.ToString(-1); ok {
-						L.PushString(s)
-					} else {
-						L.PushString(fmt.Sprintf("%v", r))
-					}
-					nResults = 1
+					// Run panic handler code on L1 (like panicback in ltests.c)
+					runC(L, L1, panicCode)
 				}
 			}
 		}()
 		runC(L, L1, code)
-		L.PushString("no errors")
-		nResults = 1
 	}()
 
-	return nResults
+	if hadError {
+		// Transfer L1's top value to L (like checkpanic's else branch)
+		if s, ok := L1.ToString(-1); ok {
+			L.PushString(s)
+		} else {
+			L.PushString("error object is not a string")
+		}
+	} else {
+		L.PushString("no errors")
+	}
+	return 1
 }
 
 // ---------------------------------------------------------------------------
