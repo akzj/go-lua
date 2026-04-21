@@ -1309,21 +1309,18 @@ func testResume(L *luaapi.State) int {
 		L.PushString("value is not a thread")
 		return 2
 	}
-	narg := L.GetTop() - 1
-	// Move arguments from L to co
-	if narg > 0 {
-		L.XMove(co, narg)
+	// Mirrors C Lua's coresume in ltests.c:
+	// lua_resume(co, L, 0, &nres) — passes 0 extra args
+	status, _ := co.Resume(L, 0)
+	if status != luaapi.StatusOK && status != luaapi.StatusYield {
+		// Error: return false, error_message
+		L.PushBoolean(false)
+		co.XMove(L, 1) // move error message
+		L.Insert(-2)    // put false before error message
+		return 2
 	}
-	status, nres := co.Resume(L, narg)
-	if status == luaapi.StatusOK || status == luaapi.StatusYield {
-		// Move results back
-		if nres > 0 {
-			co.XMove(L, nres)
-		}
-		return nres
-	}
-	// Error — move error message back
-	co.XMove(L, 1)
+	// Success: return true
+	L.PushBoolean(true)
 	return 1
 }
 
