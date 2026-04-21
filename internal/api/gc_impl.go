@@ -100,6 +100,29 @@ func (L *State) GCCollect() {
 	// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 }
 
+// GCStepAPI runs a bounded incremental GC step for collectgarbage("step").
+// Returns true if a full GC cycle completed during this step.
+// Mirrors C Lua's lua_gc(LUA_GCSTEP).
+func (L *State) GCStepAPI() bool {
+	ls := L.ls()
+	g := ls.Global
+	if g.GCRunning || g.GCRunningFinalizer || g.GCStopped {
+		return false
+	}
+	g.GCRunning = true
+	prevState := g.GCState
+	gc.GCStep(g, ls)
+	g.GCRunning = false
+	completed := g.GCState == object.GCSpause && prevState != object.GCSpause
+	// If cycle completed, drain finalizers and recalculate debt
+	if g.GCState == object.GCSpause {
+		L.callAllPendingFinalizers()
+		gc.SetPause(g)
+	}
+	return completed
+}
+
+
 // clearStaleStack nils out stack slots above the highest active frame boundary.
 // This ensures the Lua GC doesn't mark stale references left behind when
 // Lua locals go out of scope.
