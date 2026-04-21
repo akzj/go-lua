@@ -103,6 +103,25 @@ func markBlack(h *object.GCHeader) {
 	h.Marked = (h.Marked &^ object.WhiteBits) | object.BlackBit
 }
 
+// genlink handles post-traversal age management for generational GC.
+// In gen mode, TOUCHED1 objects go back on grayagain (re-traverse next cycle).
+// TOUCHED2 objects advance to OLD.
+// In incremental mode, this is a no-op.
+// Mirrors C Lua's genlink (lgc.c:470).
+func genlink(g *state.GlobalState, obj object.GCObject) {
+	if g.GCKind == object.KGC_INC {
+		return // no-op in incremental mode
+	}
+	h := obj.GC()
+	if h.Age == object.G_TOUCHED1 {
+		// Touched in this cycle — link back to grayagain for next cycle
+		g.GrayAgain = append(g.GrayAgain, obj)
+	} else if h.Age == object.G_TOUCHED2 {
+		// Advance age
+		h.Age = object.G_OLD
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Write barriers — maintain the tri-color invariant during mutator execution
 // ---------------------------------------------------------------------------
@@ -227,11 +246,13 @@ func propagateMark(g *state.GlobalState) int64 {
 	case *table.Table:
 		// Tables may NOT be marked black — weak tables link to special lists.
 		// traverseTable handles marking black for strong tables.
+		// genlink is called inside traverseTable for strong tables.
 		traverseTable(g, v)
 		work = int64(len(v.Array) + len(v.Nodes) + 1)
 	case *object.Userdata:
 		markBlack(h)
 		traverseUserdata(g, v)
+		genlink(g, obj)
 		work = int64(len(v.UserVals) + 1)
 	case *closure.LClosure:
 		markBlack(h)
@@ -297,6 +318,7 @@ func traverseTable(g *state.GlobalState, t *table.Table) {
 	case 0: // not weak — strong table
 		traverseStrongTable(g, t)
 		markBlack(h)
+		genlink(g, t) // gen mode: handle TOUCHED1/TOUCHED2 age transitions
 	case table.WeakValue: // weak values only
 		traverseWeakValue(g, t)
 		// Do NOT mark black — stays in weak/grayagain list
@@ -366,6 +388,7 @@ func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 		linkGCList(t, &g.Weak) // has dead values to clear
 	} else {
 		markBlack(&t.GCHeader) // no clears needed — done
+		genlink(g, t)          // gen mode: handle TOUCHED age transitions
 	}
 }
 
@@ -431,6 +454,7 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 		linkGCList(t, &g.AllWeak) // has white keys to clear
 	} else {
 		markBlack(&t.GCHeader) // fully processed
+		genlink(g, t)          // gen mode: handle TOUCHED age transitions
 	}
 	return marked
 }
@@ -496,6 +520,15 @@ func traverseProto(g *state.GlobalState, p *object.Proto) {
 // active frames) while not marking the entire allocated stack (which would
 // prevent weak tables from collecting dead locals above all active frames).
 func traverseThread(g *state.GlobalState, th *state.LuaState) {
+	// In gen mode, old threads must be visited at every cycle because they
+	// might point to young objects. In inc mode, threads must be revisited
+	// in the atomic phase. Put thread back on grayagain in these cases.
+	// Mirrors C Lua's traversethread (lgc.c:697-698).
+	h := th.GC()
+	if h.IsOld() || g.GCState == object.GCSpropagate {
+		g.GrayAgain = append(g.GrayAgain, th)
+	}
+
 	var top int
 	if g.GCExplicit {
 		// Explicit GC (collectgarbage()): precise — only up to th.Top.
