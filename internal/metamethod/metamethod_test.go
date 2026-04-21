@@ -220,7 +220,7 @@ func TestGetTMByObj_TableWithMetatable(t *testing.T) {
 	mt.SetStr(g.TMNames[TM_INDEX], object.MakeInteger(42))
 	tbl.SetMetatable(mt)
 
-	obj := object.TValue{Tt: object.TagTable, Val: tbl}
+	obj := object.TValue{Tt: object.TagTable, Obj: tbl}
 	result := GetTMByObj(g, obj, TM_INDEX)
 	if result.IsNil() {
 		t.Error("Should find __index in table's metatable")
@@ -234,7 +234,7 @@ func TestGetTMByObj_TableNoMetatable(t *testing.T) {
 	g, _ := newTestGlobal()
 
 	tbl := table.New(0, 0)
-	obj := object.TValue{Tt: object.TagTable, Val: tbl}
+	obj := object.TValue{Tt: object.TagTable, Obj: tbl}
 
 	result := GetTMByObj(g, obj, TM_INDEX)
 	if !result.IsNil() {
@@ -337,7 +337,7 @@ func TestObjTypeName_TableWithName(t *testing.T) {
 	mt.SetStr(nameKey, object.MakeString(nameVal))
 	tbl.SetMetatable(mt)
 
-	obj := object.TValue{Tt: object.TagTable, Val: tbl}
+	obj := object.TValue{Tt: object.TagTable, Obj: tbl}
 	got := ObjTypeName(g, obj)
 	if got != "MyClass" {
 		t.Errorf("ObjTypeName = %q, want %q", got, "MyClass")
@@ -349,7 +349,7 @@ func TestObjTypeName_TableWithoutName(t *testing.T) {
 	g := L.Global
 
 	tbl := table.New(0, 0)
-	obj := object.TValue{Tt: object.TagTable, Val: tbl}
+	obj := object.TValue{Tt: object.TagTable, Obj: tbl}
 	got := ObjTypeName(g, obj)
 	if got != "table" {
 		t.Errorf("ObjTypeName = %q, want %q", got, "table")

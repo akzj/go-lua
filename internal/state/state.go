@@ -73,9 +73,10 @@ func NewState() *LuaState {
 // stackInit allocates the stack and sets up the base CallInfo.
 // Mirrors: stack_init in lstate.c
 func stackInit(L *LuaState) {
-	// Allocate stack with extra space
+	// Allocate stack with extra space and capacity headroom
+	// to avoid reallocation on moderate growth.
 	size := BasicStackSize + ExtraStack
-	L.Stack = make([]object.StackValue, size)
+	L.Stack = make([]object.StackValue, size, size+size/2)
 	for i := range L.Stack {
 		L.Stack[i].Val = object.Nil
 	}
@@ -114,7 +115,7 @@ func initRegistry(L *LuaState, g *GlobalState) {
 	// Store as TValue in GlobalState
 	g.Registry = object.TValue{
 		Tt:  object.TagTable,
-		Val: registry,
+		Obj: registry,
 	}
 
 	// registry[1] = false (placeholder, matches C)
@@ -126,13 +127,13 @@ func initRegistry(L *LuaState, g *GlobalState) {
 	g.GCTotalBytes += globals.EstimateBytes()
 	registry.SetInt(int64(RegistryIndexGlobals), object.TValue{
 		Tt:  object.TagTable,
-		Val: globals,
+		Obj: globals,
 	})
 
 	// registry[LUA_RIDX_MAINTHREAD] = L (as thread TValue)
 	registry.SetInt(int64(RegistryIndexMainThread), object.TValue{
 		Tt:  object.TagThread,
-		Val: L,
+		Obj: L,
 	})
 }
 
@@ -239,6 +240,10 @@ func PushValue(L *LuaState, v object.TValue) {
 // CallInfo management
 // ---------------------------------------------------------------------------
 
+// ciSlabSize is the number of CallInfos allocated in each slab.
+// Reduces GC pressure: one allocation per 32 calls instead of one per call.
+const ciSlabSize = 32
+
 // NewCI allocates or reuses the next CallInfo in the chain.
 // Mirrors: luaE_extendCI in lstate.c
 func NewCI(L *LuaState) *CallInfo {
@@ -249,8 +254,13 @@ func NewCI(L *LuaState) *CallInfo {
 		return ci.Next
 	}
 
-	// Allocate new CI
-	newCI := &CallInfo{}
+	// Allocate from slab
+	if L.CISlab == nil || L.CISlabIdx >= len(L.CISlab) {
+		L.CISlab = make([]CallInfo, ciSlabSize)
+		L.CISlabIdx = 0
+	}
+	newCI := &L.CISlab[L.CISlabIdx]
+	L.CISlabIdx++
 	newCI.Prev = ci
 	newCI.Next = nil
 	ci.Next = newCI

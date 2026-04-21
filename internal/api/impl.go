@@ -68,12 +68,12 @@ func (L *State) index2val(idx int) *object.TValue {
 		fval := ls.Stack[ci.Func].Val
 		switch fval.Tt {
 		case object.TagCClosure:
-			cc := fval.Val.(*closure.CClosure)
+			cc := fval.Obj.(*closure.CClosure)
 			if upIdx <= len(cc.UpVals) {
 				return &cc.UpVals[upIdx-1]
 			}
 		case object.TagLuaClosure:
-			lc := fval.Val.(*closure.LClosure)
+			lc := fval.Obj.(*closure.LClosure)
 			if upIdx <= len(lc.UpVals) && lc.UpVals[upIdx-1] != nil {
 				if lc.UpVals[upIdx-1].IsOpen() {
 					return &ls.Stack[lc.UpVals[upIdx-1].StackIdx].Val
@@ -313,7 +313,7 @@ func (L *State) PushFString(format string, args ...interface{}) string {
 // PushCFunction pushes a Go function as a light C function (no upvalues).
 func (L *State) PushCFunction(f CFunction) {
 	wrapped := wrapCFunctionStatic(f)
-	L.push(object.TValue{Tt: object.TagLightCFunc, Val: wrapped})
+	L.push(object.TValue{Tt: object.TagLightCFunc, Obj: wrapped})
 }
 
 // PushCFunctionSame pushes a pre-wrapped C function value. Unlike PushCFunction,
@@ -327,7 +327,7 @@ func (L *State) PushCFunctionSame(tv object.TValue) {
 // The caller can cache the result and pass it to PushCFunctionSame.
 func WrapCFunction(f CFunction) object.TValue {
 	wrapped := wrapCFunctionStatic(f)
-	return object.TValue{Tt: object.TagLightCFunc, Val: wrapped}
+	return object.TValue{Tt: object.TagLightCFunc, Obj: wrapped}
 }
 
 // PushCClosure pushes a Go function as a closure with n upvalues.
@@ -345,12 +345,12 @@ func (L *State) PushCClosure(f CFunction, n int) {
 		ls.Top--
 		cc.UpVals[i-1] = ls.Stack[ls.Top].Val
 	}
-	L.push(object.TValue{Tt: object.TagCClosure, Val: cc})
+	L.push(object.TValue{Tt: object.TagCClosure, Obj: cc})
 }
 
 // PushLightUserdata pushes a light userdata.
 func (L *State) PushLightUserdata(p interface{}) {
-	L.push(object.TValue{Tt: object.TagLightUserdata, Val: p})
+	L.push(object.TValue{Tt: object.TagLightUserdata, Obj: p})
 }
 
 // PushGlobalTable pushes the global table.
@@ -478,11 +478,11 @@ func (L *State) ToInteger(idx int) (int64, bool) {
 	v := L.index2val(idx)
 	switch v.Tt {
 	case object.TagInteger:
-		return v.Val.(int64), true
+		return v.N, true
 	case object.TagFloat:
-		return object.FloatToInteger(v.Val.(float64))
+		return object.FloatToInteger(v.Float())
 	case object.TagShortStr, object.TagLongStr:
-		s := v.Val.(*object.LuaString).Data
+		s := v.Obj.(*object.LuaString).Data
 		return object.StringToInteger(s)
 	default:
 		return 0, false
@@ -494,19 +494,19 @@ func (L *State) ToNumber(idx int) (float64, bool) {
 	v := L.index2val(idx)
 	switch v.Tt {
 	case object.TagFloat:
-		return v.Val.(float64), true
+		return v.Float(), true
 	case object.TagInteger:
-		return float64(v.Val.(int64)), true
+		return float64(v.N), true
 	case object.TagShortStr, object.TagLongStr:
-		s := v.Val.(*object.LuaString).Data
+		s := v.Obj.(*object.LuaString).Data
 		tv, ok := object.StringToNumber(s)
 		if !ok {
 			return 0, false
 		}
 		if tv.Tt == object.TagFloat {
-			return tv.Val.(float64), true
+			return tv.Float(), true
 		}
-		return float64(tv.Val.(int64)), true
+		return float64(tv.N), true
 	default:
 		return 0, false
 	}
@@ -517,15 +517,15 @@ func (L *State) ToString(idx int) (string, bool) {
 	v := L.index2val(idx)
 	switch v.Tt {
 	case object.TagShortStr, object.TagLongStr:
-		return v.Val.(*object.LuaString).Data, true
+		return v.Obj.(*object.LuaString).Data, true
 	case object.TagInteger:
-		s := fmt.Sprintf("%d", v.Val.(int64))
+		s := fmt.Sprintf("%d", v.N)
 		// Coerce in-place
 		is := L.internStr(s)
 		*v = object.MakeString(is)
 		return s, true
 	case object.TagFloat:
-		s := object.FloatToString(v.Val.(float64))
+		s := object.FloatToString(v.Float())
 		is := L.internStr(s)
 		*v = object.MakeString(is)
 		return s, true
@@ -546,9 +546,9 @@ func (L *State) RawLen(idx int) int64 {
 	v := L.index2val(idx)
 	switch v.Tt {
 	case object.TagTable:
-		return v.Val.(*table.Table).RawLen()
+		return v.Obj.(*table.Table).RawLen()
 	case object.TagShortStr, object.TagLongStr:
-		return int64(len(v.Val.(*object.LuaString).Data))
+		return int64(len(v.Obj.(*object.LuaString).Data))
 	default:
 		return 0
 	}
@@ -628,7 +628,7 @@ func (L *State) TolString(idx int) string {
 			}
 			L.Pop(1)
 		}
-		s := fmt.Sprintf("%s: 0x%x", tn, reflect.ValueOf(v.Val).Pointer())
+		s := fmt.Sprintf("%s: 0x%x", tn, reflect.ValueOf(v.Obj).Pointer())
 		L.PushString(s)
 		return s
 	}
@@ -746,7 +746,7 @@ func (L *State) TestUdata(idx int, tname string) bool {
 	if v.Tt != object.TagUserdata {
 		return false
 	}
-	ud, ok := v.Val.(*object.Userdata)
+	ud, ok := v.Obj.(*object.Userdata)
 	if !ok || ud.MetaTable == nil {
 		return false
 	}
@@ -762,7 +762,7 @@ func (L *State) TestUdata(idx int, tname string) bool {
 	if !ok {
 		return false
 	}
-	return mt == expectedMT.Val.(*table.Table)
+	return mt == expectedMT.Obj.(*table.Table)
 }
 
 // CheckUdata checks that the value at idx is a userdata with metatable matching registry[tname].
@@ -779,7 +779,7 @@ func (L *State) GetLClosure(idx int) *closure.LClosure {
 	if v.Tt != object.TagLuaClosure {
 		return nil
 	}
-	return v.Val.(*closure.LClosure)
+	return v.Obj.(*closure.LClosure)
 }
 
 // DebugGetProto returns the Proto of the LClosure at top of stack (for testing).
@@ -792,7 +792,7 @@ func DebugGetProto(L *State) *object.Proto {
 	if fval.Tt != object.TagLuaClosure {
 		return nil
 	}
-	cl := fval.Val.(*closure.LClosure)
+	cl := fval.Obj.(*closure.LClosure)
 	return cl.Proto
 }
 

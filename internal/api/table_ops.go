@@ -20,7 +20,7 @@ import (
 func (L *State) getTableVal(idx int) *table.Table {
 	v := L.index2val(idx)
 	if v.Tt == object.TagTable {
-		return v.Val.(*table.Table)
+		return v.Obj.(*table.Table)
 	}
 	return nil
 }
@@ -33,7 +33,7 @@ func apiGetWithIndex(L *State, t object.TValue, key object.TValue) object.TValue
 	const maxLoop = 20
 	for loop := 0; loop < maxLoop; loop++ {
 		if t.IsTable() {
-			tbl := t.Val.(*table.Table)
+			tbl := t.Obj.(*table.Table)
 			val, found := tbl.Get(key)
 			if found && !val.IsNil() {
 				return val
@@ -107,7 +107,7 @@ func (L *State) GetI(idx int, n int64) object.Type {
 	ls := L.ls()
 	t := L.index2val(idx)
 	if t.Tt == object.TagTable {
-		tbl := t.Val.(*table.Table)
+		tbl := t.Obj.(*table.Table)
 		val, found := tbl.GetInt(n)
 		if found && !val.IsNil() {
 			L.push(val)
@@ -145,7 +145,7 @@ func (L *State) SetTable(idx int) {
 	ls := L.ls()
 	t := L.index2val(idx)
 	if t.Tt == object.TagTable {
-		tbl := t.Val.(*table.Table)
+		tbl := t.Obj.(*table.Table)
 		key := ls.Stack[ls.Top-2].Val
 		val := ls.Stack[ls.Top-1].Val
 		// Check for NaN key — C Lua raises error, not panic
@@ -162,7 +162,7 @@ func (L *State) SetField(idx int, key string) {
 	ls := L.ls()
 	t := L.index2val(idx)
 	if t.Tt == object.TagTable {
-		tbl := t.Val.(*table.Table)
+		tbl := t.Obj.(*table.Table)
 		ks := L.internStr(key)
 		val := ls.Stack[ls.Top-1].Val
 		tbl.SetStr(ks, val)
@@ -176,7 +176,7 @@ func (L *State) SetI(idx int, n int64) {
 	t := L.index2val(idx)
 	val := ls.Stack[ls.Top-1].Val
 	if t.Tt == object.TagTable {
-		tbl := t.Val.(*table.Table)
+		tbl := t.Obj.(*table.Table)
 		// Fast path: if key already exists in table, do raw set (no metamethod).
 		// Matches C Lua's luaV_fastseti in lua_seti.
 		if _, found := tbl.GetInt(n); found {
@@ -228,7 +228,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 	L.ls().Global.LinkGC(t) // V5: register in allgc chain
 	size := t.EstimateBytes()
 	L.TrackAlloc(size)
-	L.push(object.TValue{Tt: object.TagTable, Val: t})
+	L.push(object.TValue{Tt: object.TagTable, Obj: t})
 
 	// V5 GC sweep handles dealloc accounting — no AddCleanup needed.
 	// Periodic GC is handled by checkPeriodicGC in the VM dispatch loop.
@@ -245,9 +245,9 @@ func (L *State) GetMetatable(idx int) bool {
 	var mt *table.Table
 	switch v.Tt {
 	case object.TagTable:
-		mt = v.Val.(*table.Table).GetMetatable()
+		mt = v.Obj.(*table.Table).GetMetatable()
 	case object.TagUserdata:
-		if ud, ok := v.Val.(*object.Userdata); ok {
+		if ud, ok := v.Obj.(*object.Userdata); ok {
 			if tbl, ok := ud.MetaTable.(*table.Table); ok {
 				mt = tbl
 			}
@@ -263,7 +263,7 @@ func (L *State) GetMetatable(idx int) bool {
 		}
 	}
 	if mt != nil {
-		L.push(object.TValue{Tt: object.TagTable, Val: mt})
+		L.push(object.TValue{Tt: object.TagTable, Obj: mt})
 		return true
 	}
 	return false
@@ -276,13 +276,13 @@ func (L *State) SetMetatable(idx int) {
 	var mt *table.Table
 	mtVal := ls.Stack[ls.Top-1].Val
 	if mtVal.Tt == object.TagTable {
-		mt = mtVal.Val.(*table.Table)
+		mt = mtVal.Obj.(*table.Table)
 	}
 	ls.Top--
 
 	switch v.Tt {
 	case object.TagTable:
-		tbl := v.Val.(*table.Table)
+		tbl := v.Obj.(*table.Table)
 		tbl.SetMetatable(mt)
 		// V5 GC: Move object from allgc to finobj if __gc detected.
 		// Dealloc tracking is handled by V5 GC sweep.
@@ -299,7 +299,7 @@ func (L *State) SetMetatable(idx int) {
 			modeName := ls.Global.TMNames[metamethod.TM_MODE]
 			modeVal, found := mt.GetStr(modeName)
 			if found && (modeVal.Tt == object.TagShortStr || modeVal.Tt == object.TagLongStr) {
-				modeStr := modeVal.Val.(*object.LuaString).Data
+				modeStr := modeVal.Obj.(*object.LuaString).Data
 				var mode byte
 				for _, c := range modeStr {
 					if c == 'k' {
@@ -315,7 +315,7 @@ func (L *State) SetMetatable(idx int) {
 			tbl.WeakMode = 0
 		}
 	case object.TagUserdata:
-		if ud, ok := v.Val.(*object.Userdata); ok {
+		if ud, ok := v.Obj.(*object.Userdata); ok {
 			ud.MetaTable = mt
 			// V5 GC: Move object from allgc to finobj if __gc detected.
 			if mt != nil {
@@ -342,7 +342,7 @@ func (L *State) Next(idx int) bool {
 	if t.Tt != object.TagTable {
 		return false
 	}
-	tbl := t.Val.(*table.Table)
+	tbl := t.Obj.(*table.Table)
 	key := ls.Stack[ls.Top-1].Val
 	ls.Top--
 	nextKey, nextVal, ok, err := tbl.Next(key)
@@ -378,16 +378,20 @@ func (L *State) RawEqual(idx1, idx2 int) bool {
 	if v1.Tt != v2.Tt {
 		return false
 	}
-	if v1.Val == nil && v2.Val == nil {
+	if v1.Obj == nil && v2.Obj == nil {
+		// Both non-GC types with same tag — check numeric equality
+		if v1.Tt == object.TagInteger || v1.Tt == object.TagFloat {
+			return v1.N == v2.N
+		}
 		return true
 	}
 	// Light C functions: use interface data-word comparison (unique per
 	// closure instance). reflect.Pointer returns the shared code address
 	// which is identical for all closures of the same function literal.
 	if v1.Tt == object.TagLightCFunc {
-		return object.LightCFuncEqual(v1.Val, v2.Val)
+		return object.LightCFuncEqual(v1.Obj, v2.Obj)
 	}
-	return v1.Val == v2.Val
+	return v1.Obj == v2.Obj
 }
 
 // Compare compares two values.

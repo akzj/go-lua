@@ -105,7 +105,7 @@ func (L *State) Load(code string, name string, mode string) int {
 			return StatusErrSyntax
 		}
 		// Push the closure onto the stack
-		L.push(object.TValue{Tt: object.TagLuaClosure, Val: cl})
+		L.push(object.TValue{Tt: object.TagLuaClosure, Obj: cl})
 		// Set _ENV (first upvalue) to the global table.
 		// C Lua's lua_load does this after luaD_protectedparser:
 		//   if (f->nupvalues >= 1) { setobj(L, f->upvals[0]->v.p, &gt); }
@@ -113,7 +113,7 @@ func (L *State) Load(code string, name string, mode string) int {
 			gt := vm.GetGlobalTable(ls)
 			cl.UpVals[0].Own = object.TValue{
 				Tt:  object.TagTable,
-				Val: gt,
+				Obj: gt,
 			}
 		}
 		return StatusOK

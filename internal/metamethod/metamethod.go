@@ -86,12 +86,12 @@ func GetTMByObj(g *state.GlobalState, obj object.TValue, event TMS) object.TValu
 	switch obj.Type() {
 	case object.TypeTable:
 		// Table: use its own metatable
-		if tbl, ok := obj.Val.(*table.Table); ok {
+		if tbl, ok := obj.Obj.(*table.Table); ok {
 			mt = tbl.GetMetatable()
 		}
 	case object.TypeUserdata:
 		// Userdata: use its metatable
-		if ud, ok := obj.Val.(*object.Userdata); ok && ud.MetaTable != nil {
+		if ud, ok := obj.Obj.(*object.Userdata); ok && ud.MetaTable != nil {
 			mt, _ = ud.MetaTable.(*table.Table)
 		}
 	default:
@@ -134,11 +134,11 @@ func ObjTypeName(g *state.GlobalState, obj object.TValue) string {
 
 	switch obj.Type() {
 	case object.TypeTable:
-		if tbl, ok := obj.Val.(*table.Table); ok {
+		if tbl, ok := obj.Obj.(*table.Table); ok {
 			mt = tbl.GetMetatable()
 		}
 	case object.TypeUserdata:
-		if ud, ok := obj.Val.(*object.Userdata); ok && ud.MetaTable != nil {
+		if ud, ok := obj.Obj.(*object.Userdata); ok && ud.MetaTable != nil {
 			mt, _ = ud.MetaTable.(*table.Table)
 		}
 	}

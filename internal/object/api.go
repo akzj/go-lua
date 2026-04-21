@@ -177,17 +177,20 @@ func (t Tag) IsFalsy() bool { return t.IsNil() || t == TagFalse }
 // TValue — the universal Lua value container
 // ---------------------------------------------------------------------------
 
-// TValue represents any Lua value: a tag identifying the type, plus the value.
+// TValue represents any Lua value using a dual-field layout for zero-alloc numerics.
 //
-// For non-GC types (nil, boolean, integer, float, light C function, light userdata),
-// the value is stored inline.
-// For GC types (string, table, closure, userdata, thread, proto, upval),
-// the value is a pointer stored in the 'any' field.
+// Numeric types (integer, float) are stored in the N field without boxing:
+//   - Integer: N holds the int64 value directly
+//   - Float: N holds the float64 bits via math.Float64bits/Float64frombits
 //
-// This is intentionally the simplest correct representation.
+// GC object types (string, table, closure, userdata, thread, proto, upval)
+// are stored in the Obj field as typed pointers.
+//
+// This eliminates runtime.convT64 allocations on the hot path.
 type TValue struct {
-	Tt  Tag // type tag
-	Val any // nil | int64 | float64 | bool | *LuaString | *Table | ...
+	Tt  Tag   // type tag
+	N   int64 // numeric payload: int64 for integers, float64 bits for floats
+	Obj any   // GC object payload: *LuaString | *Table | *LClosure | etc.
 }
 
 // Nil is the singleton nil TValue.
@@ -207,11 +210,11 @@ var True = TValue{Tt: TagTrue}
 
 // --- Constructors ---
 
-// MakeInteger creates an integer TValue.
-func MakeInteger(i int64) TValue { return TValue{Tt: TagInteger, Val: i} }
+// MakeInteger creates an integer TValue. Stored inline in N — zero allocation.
+func MakeInteger(i int64) TValue { return TValue{Tt: TagInteger, N: i} }
 
-// MakeFloat creates a float TValue.
-func MakeFloat(f float64) TValue { return TValue{Tt: TagFloat, Val: f} }
+// MakeFloat creates a float TValue. Bits stored in N — zero allocation.
+func MakeFloat(f float64) TValue { return TValue{Tt: TagFloat, N: int64(math.Float64bits(f))} }
 
 // MakeBoolean creates a boolean TValue (TagFalse or TagTrue).
 func MakeBoolean(b bool) TValue {
@@ -223,7 +226,7 @@ func MakeBoolean(b bool) TValue {
 
 // MakeString creates a string TValue from a *LuaString.
 // The tag is taken from the LuaString itself (short or long).
-func MakeString(s *LuaString) TValue { return TValue{Tt: s.Tag(), Val: s} }
+func MakeString(s *LuaString) TValue { return TValue{Tt: s.Tag(), Obj: s} }
 
 // --- Tag accessors ---
 
@@ -259,17 +262,48 @@ func (v TValue) IsTable() bool { return v.Tt == TagTable }
 
 // --- Value accessors (panic on type mismatch) ---
 
-// Integer returns the int64 value. Panics if not TagInteger.
-func (v TValue) Integer() int64 { return v.Val.(int64) }
+// Integer returns the int64 value. The value is stored directly in N.
+func (v TValue) Integer() int64 { return v.N }
 
-// Float returns the float64 value. Panics if not TagFloat.
-func (v TValue) Float() float64 { return v.Val.(float64) }
+// Float returns the float64 value. The bits are stored in N.
+func (v TValue) Float() float64 { return math.Float64frombits(uint64(v.N)) }
 
 // Boolean returns the boolean value.
 func (v TValue) Boolean() bool { return v.Tt == TagTrue }
 
 // StringVal returns the *LuaString. Panics if not a string tag.
-func (v TValue) StringVal() *LuaString { return v.Val.(*LuaString) }
+func (v TValue) StringVal() *LuaString { return v.Obj.(*LuaString) }
+
+// GCValue returns the GC object pointer (for any GC-collectable type).
+func (v TValue) GCValue() any { return v.Obj }
+
+// Payload returns a boxed representation of the value for use in rare paths
+// (e.g., table hash keys). For integers it boxes N, for floats it boxes the
+// float64, for everything else it returns Obj. This DOES allocate for numbers
+// but is only used in cold paths (table key storage).
+func (v TValue) Payload() any {
+	switch v.Tt {
+	case TagInteger:
+		return v.N
+	case TagFloat:
+		return v.Float()
+	default:
+		return v.Obj
+	}
+}
+
+// MakeFromPayload reconstructs a TValue from a tag and a payload (as returned
+// by Payload()). Used in table node key reconstruction.
+func MakeFromPayload(tt Tag, payload any) TValue {
+	switch tt {
+	case TagInteger:
+		return TValue{Tt: tt, N: payload.(int64)}
+	case TagFloat:
+		return MakeFloat(payload.(float64))
+	default:
+		return TValue{Tt: tt, Obj: payload}
+	}
+}
 
 // --- Number coercion (used heavily by VM) ---
 
@@ -278,9 +312,9 @@ func (v TValue) StringVal() *LuaString { return v.Val.(*LuaString) }
 func (v TValue) ToNumber() (float64, bool) {
 	switch v.Tt {
 	case TagFloat:
-		return v.Val.(float64), true
+		return v.Float(), true
 	case TagInteger:
-		return float64(v.Val.(int64)), true
+		return float64(v.N), true
 	default:
 		return 0, false
 	}
@@ -291,9 +325,9 @@ func (v TValue) ToNumber() (float64, bool) {
 func (v TValue) ToInteger() (int64, bool) {
 	switch v.Tt {
 	case TagInteger:
-		return v.Val.(int64), true
+		return v.N, true
 	case TagFloat:
-		f := v.Val.(float64)
+		f := v.Float()
 		if i := int64(f); float64(i) == f && !math.IsNaN(f) && !math.IsInf(f, 0) {
 			return i, true
 		}

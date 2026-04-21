@@ -23,7 +23,7 @@ func (L *State) NewThread() *State {
 	ls := L.ls()
 	L1 := state.NewThread(ls)
 	// Push the new thread onto the parent's stack
-	L.push(object.TValue{Tt: object.TagThread, Val: L1})
+	L.push(object.TValue{Tt: object.TagThread, Obj: L1})
 	return &State{Internal: L1}
 }
 
@@ -31,7 +31,7 @@ func (L *State) NewThread() *State {
 // Returns true if the thread is the main thread.
 func (L *State) PushThread() bool {
 	ls := L.ls()
-	L.push(object.TValue{Tt: object.TagThread, Val: ls})
+	L.push(object.TValue{Tt: object.TagThread, Obj: ls})
 	return ls.Global.MainThread == ls || ls.Global.MainThread == nil
 }
 
@@ -96,7 +96,7 @@ func (L *State) ToThread(idx int) *State {
 	if v.Tt != object.TagThread {
 		return nil
 	}
-	ls, ok := v.Val.(*state.LuaState)
+	ls, ok := v.Obj.(*state.LuaState)
 	if !ok {
 		return nil
 	}
@@ -119,13 +119,13 @@ func (L *State) ToUserdata(idx int) interface{} {
 	}
 	switch v.Tt {
 	case object.TagUserdata:
-		ud, ok := v.Val.(*object.Userdata)
+		ud, ok := v.Obj.(*object.Userdata)
 		if ok {
 			return ud.Data
 		}
 		return nil
 	case object.TagLightUserdata:
-		return v.Val
+		return v.Obj
 	default:
 		return nil
 	}
@@ -137,7 +137,7 @@ func (L *State) GetUserdataObj(idx int) *object.Userdata {
 	if v == nil || v.Tt != object.TagUserdata {
 		return nil
 	}
-	ud, ok := v.Val.(*object.Userdata)
+	ud, ok := v.Obj.(*object.Userdata)
 	if !ok {
 		return nil
 	}
@@ -153,7 +153,7 @@ func (L *State) GetIUserValue(idx int, n int) object.Type {
 	vm.CheckStack(ls, 1)
 	v := L.index2val(idx)
 	if v != nil && v.Tt == object.TagUserdata {
-		ud, ok := v.Val.(*object.Userdata)
+		ud, ok := v.Obj.(*object.Userdata)
 		if ok && n >= 1 && n <= len(ud.UserVals) {
 			val := ud.UserVals[n-1]
 			ls.Stack[ls.Top].Val = val
@@ -174,7 +174,7 @@ func (L *State) SetIUserValue(idx int, n int) bool {
 	ls := L.ls()
 	v := L.index2val(idx)
 	if v != nil && v.Tt == object.TagUserdata {
-		ud, ok := v.Val.(*object.Userdata)
+		ud, ok := v.Obj.(*object.Userdata)
 		if ok && n >= 1 && n <= len(ud.UserVals) {
 			ls.Top--
 			ud.UserVals[n-1] = ls.Stack[ls.Top].Val
@@ -186,10 +186,10 @@ func (L *State) SetIUserValue(idx int, n int) bool {
 }
 func (L *State) ToPointer(idx int) string {
 	v := L.index2val(idx)
-	if v == nil || v.Val == nil {
+	if v == nil || v.Obj == nil {
 		return ""
 	}
-	rv := reflect.ValueOf(v.Val)
+	rv := reflect.ValueOf(v.Obj)
 	switch rv.Kind() {
 	case reflect.Ptr:
 		return fmt.Sprintf("0x%x", rv.Pointer())
@@ -200,7 +200,7 @@ func (L *State) ToPointer(idx int) string {
 			_type uintptr
 			data  uintptr
 		}
-		iface := v.Val
+		iface := v.Obj
 		ef := (*eface)(unsafe.Pointer(&iface))
 		return fmt.Sprintf("0x%x", ef.data)
 	default:

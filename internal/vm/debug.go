@@ -64,7 +64,7 @@ func getCurrentLine(ci *state.CallInfo, L *state.LuaState) int {
 	if !ci.IsLua() {
 		return -1
 	}
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return -1
 	}
@@ -121,7 +121,7 @@ func addInfo(L *state.LuaState, msg string) string {
 	if ci == nil || !ci.IsLua() {
 		return msg
 	}
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return msg
 	}
@@ -149,13 +149,13 @@ func kname(p *object.Proto, index int) (kind string, name string) {
 	}
 	kv := p.Constants[index]
 	if kv.IsString() {
-		return "constant", kv.Val.(*object.LuaString).Data
+		return "constant", kv.Obj.(*object.LuaString).Data
 	}
 	if kv.IsInteger() {
-		return "constant", fmt.Sprintf("%d", kv.Val.(int64))
+		return "constant", fmt.Sprintf("%d", kv.N)
 	}
 	if kv.IsFloat() {
-		return "constant", fmt.Sprintf("%g", kv.Val.(float64))
+		return "constant", fmt.Sprintf("%g", kv.Float())
 	}
 	return "", "?"
 }
@@ -167,7 +167,7 @@ func kname2(p *object.Proto, index int) string {
 	}
 	kv := p.Constants[index]
 	if kv.IsString() {
-		return kv.Val.(*object.LuaString).Data
+		return kv.Obj.(*object.LuaString).Data
 	}
 	return "?"
 }
@@ -408,7 +408,7 @@ func varInfo(L *state.LuaState, reg int) string {
 	if ci == nil || !ci.IsLua() {
 		return ""
 	}
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return ""
 	}

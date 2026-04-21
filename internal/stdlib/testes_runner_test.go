@@ -7,7 +7,7 @@ import (
 	luaapi "github.com/akzj/go-lua/internal/api"
 )
 
-const testesDir = "../../../lua-master/testes/"
+const testesDir = "../../lua-master/testes/"
 
 func runTestFile(t *testing.T, filename string) {
 	t.Helper()
