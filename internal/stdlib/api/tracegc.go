@@ -1,8 +1,8 @@
 // tracegc module — test helper for suppressing/enabling GC finalizer execution.
 //
 // Provides two functions:
-//   - tracegc.stop()  — suppress DrainGCFinalizers (sets GCStopped = true)
-//   - tracegc.start() — re-enable DrainGCFinalizers (sets GCStopped = false)
+//   - tracegc.stop()  — suppress GC finalizer execution (sets GCStopped = true)
+//   - tracegc.start() — re-enable GC finalizer execution (sets GCStopped = false)
 //
 // Used by cstack.lua tests to control when finalizers fire.
 // This is a stub that provides just enough for the test suite;

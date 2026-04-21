@@ -114,7 +114,7 @@ assert(_G.gc_ok == true, "expected sentinel __gc to fire after 100 erroring __gc
 
 // TestGCTotalBytesDecreases verifies that collectgarbage("count") returns a
 // lower value after tables become unreachable and are collected.
-// This tests the AddCleanup-based dealloc tracking on tables.
+// This tests V5 GC sweep dealloc tracking on tables.
 func TestGCTotalBytesDecreases(t *testing.T) {
 	L := luaapi.NewState()
 	OpenAll(L)
@@ -140,7 +140,7 @@ assert(after_alloc > baseline,
 -- Drop all references
 holder = nil
 
--- Collect garbage — AddCleanup should decrement GCTotalBytes
+-- Collect garbage — V5 GC sweep should decrement GCTotalBytes
 collectgarbage("collect")
 collectgarbage("collect")  -- second pass for cleanup callbacks
 local after_gc = collectgarbage("count")

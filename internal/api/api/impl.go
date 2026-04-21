@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -109,18 +108,6 @@ func (L *State) push(v objectapi.TValue) {
 	stateapi.PushValue(ls, v)
 }
 
-// wrapCFunction creates an adapter from api.CFunction to stateapi.CFunction.
-// This bridges the type mismatch between the public API and internal API.
-func (L *State) wrapCFunction(f CFunction) stateapi.CFunction {
-	pub := L // capture the public State
-	return func(ls *stateapi.LuaState) int {
-		// The public State wraps the same internal state.
-		// We need to ensure the Internal pointer is current.
-		pub.Internal = ls
-		return f(pub)
-	}
-}
-
 // wrapCFunctionStatic creates an adapter without capturing a specific State.
 // Each call creates a temporary State wrapper.
 func wrapCFunctionStatic(f CFunction) stateapi.CFunction {
@@ -154,10 +141,6 @@ func NewState() *State {
 			return
 		}
 		g.GCRunning = true
-		debt := atomic.SwapInt64(&g.GCDeallocDebt, 0)
-		if debt > 0 {
-			atomic.AddInt64(&g.GCTotalBytes, -debt)
-		}
 		// NOTE: No clearStaleStack for periodic GC — traverseThread uses
 		// maxTop (conservative) which limits marking to active frames.
 		// clearStaleStack is only needed for explicit GC (collectgarbage()).
@@ -795,14 +778,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 	L.TrackAlloc(size)
 	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
 
-	// Register dealloc cleanup — accumulates freed bytes in GCDeallocDebt.
-	// These are only applied to GCTotalBytes during Lua GC cycles (GCCollect),
-	// ensuring gcinfo() is stable between cycles (matches C Lua behavior).
-	gcDeallocDebt := &L.ls().Global.GCDeallocDebt
-	runtime.AddCleanup(t, func(size int64) {
-		atomic.AddInt64(gcDeallocDebt, size)
-	}, size)
-
+	// V5 GC sweep handles dealloc accounting — no AddCleanup needed.
 	// Periodic GC is handled by checkPeriodicGC in the VM dispatch loop.
 }
 
@@ -857,8 +833,7 @@ func (L *State) SetMetatable(idx int) {
 		tbl := v.Val.(*tableapi.Table)
 		tbl.SetMetatable(mt)
 		// V5 GC: Move object from allgc to finobj if __gc detected.
-		// Dealloc tracking is handled separately via AddCleanup (registered in
-		// CreateTable/VM), which is independent of finalization.
+		// Dealloc tracking is handled by V5 GC sweep.
 		if mt != nil {
 			g := ls.Global
 			tmName := g.TMNames[metamethodapi.TM_GC]
@@ -1223,6 +1198,9 @@ func (L *State) NewUserdata(size int, nUV int) *objectapi.Userdata {
 		ud.UserVals[i] = objectapi.Nil
 	}
 	L.ls().Global.LinkGC(ud) // V5: register in allgc chain
+	// Track allocation: base Userdata struct (~80 bytes) + UserVals slice
+	estimateSize := int64(80 + nUV*24)
+	L.TrackAlloc(estimateSize)
 	L.push(objectapi.TValue{Tt: objectapi.TagUserdata, Val: ud})
 	return ud
 }
@@ -1331,12 +1309,6 @@ func (L *State) TrackAlloc(n int64) {
 	atomic.AddInt64(&L.ls().Global.GCTotalBytes, n)
 }
 
-// TrackDealloc subtracts n bytes from the Lua-level allocation counter.
-// Called from finalizers (which run in arbitrary goroutines), so uses atomic.
-func (L *State) TrackDealloc(n int64) {
-	atomic.AddInt64(&L.ls().Global.GCTotalBytes, -n)
-}
-
 // GetGCMode returns the current GC mode string ("incremental" or "generational").
 // Defaults to "incremental" if not set.
 func (L *State) GetGCMode() string {
@@ -1379,11 +1351,6 @@ func (L *State) gcMarkSweep() {
 	}
 	g.GCRunning = true
 	defer func() { g.GCRunning = false }()
-	// Apply dealloc debt accumulated by Go GC (runtime.AddCleanup callbacks)
-	debt := atomic.SwapInt64(&g.GCDeallocDebt, 0)
-	if debt > 0 {
-		atomic.AddInt64(&g.GCTotalBytes, -debt)
-	}
 	// Clear stale stack slots so traverseThread doesn't mark dead references
 	clearStaleStack(ls)
 	gcapi.FullGC(g, ls)
@@ -1521,7 +1488,6 @@ func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
 	}
 }
 
-// SweepStrings removes collected (dead) interned strings from the string table.
 // SweepStrings removes dead interned strings from the string table.
 func (L *State) SweepStrings() {
 	L.strtab().SweepStrings()
@@ -1921,7 +1887,7 @@ func (L *State) Ref(t int) int {
 // Unref frees a reference in the table at idx (luaL_unref).
 // Sets t[ref] = nil and adds ref to the free list at t[0].
 func (L *State) Unref(t int, ref int) {
-	if ref >= 0 {
+	if ref > 0 {
 		// Convert t to absolute index
 		absT := t
 		if t != RegistryIndex && t < 0 {
@@ -2878,9 +2844,3 @@ func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
 	return true
 }
 
-// DrainGCFinalizers is a no-op kept for API compatibility.
-// With V5 GC, __gc finalizers are called via callAllPendingFinalizers
-// after FullGC (mark/sweep) identifies dead objects in the finobj list.
-func (L *State) DrainGCFinalizers() {
-	// No-op: V5 GC handles finalization via GCCollect -> callAllPendingFinalizers
-}

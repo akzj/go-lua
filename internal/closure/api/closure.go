@@ -98,8 +98,7 @@ func CloseUpvals(L *stateapi.LuaState, level int) {
 // ---------------------------------------------------------------------------
 
 // InitUpvals fills all nil upvalue slots in the closure with new closed upvalues.
-// TODO(v5-gc): These upvalues are not yet linked into allgc. Either pass
-// GlobalState through, or have the caller link them after InitUpvals returns.
+// The caller is responsible for linking upvalues into allgc after this returns.
 func InitUpvals(cl *LClosure) {
 	for i := range cl.UpVals {
 		if cl.UpVals[i] == nil {

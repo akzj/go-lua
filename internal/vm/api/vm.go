@@ -8,7 +8,6 @@ package api
 
 import (
 	"math"
-	"runtime"
 	"strings"
 	"sync/atomic"
 
@@ -1400,11 +1399,7 @@ func AdjustVarargs(L *stateapi.LuaState, ci *stateapi.CallInfo, p *objectapi.Pro
 		L.Global.LinkGC(t) // V5: register in allgc chain
 		size := t.EstimateBytes()
 		atomic.AddInt64(&L.Global.GCTotalBytes, size)
-		// Register dealloc cleanup (coexists with any __gc SetFinalizer)
-		gcTotalBytes := &L.Global.GCTotalBytes
-		runtime.AddCleanup(t, func(sz int64) {
-			atomic.AddInt64(gcTotalBytes, -sz)
-		}, size)
+		// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 		// Set t.n = nextra
 		st := L.Global.StringTable.(*luastringapi.StringTable)
 		nKey := objectapi.MakeString(st.Intern("n"))
@@ -1815,11 +1810,7 @@ startfunc:
 			L.Global.LinkGC(t) // V5: register in allgc chain
 			size := t.EstimateBytes()
 			atomic.AddInt64(&L.Global.GCTotalBytes, size)
-			// Register dealloc cleanup (coexists with any __gc SetFinalizer)
-			gcTotalBytes := &L.Global.GCTotalBytes
-			runtime.AddCleanup(t, func(sz int64) {
-				atomic.AddInt64(gcTotalBytes, -sz)
-			}, size)
+			// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 			L.Stack[ra].Val = objectapi.TValue{Tt: objectapi.TagTable, Val: t}
 
 			// Periodic GC: run Lua GC during tight allocation loops.

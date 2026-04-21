@@ -256,11 +256,6 @@ func (st *StringTable) SweepStrings() {
 	}
 }
 
-// Sweep is kept for backward compatibility. It calls SweepStrings.
-func (st *StringTable) Sweep() {
-	st.SweepStrings()
-}
-
 // ---------------------------------------------------------------------------
 // LuaString construction helpers
 // ---------------------------------------------------------------------------
