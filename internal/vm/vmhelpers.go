@@ -1342,6 +1342,7 @@ func adjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 		t := table.New(nextra, 1)
 		L.Global.LinkGC(t) // V5: register in allgc chain
 		size := t.EstimateBytes()
+		t.GCHeader.ObjSize = size
 		atomic.AddInt64(&L.Global.GCTotalBytes, size)
 		// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 		// Set t.n = nextra
