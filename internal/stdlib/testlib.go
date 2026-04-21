@@ -860,41 +860,39 @@ func testUpvalue(L *luaapi.State) int {
 
 func testCheckpanic(L *luaapi.State) int {
 	code := L.CheckString(1)
-	// paniccode is an optional second arg — testC code to run during panic handling
-	// (not fully supported yet — we ignore it)
-	_ = L.OptString(2, "")
+	panicCode := L.OptString(2, "")
 
 	// Create a new state, run the testC code, catch errors
 	L1 := luaapi.NewState()
 	defer L1.Close()
 	OpenAll(L1)
+	OpenTestLib(L1)
 
-	// Run the testC program in protected mode
-	// We use recover to catch panics from L.Error() calls
-	var errMsg string
+	var nResults int
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// Try to get error from L1's stack
-				if s, ok := L1.ToString(-1); ok {
-					errMsg = s
+				// Error occurred. If panicCode is provided, run it on L1.
+				if panicCode != "" {
+					// The error message should be on L1's stack
+					nResults = runC(L, L1, panicCode)
 				} else {
-					errMsg = fmt.Sprintf("%v", r)
+					// Transfer error message to L
+					if s, ok := L1.ToString(-1); ok {
+						L.PushString(s)
+					} else {
+						L.PushString(fmt.Sprintf("%v", r))
+					}
+					nResults = 1
 				}
 			}
 		}()
-		// Run the testC code on L1, with L as the "caller" state
 		runC(L, L1, code)
-		errMsg = "no errors"
+		L.PushString("no errors")
+		nResults = 1
 	}()
 
-	// If runC didn't panic but also didn't set errMsg, try pcall approach
-	if errMsg == "" {
-		errMsg = "no errors"
-	}
-
-	L.PushString(errMsg)
-	return 1
+	return nResults
 }
 
 // ---------------------------------------------------------------------------
