@@ -437,6 +437,32 @@ func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 // event: "call", "return", "line", "count", "tail call"
 // line: line number for line hooks, -1 otherwise
 // ftransfer/ntransfer: parameter/return value transfer info (0 if N/A)
+// hookEventInt maps event string to integer constant.
+func hookEventInt(event string) int {
+	switch event {
+	case "call":
+		return state.HookCall
+	case "return":
+		return state.HookReturn
+	case "line":
+		return state.HookLine
+	case "count":
+		return state.HookCount
+	case "tail call":
+		return state.HookTailCall
+	}
+	return state.HookCall
+}
+
+// hookDispatch calls the debug hook function.
+// Mirrors: luaD_hook in ldo.c
+//
+// For CFunction hooks (e.g. T.sethook): called directly without creating
+// a CI frame, matching C Lua's behavior. This allows yields inside hooks.
+// Event/line are passed via L.HookEvent/L.HookLine state fields.
+//
+// For Lua closure hooks (e.g. debug.sethook): called via Call() with
+// noyield semantics (cannot yield from Lua hook functions, same as C Lua).
 func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntransfer int) {
 	hookVal, ok := L.Hook.(object.TValue)
 	if !ok || hookVal.Tt == object.TagNil || hookVal.Obj == nil {
@@ -449,13 +475,16 @@ func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntra
 	ci := L.CI
 	savedTop := L.Top
 	savedCITop := ci.Top
-	savedAllowHook := L.AllowHook
 	L.AllowHook = false // cannot call hooks inside a hook
 	ci.CallStatus |= state.CISTHooked // mark caller as hook frame
 
 	// Set transfer info for debug.getinfo "r" flag
 	L.FTransfer = ftransfer
 	L.NTransfer = ntransfer
+
+	// Set hook event/line fields for direct CFunction hooks
+	L.HookEvent = hookEventInt(event)
+	L.HookLine = line
 
 	// Protect entire activation register (mirrors luaD_hook in ldo.c)
 	// For Lua functions, L.Top may be below ci.Top. Push hook args above ci.Top
@@ -464,35 +493,62 @@ func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntra
 		L.Top = ci.Top
 	}
 
-	defer func() {
-		L.AllowHook = savedAllowHook
-		ci.CallStatus &^= state.CISTHooked // clear hook flag
-		ci.Top = savedCITop
-		L.Top = savedTop
-	}()
-
-	// Ensure stack space: hook_func + event_name + optional_line_arg
-	CheckStack(L, 4)
-
-	st := L.Global.StringTable.(*luastring.StringTable)
-
-	// Push hook function
-	L.Stack[L.Top].Val = hookVal
-	L.Top++
-
-	// Push event name
-	L.Stack[L.Top].Val = object.MakeString(st.Intern(event))
-	L.Top++
-
-	// For line hooks, push line number as second arg
-	nargs := 1
-	if line >= 0 {
-		L.Stack[L.Top].Val = object.MakeInteger(int64(line))
-		L.Top++
-		nargs = 2
+	// Ensure stack space for hook args
+	CheckStack(L, luaMinStack)
+	if ci.Top < L.Top+luaMinStack {
+		ci.Top = L.Top + luaMinStack
 	}
 
-	Call(L, L.Top-nargs-1, 0)
+	// Determine hook type and dispatch accordingly
+	if hookVal.Tt == object.TagLightCFunc {
+		// CFunction hook — call directly without CI frame.
+		// This matches C Lua's (*hook)(L, &ar) pattern.
+		// The CFunction reads event/line from L.HookEvent/L.HookLine.
+		if cFn, ok := hookVal.Obj.(state.CFunction); ok {
+			cFn(L)
+		}
+		// After direct call: if the hook yielded, leave state as-is
+		// (caller will detect L.Status == StatusYield).
+		// If no yield, restore normally.
+	} else {
+		// Lua closure or CClosure hook — call via Call() with noyield.
+		// Mirrors C Lua's hookf wrapper: cannot yield from Lua hook functions.
+		st := L.Global.StringTable.(*luastring.StringTable)
+
+		// Push hook function
+		L.Stack[L.Top].Val = hookVal
+		L.Top++
+
+		// Push event name
+		L.Stack[L.Top].Val = object.MakeString(st.Intern(event))
+		L.Top++
+
+		// For line hooks, push line number as second arg
+		nargs := 1
+		if line >= 0 {
+			L.Stack[L.Top].Val = object.MakeInteger(int64(line))
+			L.Top++
+			nargs = 2
+		}
+
+		// Increment NCCalls to prevent yield (noyield semantics).
+		// Mirrors: luaD_callnoyield increments nCcalls by CSTACKERR
+		// to make !yieldable(L) true during the call.
+		savedNCCalls := L.NCCalls
+		L.NCCalls |= 0x10000 // set high bit to disable yield
+		Call(L, L.Top-nargs-1, 0)
+		L.NCCalls = savedNCCalls
+	}
+
+	// Restore state (only if hook didn't yield)
+	if L.Status != state.StatusYield {
+		L.AllowHook = true
+		ci.CallStatus &^= state.CISTHooked
+		ci.Top = savedCITop
+		L.Top = savedTop
+	}
+	// If hook yielded (L.Status == StatusYield), caller handles cleanup.
+	// AllowHook, CIST_HOOKED, ci.Top, L.Top are left as-is for resume.
 }
 
 // retHook fires the return hook if set.
