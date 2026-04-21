@@ -291,6 +291,11 @@ type GlobalState struct {
 	// expensive clearDeadKeysAllEphemerons walk can be skipped entirely.
 	EphemeronCount int
 
+	// Incremental GC state
+	GCDebt     int64            // bytes "owed" — triggers GC step when <= 0
+	GCEstimate int64            // estimate of non-garbage bytes (for setpause)
+	SweepGC    *object.GCObject // current position in sweep list (nil = not sweeping)
+
 }
 
 // ---------------------------------------------------------------------------
