@@ -180,7 +180,18 @@ type LuaState struct {
 	HookMask      int  // which hooks active (call, return, line, count)
 	FTransfer     int  // hook value transfer: index of first value
 	NTransfer     int  // hook value transfer: number of values
+	HookEvent     int  // current hook event (HookCall, HookReturn, etc.)
+	HookLine      int  // current hook line number (-1 if not a line hook)
 }
+
+// Hook event constants (matches C LUA_HOOK*)
+const (
+	HookCall     = 0
+	HookReturn   = 1
+	HookLine     = 2
+	HookCount    = 3
+	HookTailCall = 4
+)
 // GC returns the GC header for this thread.
 func (L *LuaState) GC() *object.GCHeader { return &L.GCHeader }
 
