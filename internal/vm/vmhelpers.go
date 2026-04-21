@@ -1446,3 +1446,23 @@ func getVarargs(L *state.LuaState, ci *state.CallInfo, ra int, n int, vatab int)
 		L.Stack[ra+i].Val = object.Nil
 	}
 }
+
+// ---------------------------------------------------------------------------
+// API helpers — exported wrappers for metamethod-aware table operations
+// ---------------------------------------------------------------------------
+
+// APISetTable performs t[key] = val with __newindex metamethod support.
+// Used by the C API's lua_settable.
+func APISetTable(L *state.LuaState, t, key, val object.TValue) {
+	if t.IsTable() {
+		tableSetWithMeta(L, t, key, val)
+	} else {
+		FinishSet(L, t, key, val)
+	}
+}
+
+// APIGetTable performs result = t[key] with __index metamethod support.
+// Used by the C API's lua_gettable. Writes result to L.Stack[ra].
+func APIGetTable(L *state.LuaState, t, key object.TValue, ra int) {
+	FinishGet(L, t, key, ra)
+}

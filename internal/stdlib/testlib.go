@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"unicode"
 
@@ -312,7 +313,12 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			// luaL_loadfile(L1, luaL_checkstring(L1, getnum))
 			idx := p.getNum(L, L1)
 			fname := L1.CheckString(idx)
-			L1.Load("", "@"+fname, "bt") // simplified
+			data, readErr := os.ReadFile(fname)
+			if readErr != nil {
+				L1.PushString(fmt.Sprintf("cannot open %s: %v", fname, readErr))
+			} else {
+				L1.Load(string(data), "@"+fname, "bt")
+			}
 
 		case "loadstring":
 			idx := p.getNum(L, L1)
@@ -422,11 +428,11 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			L1.RawGetI(t, int64(i))
 
 		case "rawgetp":
-			// rawgetp uses a pointer key — we simulate with int
+			// rawgetp uses a light userdata pointer key
 			t := p.getIndex(L, L1)
-			_ = p.getNum(L, L1) // key (ignored — not easily portable)
-			L1.PushNil()        // stub
-			_ = t
+			key := p.getNum(L, L1)
+			L1.PushLightUserdata(uintptr(key))
+			L1.RawGet(t)
 
 		case "rawset":
 			t := p.getIndex(L, L1)
@@ -438,10 +444,13 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			L1.RawSetI(t, int64(i))
 
 		case "rawsetp":
+			// rawsetp uses a light userdata pointer key
 			t := p.getIndex(L, L1)
-			_ = p.getNum(L, L1) // key
-			L1.Pop(1)           // stub — pop the value
-			_ = t
+			key := p.getNum(L, L1)
+			// Stack: [..., value]. Push the key, then swap so key is below value.
+			L1.PushLightUserdata(uintptr(key))
+			L1.Insert(-2) // now: [..., key, value]
+			L1.RawSet(t)
 
 		case "remove":
 			L1.Remove(p.getNum(L, L1))
