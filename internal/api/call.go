@@ -79,10 +79,10 @@ func (L *State) Load(code string, name string, mode string) int {
 	if mode == "" {
 		mode = "bt"
 	}
-	// Validate mode: only "b", "t", "bt", "tb" are valid
+	// Validate mode: "b", "t", "bt", "tb" are standard; "B" = fixed-buffer binary (Lua 5.5)
 	validMode := true
 	for _, c := range mode {
-		if c != 'b' && c != 't' {
+		if c != 'b' && c != 't' && c != 'B' {
 			validMode = false
 			break
 		}
@@ -94,7 +94,7 @@ func (L *State) Load(code string, name string, mode string) int {
 	isBinary := len(code) > 0 && code[0] == '\x1b' // LUA_SIGNATURE
 
 	if isBinary {
-		if !strings.Contains(mode, "b") {
+		if !strings.Contains(mode, "b") && !strings.Contains(mode, "B") {
 			L.PushString(fmt.Sprintf("%s: attempt to load a binary chunk", name))
 			return StatusErrSyntax
 		}

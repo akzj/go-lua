@@ -15,6 +15,7 @@ import (
 func (L *State) NewUserdata(size int, nUV int) *object.Userdata {
 	ud := &object.Userdata{
 		UserVals: make([]object.TValue, nUV),
+		Size:     size,
 	}
 	// Initialize user values to nil
 	for i := range ud.UserVals {
