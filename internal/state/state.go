@@ -34,6 +34,10 @@ func NewState() *LuaState {
 	g.GCPause = 200
 	g.GCStepMul = 200
 	g.GCStepSize = 13
+	// Initial GC debt: give 64KB of allocation credit before first GC triggers.
+	// This matches the minDebt in SetPause and avoids premature collection
+	// during state initialization.
+	g.GCDebt = 64 * 1024
 
 	// String table
 	strtab := luastring.NewStringTable(g.Seed)
@@ -360,6 +364,12 @@ func (g *GlobalState) LinkGC(obj object.GCObject) {
 	h.Marked = g.CurrentWhite
 	h.Next = g.Allgc
 	g.Allgc = obj
+	// Track allocation for debt-based GC pacing.
+	// When GCDebt reaches ≤0, the VM triggers a GC step.
+	if h.ObjSize == 0 {
+		h.ObjSize = 64 // default estimate for non-table objects (closures, strings, etc.)
+	}
+	g.TrackAllocation(h.ObjSize)
 }
 
 // TrackAllocation increments GCTotalBytes and decrements GCDebt by n bytes.

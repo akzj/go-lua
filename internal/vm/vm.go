@@ -26,14 +26,21 @@ import (
 const maxTagLoop = 2000
 
 // ---------------------------------------------------------------------------
-// Periodic GC helper
+// Debt-based GC trigger
 // ---------------------------------------------------------------------------
 
-// checkPeriodicGC increments the allocation counter and triggers a GC step
-// every 5000 allocations if a step function is registered.
-func checkPeriodicGC(g *state.GlobalState, L *state.LuaState) {
+// checkGC triggers a GC step when GCDebt has been exhausted (≤ 0).
+// GCDebt is decremented by TrackAllocation (called from LinkGC and table
+// resize paths). After a collection, SetPause resets debt based on live data.
+// Also maintains a counter-based safety net: even if debt hasn't run out,
+// trigger GC every 5000 allocations to prevent Go-heap OOM when Lua's
+// ObjSize estimates undercount actual Go memory usage.
+func checkGC(g *state.GlobalState, L *state.LuaState) {
+	if g.GCStepFn == nil {
+		return
+	}
 	g.GCAllocCount++
-	if g.GCAllocCount%5000 == 0 && g.GCStepFn != nil {
+	if atomic.LoadInt64(&g.GCDebt) <= 0 || g.GCAllocCount%5000 == 0 {
 		g.GCStepFn(L)
 	}
 }
@@ -355,7 +362,7 @@ startfunc:
 			// Periodic GC: run Lua GC during tight allocation loops.
 			// V5 GC handles __gc via finobj list.
 			if g := L.Global; !g.GCStopped {
-				checkPeriodicGC(g, L)
+				checkGC(g, L)
 			}
 
 		case opcode.OP_SELF:
@@ -767,7 +774,7 @@ startfunc:
 
 			// Periodic GC: string concatenation allocates new strings.
 			if g := L.Global; !g.GCStopped {
-				checkPeriodicGC(g, L)
+				checkGC(g, L)
 			}
 
 		// ===== Comparison =====
@@ -1087,7 +1094,7 @@ startfunc:
 
 			// Periodic GC: closures are heap-allocated objects.
 			if g := L.Global; !g.GCStopped {
-				checkPeriodicGC(g, L)
+				checkGC(g, L)
 			}
 
 		case opcode.OP_VARARG:
