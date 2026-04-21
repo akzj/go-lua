@@ -25,13 +25,13 @@ const (
 
 // Table is a Lua table with hybrid array + hash storage.
 type Table struct {
-	object.GCHeader            // GC metadata
-	Array     []object.TValue // array part: indices 0..len-1 map to Lua keys 1..len
-	Nodes     []Node             // hash part: open-addressing with Brent's variation
-	LsizeNode uint8              // log2(len(nodes)), 0 if nodes == nil
-	LastFree  int                // index for free-slot backward scan
-	Flags     byte               // metamethod absence cache (bit p = TM p absent)
-	Metatable *Table             // metatable or nil
+	object.GCHeader                 // GC metadata
+	Array           []object.TValue // array part: indices 0..len-1 map to Lua keys 1..len
+	Nodes           []node          // hash part: open-addressing with Brent's variation
+	LsizeNode       uint8           // log2(len(nodes)), 0 if nodes == nil
+	LastFree        int             // index for free-slot backward scan
+	Flags           byte            // metamethod absence cache (bit p = TM p absent)
+	Metatable       *Table          // metatable or nil
 
 	// Weak table support (__mode metafield)
 	WeakMode byte // bit 0 = weak keys, bit 1 = weak values
@@ -46,12 +46,12 @@ func (t *Table) HasWeakKeys() bool { return t.WeakMode&WeakKey != 0 }
 // HasWeakValues returns true if this table has weak values (__mode contains "v").
 func (t *Table) HasWeakValues() bool { return t.WeakMode&WeakValue != 0 }
 
-// Node is a hash table entry (key + value + chain offset).
-type Node struct {
+// node is a hash table entry (key + value + chain offset).
+type node struct {
 	Val    object.TValue // value
 	KeyTT  object.Tag    // key type tag
-	KeyVal any              // key value (int64, float64, *object.LuaString, etc.)
-	Next   int32            // offset to next node in chain (0 = end)
+	KeyVal any           // key value (int64, float64, *object.LuaString, etc.)
+	Next   int32         // offset to next node in chain (0 = end)
 }
 
 // ---------------------------------------------------------------------------

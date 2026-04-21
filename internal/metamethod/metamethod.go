@@ -8,8 +8,8 @@
 package metamethod
 
 import (
-	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/luastring"
+	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/state"
 	"github.com/akzj/go-lua/internal/table"
 )
@@ -23,8 +23,8 @@ import (
 // to re-initialize or access TM names independently.
 // ---------------------------------------------------------------------------
 
-// InitTMNames interns all TM name strings into the global state.
-func InitTMNames(g *state.GlobalState, strtab *luastring.StringTable) {
+// initTMNames interns all TM name strings into the global state.
+func initTMNames(g *state.GlobalState, strtab *luastring.StringTable) {
 	for i := TMS(0); i < TM_N; i++ {
 		g.TMNames[i] = strtab.Intern(TMNames[i])
 	}

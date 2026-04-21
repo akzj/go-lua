@@ -12,56 +12,55 @@
 package parse
 
 import (
-	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/lex"
-	"github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
-// ExpKind describes the kind of an expression descriptor.
+// expKind describes the kind of an expression descriptor.
 // C5 FIX: Order matches C lparser.h exactly (23 values, was 20).
 // ---------------------------------------------------------------------------
-type ExpKind int
+type expKind int
 
 const (
-	VVOID     ExpKind = iota // empty (no expression)
-	VNIL                     // constant nil
-	VTRUE                    // constant true
-	VFALSE                   // constant false
-	VK                       // constant in k[]; Info = index
-	VKFLT                    // float constant; NVal = value
-	VKINT                    // integer constant; IVal = value
-	VKSTR                    // string constant; StrVal = value
-	VNONRELOC                // value in fixed register; Info = register
-	VLOCAL                   // local variable; Var.RegIdx, Var.VarIdx
-	VVARGVAR                 // vararg parameter (Lua 5.5); Var.RegIdx, Var.VarIdx
-	VGLOBAL                  // global variable (Lua 5.5); Var.RegIdx, Var.VarIdx
-	VUPVAL                   // upvalue; Info = upvalue index
-	VCONST                   // compile-time <const>; Info = actvar index
-	VINDEXED                 // t[k]; Ind.Table, Ind.Idx
-	VVARGIND                 // indexed vararg parameter (Lua 5.5); Ind.*
-	VINDEXUP                 // upval[K]; Ind.Table (upval), Ind.Idx (K index)
-	VINDEXI                  // t[integer]; Ind.Table, Ind.Idx (int value)
-	VINDEXSTR                // t["string"]; Ind.Table, Ind.Idx (K index)
-	VJMP                     // test/comparison; Info = pc of JMP
-	VRELOC                   // result in any register; Info = instruction pc
-	VCALL                    // function call; Info = instruction pc
-	VVARARG                  // vararg expression; Info = instruction pc
+	vVOID     expKind = iota // empty (no expression)
+	vNIL                     // constant nil
+	vTRUE                    // constant true
+	vFALSE                   // constant false
+	vK                       // constant in k[]; Info = index
+	vKFLT                    // float constant; NVal = value
+	vKINT                    // integer constant; IVal = value
+	vKSTR                    // string constant; StrVal = value
+	vNONRELOC                // value in fixed register; Info = register
+	vLOCAL                   // local variable; Var.RegIdx, Var.VarIdx
+	vVARGVAR                 // vararg parameter (Lua 5.5); Var.RegIdx, Var.VarIdx
+	vGLOBAL                  // global variable (Lua 5.5); Var.RegIdx, Var.VarIdx
+	vUPVAL                   // upvalue; Info = upvalue index
+	vCONST                   // compile-time <const>; Info = actvar index
+	vINDEXED                 // t[k]; Ind.Table, Ind.Idx
+	vVARGIND                 // indexed vararg parameter (Lua 5.5); Ind.*
+	vINDEXUP                 // upval[K]; Ind.Table (upval), Ind.Idx (K index)
+	vINDEXI                  // t[integer]; Ind.Table, Ind.Idx (int value)
+	vINDEXSTR                // t["string"]; Ind.Table, Ind.Idx (K index)
+	vJMP                     // test/comparison; Info = pc of JMP
+	vRELOC                   // result in any register; Info = instruction pc
+	vCALL                    // function call; Info = instruction pc
+	vVARARG                  // vararg expression; Info = instruction pc
 )
 
-// NoJump is the sentinel for empty jump lists.
-const NoJump = -1
+// noJump is the sentinel for empty jump lists.
+const noJump = -1
 
 // ---------------------------------------------------------------------------
-// ExpDesc is the expression descriptor — the central compiler abstraction.
+// expDesc is the expression descriptor — the central compiler abstraction.
 //
 // It enables delayed code generation: an expression is described abstractly
 // and only materialized (discharged to a register) when needed.
 //
 // The T and F fields are jump patch lists threaded through JMP instructions.
 // ---------------------------------------------------------------------------
-type ExpDesc struct {
-	Kind   ExpKind
+type expDesc struct {
+	Kind   expKind
 	Info   int     // generic: register, pc, upvalue index, K index
 	IVal   int64   // for VKINT
 	NVal   float64 // for VKFLT
@@ -86,19 +85,19 @@ type ExpDesc struct {
 }
 
 // HasJumps returns true if the expression has pending jump lists.
-func (e *ExpDesc) HasJumps() bool {
-	return e.T != NoJump || e.F != NoJump
+func (e *expDesc) HasJumps() bool {
+	return e.T != noJump || e.F != noJump
 }
 
 // ---------------------------------------------------------------------------
-// FuncState tracks the compilation state of one function.
+// funcState tracks the compilation state of one function.
 // Forms a linked list via Prev for nested functions.
 // ---------------------------------------------------------------------------
-type FuncState struct {
-	Proto      *object.Proto // the Proto being built
-	Prev       *FuncState       // enclosing function (nil for main)
-	Lex        *lex.LexState // shared lexer state
-	Block      *BlockCnt        // current block scope
+type funcState struct {
+	Proto *object.Proto // the Proto being built
+	Prev  *funcState    // enclosing function (nil for main)
+	Lex   *lex.LexState // shared lexer state
+	Block *blockCnt     // current block scope
 
 	// StringCache deduplicates *LuaString objects across all FuncStates
 	// in the same compilation unit. Shared via openFunc inheritance.
@@ -114,8 +113,8 @@ type FuncState struct {
 	FirstLocal int // index of first local in Dyndata.ActVar
 	FirstLabel int // index of first label in Dyndata.Labels
 
-	NProtos   int   // number of nested prototypes created
-	NDebugVars int  // number of debug local variables registered
+	NProtos    int // number of nested prototypes created
+	NDebugVars int // number of debug local variables registered
 
 	NumActVar int16 // number of active variable declarations
 	NumUps    byte  // number of upvalues
@@ -125,10 +124,10 @@ type FuncState struct {
 }
 
 // ---------------------------------------------------------------------------
-// BlockCnt tracks a lexical block (scope).
+// blockCnt tracks a lexical block (scope).
 // ---------------------------------------------------------------------------
-type BlockCnt struct {
-	Prev       *BlockCnt // enclosing block
+type blockCnt struct {
+	Prev       *blockCnt // enclosing block
 	FirstLabel int       // index of first label in this block
 	FirstGoto  int       // index of first pending goto
 	NumActVar  int16     // active vars at block entry
@@ -138,21 +137,21 @@ type BlockCnt struct {
 }
 
 // ---------------------------------------------------------------------------
-// Dyndata is the shared dynamic data for the compilation unit.
+// dyndata is the shared dynamic data for the compilation unit.
 // Shared across all nested functions.
 // ---------------------------------------------------------------------------
-type Dyndata struct {
-	ActVar []VarDesc   // active variable descriptors
-	Gotos  []LabelDesc // pending goto statements
-	Labels []LabelDesc // defined labels
+type dyndata struct {
+	ActVar []varDesc   // active variable descriptors
+	Gotos  []labelDesc // pending goto statements
+	Labels []labelDesc // defined labels
 }
 
-// VarDesc describes a local variable during compilation.
-type VarDesc struct {
-	Name   string          // variable name
-	Kind   byte            // VDKREG, RDKCONST, etc.
-	RegIdx byte            // register index
-	PIdx   int             // index into Proto.LocVars (debug info)
+// varDesc describes a local variable during compilation.
+type varDesc struct {
+	Name   string        // variable name
+	Kind   byte          // VDKREG, RDKCONST, etc.
+	RegIdx byte          // register index
+	PIdx   int           // index into Proto.LocVars (debug info)
 	K      object.TValue // compile-time constant value (for RDKCTC)
 }
 
@@ -167,10 +166,10 @@ const (
 	GDKCONST   byte = 6 // global constant (was incorrectly 5)
 )
 
-// LabelDesc describes a label or pending goto.
-type LabelDesc struct {
+// labelDesc describes a label or pending goto.
+type labelDesc struct {
 	Name      string
-	PC        int   // position in code
+	PC        int // position in code
 	Line      int
 	NumActVar int16 // active variables at this point
 	Close     bool  // goto needs OP_CLOSE
@@ -180,50 +179,44 @@ type LabelDesc struct {
 // Binary and unary operator enums (used by code generator)
 // ---------------------------------------------------------------------------
 
-// BinOpr is a binary operator for the code generator.
-type BinOpr int
+// binOpr is a binary operator for the code generator.
+type binOpr int
 
 const (
-	OPR_ADD BinOpr = iota
-	OPR_SUB
-	OPR_MUL
-	OPR_MOD
-	OPR_POW
-	OPR_DIV
-	OPR_IDIV
-	OPR_BAND
-	OPR_BOR
-	OPR_BXOR
-	OPR_SHL
-	OPR_SHR
-	OPR_CONCAT
-	OPR_EQ
-	OPR_LT
-	OPR_LE
-	OPR_NE
-	OPR_GT
-	OPR_GE
-	OPR_AND
-	OPR_OR
-	OPR_NOBINOPR // sentinel
+	oprADD binOpr = iota
+	oprSUB
+	oprMUL
+	oprMOD
+	oprPOW
+	oprDIV
+	oprIDIV
+	oprBAND
+	oprBOR
+	oprBXOR
+	oprSHL
+	oprSHR
+	oprCONCAT
+	oprEQ
+	oprLT
+	oprLE
+	oprNE
+	oprGT
+	oprGE
+	oprAND
+	oprOR
+	oprNOBINOPR // sentinel
 )
 
-// UnOpr is a unary operator for the code generator.
-type UnOpr int
+// unOpr is a unary operator for the code generator.
+type unOpr int
 
 const (
-	OPR_MINUS UnOpr = iota
-	OPR_BNOT
-	OPR_NOT
-	OPR_LEN
-	OPR_NOUNOPR // sentinel
+	oprMINUS unOpr = iota
+	oprBNOT
+	oprNOT
+	oprLEN
+	oprNOUNOPR // sentinel
 )
 
-// MaxVars is the maximum number of local variables in a function.
-const MaxVars = 200
-
-// MaxFStack is the maximum register index (= MaxArgA = 255).
-const MaxFStack = opcode.MaxArgA
-
-// LuaMultRet is the multi-return sentinel (LUA_MULTRET = -1).
-const LuaMultRet = -1
+// maxVars is the maximum number of local variables in a function.
+const maxVars = 200

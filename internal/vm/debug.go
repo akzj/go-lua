@@ -274,7 +274,7 @@ func findSetRegForward(p *object.Proto, lastpc int, reg int) int {
 // basicGetObjName traces the origin of register 'reg' at 'pc' in proto 'p'.
 // Returns (kind, name) where kind is "constant", "local", "upvalue", or "".
 // Simplified version of basicgetobjname in ldebug.c.
-func BasicGetObjName(p *object.Proto, pc int, reg int) (kind string, name string) {
+func basicGetObjName(p *object.Proto, pc int, reg int) (kind string, name string) {
 	setpc := findSetRegForward(p, pc, reg)
 	if setpc < 0 {
 		// No instruction found that sets this register — try local variable name
@@ -295,7 +295,7 @@ func BasicGetObjName(p *object.Proto, pc int, reg int) (kind string, name string
 	case opcode.OP_MOVE:
 		b := opcode.GetArgB(inst)
 		if b < opcode.GetArgA(inst) {
-			return BasicGetObjName(p, setpc, b)
+			return basicGetObjName(p, setpc, b)
 		}
 	case opcode.OP_GETUPVAL:
 		b := opcode.GetArgB(inst)
@@ -327,7 +327,7 @@ func BasicGetObjName(p *object.Proto, pc int, reg int) (kind string, name string
 		b := opcode.GetArgB(inst)
 		c := opcode.GetArgC(inst)
 		// Use rname logic: only use key name if it's a constant
-		rkind, rn := BasicGetObjName(p, setpc, c)
+		rkind, rn := basicGetObjName(p, setpc, c)
 		keyName := "?"
 		if rkind == "constant" {
 			keyName = rn
@@ -400,10 +400,10 @@ func locVarName(p *object.Proto, pc int, reg int) string {
 	return ""
 }
 
-// VarInfo returns a formatted variable description for a register value,
+// varInfo returns a formatted variable description for a register value,
 // e.g. " (constant '15')" or " (local 'x')". Returns "" if unknown.
 // Mirrors: varinfo + formatvarinfo in ldebug.c
-func VarInfo(L *state.LuaState, reg int) string {
+func varInfo(L *state.LuaState, reg int) string {
 	ci := L.CI
 	if ci == nil || !ci.IsLua() {
 		return ""
@@ -416,7 +416,7 @@ func VarInfo(L *state.LuaState, reg int) string {
 	if pc < 0 {
 		pc = 0
 	}
-	kind, name := BasicGetObjName(cl.Proto, pc, reg)
+	kind, name := basicGetObjName(cl.Proto, pc, reg)
 	if kind == "" {
 		return ""
 	}

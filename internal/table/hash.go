@@ -87,7 +87,7 @@ func mainPosition(t *Table, key object.TValue) int {
 // mainPositionFromNode returns the main position for a node's key.
 // Dead keys (TagDeadKey) preserve their original KeyVal, so we reconstruct
 // the original tag from the Go type of KeyVal to hash correctly.
-func mainPositionFromNode(t *Table, nd *Node) int {
+func mainPositionFromNode(t *Table, nd *node) int {
 	key := nodeKey(nd)
 	if key.Tt == object.TagDeadKey {
 		// Reconstruct original tag from the preserved KeyVal
@@ -121,24 +121,24 @@ func mainPositionFromNode(t *Table, nd *Node) int {
 // Node helpers
 // ---------------------------------------------------------------------------
 
-func nodeKey(nd *Node) object.TValue {
+func nodeKey(nd *node) object.TValue {
 	return object.TValue{Tt: nd.KeyTT, Val: nd.KeyVal}
 }
 
-func setNodeKey(nd *Node, key object.TValue) {
+func setNodeKey(nd *node, key object.TValue) {
 	nd.KeyTT = key.Tt
 	nd.KeyVal = key.Val
 }
 
-func nodeIsEmpty(nd *Node) bool {
+func nodeIsEmpty(nd *node) bool {
 	return nd.Val.Tt.IsNil()
 }
 
-func keyIsNil(nd *Node) bool {
+func keyIsNil(nd *node) bool {
 	return nd.KeyTT == object.TagNil
 }
 
-func keyIsDead(nd *Node) bool {
+func keyIsDead(nd *node) bool {
 	return nd.KeyTT == object.TagDeadKey
 }
 
@@ -146,7 +146,7 @@ func keyIsDead(nd *Node) bool {
 // Key equality
 // ---------------------------------------------------------------------------
 
-func equalKey(k1 object.TValue, n2 *Node, deadOk bool) bool {
+func equalKey(k1 object.TValue, n2 *node, deadOk bool) bool {
 	if k1.Tt != n2.KeyTT {
 		if deadOk && keyIsDead(n2) {
 			// Dead key: compare by value identity for collectable types
@@ -531,7 +531,7 @@ func initHashPart(t *Table, size int) {
 		lsize = 30
 	}
 	actualSize := 1 << lsize
-	t.Nodes = make([]Node, actualSize)
+	t.Nodes = make([]node, actualSize)
 	t.LsizeNode = lsize
 	t.LastFree = actualSize
 	for i := range t.Nodes {

@@ -27,7 +27,7 @@ func FuncNameFromCode(L *state.LuaState, p *object.Proto, pc int) (string, strin
 
 	switch op {
 	case opcode.OP_CALL, opcode.OP_TAILCALL:
-		return BasicGetObjName(p, pc, opcode.GetArgA(i))
+		return basicGetObjName(p, pc, opcode.GetArgA(i))
 	case opcode.OP_TFORCALL:
 		return "for iterator", "for iterator"
 	case opcode.OP_MMBIN, opcode.OP_MMBINI, opcode.OP_MMBINK:
@@ -79,35 +79,35 @@ func callErrorExtra(L *state.LuaState, funcIdx int) string {
 			}
 		}
 	}
-	// Fall back to VarInfo (traces register origin)
+	// Fall back to varInfo (traces register origin)
 	base := 0
 	if L.CI != nil {
 		base = L.CI.Func + 1
 	}
 	reg := funcIdx - base
 	if reg >= 0 {
-		return VarInfo(L, reg)
+		return varInfo(L, reg)
 	}
 	return ""
 }
 
-// RunTypeError raises "attempt to <op> a <type> value <varinfo>".
+// runTypeError raises "attempt to <op> a <type> value <varinfo>".
 // Mirrors: luaG_typeerror in ldebug.c
 // reg is the register index (relative to CI base) holding the offending value.
 // If reg < 0, no variable info is added.
-func RunTypeError(L *state.LuaState, val object.TValue, op string, reg int) {
+func runTypeError(L *state.LuaState, val object.TValue, op string, reg int) {
 	typeName := metamethod.ObjTypeName(L.Global, val)
 	extra := ""
 	if reg >= 0 {
-		extra = VarInfo(L, reg)
+		extra = varInfo(L, reg)
 	}
 	RunError(L, fmt.Sprintf("attempt to %s a %s value%s", op, typeName, extra))
 }
 
-// RunTypeErrorByVal raises a type error, finding the variable name by examining
+// runTypeErrorByVal raises a type error, finding the variable name by examining
 // the current VM instruction to determine which register holds the offending value.
 // Mirrors: luaG_typeerror → varinfo in ldebug.c
-func RunTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
+func runTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
 	typeName := metamethod.ObjTypeName(L.Global, val)
 	extra := ""
 	if L.CI != nil && L.CI.IsLua() {
@@ -155,9 +155,9 @@ func RunTypeErrorByVal(L *state.LuaState, val object.TValue, op string) {
 						}
 					}
 				}
-				// If we got a register, use VarInfo to get the name
+				// If we got a register, use varInfo to get the name
 				if reg >= 0 && extra == "" {
-					extra = VarInfo(L, reg)
+					extra = varInfo(L, reg)
 				}
 			}
 		}

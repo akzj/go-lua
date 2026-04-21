@@ -18,8 +18,8 @@ import (
 // Number conversion helpers
 // ---------------------------------------------------------------------------
 
-// ToNumber tries to convert a TValue to float64.
-func ToNumber(v object.TValue) (float64, bool) {
+// toNumber tries to convert a TValue to float64.
+func toNumber(v object.TValue) (float64, bool) {
 	switch v.Tt {
 	case object.TagFloat:
 		return v.Val.(float64), true
@@ -31,7 +31,7 @@ func ToNumber(v object.TValue) (float64, bool) {
 	return 0, false
 }
 
-// ToInteger tries to convert a TValue to int64.
+// toInteger tries to convert a TValue to int64.
 // toIntegerStrict converts a TValue to int64 without string coercion.
 // Used for bitwise ops which in Lua 5.5 do NOT coerce strings.
 func toIntegerStrict(v object.TValue) (int64, bool) {
@@ -39,26 +39,26 @@ func toIntegerStrict(v object.TValue) (int64, bool) {
 	case object.TagInteger:
 		return v.Val.(int64), true
 	case object.TagFloat:
-		return FloatToInteger(v.Val.(float64))
+		return floatToInteger(v.Val.(float64))
 	}
 	return 0, false
 }
 
-func ToInteger(v object.TValue) (int64, bool) {
+func toInteger(v object.TValue) (int64, bool) {
 	switch v.Tt {
 	case object.TagInteger:
 		return v.Val.(int64), true
 	case object.TagFloat:
-		return FloatToInteger(v.Val.(float64))
+		return floatToInteger(v.Val.(float64))
 	case object.TagShortStr, object.TagLongStr:
 		return stringToInteger(v.Val.(*object.LuaString).Data)
 	}
 	return 0, false
 }
 
-// FloatToInteger converts a float64 to int64 if it has an exact integer value
+// floatToInteger converts a float64 to int64 if it has an exact integer value
 // and is within int64 range. Mirrors: luaO_cast_number2int in lobject.c.
-func FloatToInteger(f float64) (int64, bool) {
+func floatToInteger(f float64) (int64, bool) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, false
 	}
@@ -127,10 +127,10 @@ func toNumberNS(v object.TValue) (object.TValue, bool) {
 	return object.Nil, false
 }
 
-// ToNumberNS converts a TValue to float64 WITHOUT string coercion.
+// toNumberNSFloat converts a TValue to float64 WITHOUT string coercion.
 // This mirrors C Lua's tonumberns for float-only ops (POW, DIV).
 // Only handles int64 (promoted to float) and float64 types.
-func ToNumberNS(v object.TValue) (float64, bool) {
+func toNumberNSFloat(v object.TValue) (float64, bool) {
 	switch v.Tt {
 	case object.TagFloat:
 		return v.Float(), true
@@ -288,15 +288,15 @@ func stringToInteger(s string) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return FloatToInteger(f)
+	return floatToInteger(f)
 }
 
 // ---------------------------------------------------------------------------
 // Arithmetic helpers
 // ---------------------------------------------------------------------------
 
-// IDiv performs integer floor division (m // n).
-func IDiv(L *state.LuaState, m, n int64) int64 {
+// iDiv performs integer floor division (m // n).
+func iDiv(L *state.LuaState, m, n int64) int64 {
 	if uint64(n)+1 <= 1 { // n == 0 or n == -1
 		if n == 0 {
 			RunError(L, "attempt to divide by zero")
@@ -310,8 +310,8 @@ func IDiv(L *state.LuaState, m, n int64) int64 {
 	return q
 }
 
-// IMod performs integer modulus (m % n).
-func IMod(L *state.LuaState, m, n int64) int64 {
+// iMod performs integer modulus (m % n).
+func iMod(L *state.LuaState, m, n int64) int64 {
 	if uint64(n)+1 <= 1 {
 		if n == 0 {
 			RunError(L, "attempt to perform 'n%0'")
@@ -325,8 +325,8 @@ func IMod(L *state.LuaState, m, n int64) int64 {
 	return r
 }
 
-// FMod performs float modulus.
-func FMod(m, n float64) float64 {
+// fMod performs float modulus.
+func fMod(m, n float64) float64 {
 	r := math.Mod(m, n)
 	if r != 0 && (math.Signbit(r) != math.Signbit(n)) {
 		r += n
@@ -334,8 +334,8 @@ func FMod(m, n float64) float64 {
 	return r
 }
 
-// ShiftL performs left shift (or right shift if y < 0).
-func ShiftL(x, y int64) int64 {
+// shiftL performs left shift (or right shift if y < 0).
+func shiftL(x, y int64) int64 {
 	if y < 0 {
 		if y <= -64 {
 			return 0
@@ -536,11 +536,11 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 		// Different tags — check int/float cross-comparison
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
-				i2, ok := FloatToInteger(t2.Val.(float64))
+				i2, ok := floatToInteger(t2.Val.(float64))
 				return ok && t1.Val.(int64) == i2
 			}
 			if t1.IsFloat() && t2.IsInteger() {
-				i1, ok := FloatToInteger(t1.Val.(float64))
+				i1, ok := floatToInteger(t1.Val.(float64))
 				return ok && i1 == t2.Val.(int64)
 			}
 		}
@@ -607,16 +607,16 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 	}
 }
 
-// RawEqualObj performs raw equality (no metamethods).
-func RawEqualObj(t1, t2 object.TValue) bool {
+// rawEqualObj performs raw equality (no metamethods).
+func rawEqualObj(t1, t2 object.TValue) bool {
 	if t1.Tt != t2.Tt {
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
-				i2, ok := FloatToInteger(t2.Val.(float64))
+				i2, ok := floatToInteger(t2.Val.(float64))
 				return ok && t1.Val.(int64) == i2
 			}
 			if t1.IsFloat() && t2.IsInteger() {
-				i1, ok := FloatToInteger(t1.Val.(float64))
+				i1, ok := floatToInteger(t1.Val.(float64))
 				return ok && i1 == t2.Val.(int64)
 			}
 		}
@@ -680,7 +680,7 @@ func getTableTM(g *state.GlobalState, t *table.Table, event metamethod.TMS) obje
 
 // callTMRes calls a metamethod with two arguments and returns the result.
 // IMPORTANT: Uses L.Top as scratch space. Callers must ensure L.Top is above
-// any registers they need preserved (PosCall moves result to the func slot).
+// any registers they need preserved (posCall moves result to the func slot).
 func callTMRes(L *state.LuaState, tm, p1, p2 object.TValue) object.TValue {
 	// Push: tm, p1, p2
 	top := L.Top
@@ -689,7 +689,7 @@ func callTMRes(L *state.LuaState, tm, p1, p2 object.TValue) object.TValue {
 	L.Stack[top+2].Val = p2
 	L.Top = top + 3
 	Call(L, top, 1)
-	result := L.Stack[top].Val // PosCall moves result to func slot
+	result := L.Stack[top].Val // posCall moves result to func slot
 	L.Top = top                // restore top
 	return result
 }
@@ -717,7 +717,7 @@ func opErrorMsg(L *state.LuaState, p1, p2 object.TValue, op string, reg1, reg2 i
 	}
 	info := ""
 	if badReg >= 0 {
-		info = VarInfo(L, badReg)
+		info = varInfo(L, badReg)
 	}
 	return "attempt to " + op + " a " + metamethod.ObjTypeName(L.Global, badVal) + " value" + info
 }
@@ -742,7 +742,7 @@ func tryBinTM(L *state.LuaState, p1, p2 object.TValue, res int, event metamethod
 				if p1.IsFloat() {
 					badReg = reg1
 				}
-				RunError(L, "number"+VarInfo(L, badReg)+" has no integer representation")
+				RunError(L, "number"+varInfo(L, badReg)+" has no integer representation")
 			}
 			RunError(L, opErrorMsg(L, p1, p2, "perform bitwise operation on", reg1, reg2))
 		}
@@ -1045,7 +1045,7 @@ func FinishGet(L *state.LuaState, t, key object.TValue, ra int) {
 		} else {
 			tm = metamethod.GetTMByObj(L.Global, t, metamethod.TM_INDEX)
 			if tm.IsNil() {
-				RunTypeErrorByVal(L, t, "index")
+				runTypeErrorByVal(L, t, "index")
 			}
 		}
 		if tm.IsFunction() {
@@ -1116,7 +1116,7 @@ func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 		} else {
 			tm = metamethod.GetTMByObj(L.Global, t, metamethod.TM_NEWINDEX)
 			if tm.IsNil() {
-				RunTypeErrorByVal(L, t, "index")
+				runTypeErrorByVal(L, t, "index")
 			}
 		}
 		if tm.IsFunction() {
@@ -1156,7 +1156,7 @@ func forLimit(L *state.LuaState, init int64, plimit object.TValue, limit *int64,
 		*limit = li
 	} else {
 		// Not coercible to integer with floor/ceil rounding
-		fl, ok := ToNumber(plimit)
+		fl, ok := toNumber(plimit)
 		if !ok {
 			forerror(L, plimit, "limit")
 		}
@@ -1223,8 +1223,8 @@ func floatToIntegerRounded(f float64, step int64) (int64, bool) {
 	return 0, false
 }
 
-// ForPrep prepares a numeric for loop. Returns true to skip the loop.
-func ForPrep(L *state.LuaState, ra int) bool {
+// forPrep prepares a numeric for loop. Returns true to skip the loop.
+func forPrep(L *state.LuaState, ra int) bool {
 	pinit := L.Stack[ra].Val
 	plimit := L.Stack[ra+1].Val
 	pstep := L.Stack[ra+2].Val
@@ -1258,9 +1258,9 @@ func ForPrep(L *state.LuaState, ra int) bool {
 		L.Stack[ra+2].Val = object.MakeInteger(init)
 	} else {
 		// Float loop
-		finit, ok1 := ToNumber(pinit)
-		flimit, ok2 := ToNumber(plimit)
-		fstep, ok3 := ToNumber(pstep)
+		finit, ok1 := toNumber(pinit)
+		flimit, ok2 := toNumber(plimit)
+		fstep, ok3 := toNumber(pstep)
 		if !ok1 {
 			forerror(L, pinit, "initial value")
 		}
@@ -1287,9 +1287,9 @@ func ForPrep(L *state.LuaState, ra int) bool {
 	return false
 }
 
-// ForLoop performs one iteration of a numeric for loop.
+// forLoop performs one iteration of a numeric for loop.
 // Returns true if the loop should continue (jump back).
-func ForLoop(L *state.LuaState, ra int) bool {
+func forLoop(L *state.LuaState, ra int) bool {
 	if L.Stack[ra+1].Val.IsInteger() {
 		// Integer loop: ra=count, ra+1=step, ra+2=control
 		count := uint64(L.Stack[ra].Val.Integer())
@@ -1326,8 +1326,8 @@ func ForLoop(L *state.LuaState, ra int) bool {
 // Closure creation
 // ---------------------------------------------------------------------------
 
-// PushClosure creates a new Lua closure and stores it in L.Stack[ra].
-func PushClosure(L *state.LuaState, p *object.Proto, encup []*closure.UpVal, base, ra int) {
+// pushClosure creates a new Lua closure and stores it in L.Stack[ra].
+func pushClosure(L *state.LuaState, p *object.Proto, encup []*closure.UpVal, base, ra int) {
 	nup := len(p.Upvalues)
 	ncl := closure.NewLClosure(p, nup)
 	L.Global.LinkGC(ncl) // V5: register in allgc chain
@@ -1345,13 +1345,13 @@ func PushClosure(L *state.LuaState, p *object.Proto, encup []*closure.UpVal, bas
 // Vararg handling
 // ---------------------------------------------------------------------------
 
-// AdjustVarargs adjusts the stack for a vararg function call.
+// adjustVarargs adjusts the stack for a vararg function call.
 // Mirrors C Lua's luaT_adjustvarargs / buildhiddenargs.
 // Layout after adjustment:
 //
 //	[old ci.Func] ... [extra args] [func copy] [fixed params] ...
 //	ci.Func now points to the func copy (after the extra args).
-func AdjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
+func adjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 	nfixparams := int(p.NumParams)
 	totalargs := L.Top - ci.Func - 1
 	nextra := totalargs - nfixparams
@@ -1410,11 +1410,11 @@ func AdjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 	}
 }
 
-// GetVarargs copies vararg values to the stack starting at ra.
+// getVarargs copies vararg values to the stack starting at ra.
 // When vatab >= 0, reads from the vararg table at ci.Func+vatab+1.
 // When vatab < 0, reads from hidden stack args below ci.Func.
 // Mirrors: luaT_getvarargs in ltm.c
-func GetVarargs(L *state.LuaState, ci *state.CallInfo, ra int, n int, vatab int) {
+func getVarargs(L *state.LuaState, ci *state.CallInfo, ra int, n int, vatab int) {
 	var h *table.Table
 	if vatab >= 0 {
 		h = L.Stack[ci.Func+vatab+1].Val.Val.(*table.Table)

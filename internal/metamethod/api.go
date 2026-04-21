@@ -63,19 +63,19 @@ const (
 	BitDummy byte = 0x40
 )
 
-// HasFastTM returns true if the metamethod might be present (cache says not absent).
+// hasFastTM returns true if the metamethod might be present (cache says not absent).
 // mt is the metatable flags byte, event is the TMS index (must be <= TM_EQ).
-func HasFastTM(mtFlags byte, event TMS) bool {
+func hasFastTM(mtFlags byte, event TMS) bool {
 	return mtFlags&(1<<uint(event)) == 0
 }
 
-// SetAbsent marks a metamethod as absent in the flags cache.
-func SetAbsent(flags *byte, event TMS) {
+// setAbsent marks a metamethod as absent in the flags cache.
+func setAbsent(flags *byte, event TMS) {
 	*flags |= 1 << uint(event)
 }
 
-// InvalidateCache clears all fast-access metamethod cache bits.
+// invalidateCache clears all fast-access metamethod cache bits.
 // Called when a table's metatable is changed.
-func InvalidateCache(flags *byte) {
+func invalidateCache(flags *byte) {
 	*flags &^= MaskFlags
 }
