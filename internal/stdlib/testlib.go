@@ -1357,14 +1357,14 @@ func testSethook(L *luaapi.State) int {
 	return 0
 }
 
+// hookEventNames maps hook event integer constants to string names.
+// Matches C Lua's hooknames[] in ldblib.c.
+var hookEventNames = [5]string{"call", "return", "line", "count", "tail call"}
+
 // sethookaux sets a C-script hook on the target thread.
 // Mirrors: sethookaux + Chook in ltests.c.
-// hookDispatch (in vm/do.go) calls the hook as a C function with:
-//
-//	arg1 = event name (string)
-//	arg2 = line number (integer, line hooks only)
-//
-// The Go closure captures 'script' and runs it via runC.
+// hookDispatch calls CFunction hooks directly (no CI frame).
+// Event/line are read from L.HookEvent/L.HookLine state fields.
 func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script string) {
 	ls1 := L1.Internal.(*state.LuaState)
 	if script == "" {
@@ -1375,30 +1375,20 @@ func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script strin
 		return
 	}
 	hookFn := state.CFunction(func(hookL *state.LuaState) int {
-		ci := hookL.CI
-		// Read event string (arg 1) and line (arg 2) from the call frame
-		eventIdx := ci.Func + 1
+		// Read event/line from state fields (set by hookDispatch).
+		// hookDispatch calls CFunction hooks directly without CI frame.
+		eventInt := hookL.HookEvent
 		var eventStr string
-		if eventIdx < hookL.Top {
-			if s, ok := hookL.Stack[eventIdx].Val.Obj.(*object.LuaString); ok {
-				eventStr = s.String()
-			}
+		if eventInt >= 0 && eventInt < len(hookEventNames) {
+			eventStr = hookEventNames[eventInt]
 		}
-		lineIdx := ci.Func + 2
-		var lineVal int64
-		hasLine := false
-		if lineIdx < hookL.Top {
-			lv := hookL.Stack[lineIdx].Val
-			if lv.IsInteger() {
-				lineVal = lv.Integer()
-				hasLine = true
-			}
-		}
+		lineVal := hookL.HookLine
+
 		// Push event and line for the script (mirrors C Lua's Chook)
 		apiL := &luaapi.State{Internal: hookL}
 		apiL.PushString(eventStr)
-		if hasLine {
-			apiL.PushInteger(lineVal)
+		if lineVal >= 0 {
+			apiL.PushInteger(int64(lineVal))
 		}
 		runC(apiL, apiL, script)
 		return 0
