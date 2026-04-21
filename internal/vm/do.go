@@ -31,27 +31,27 @@ const (
 	errorStackSize = state.MaxStack + stackErrSpace
 )
 
-// MaxCCMT is the maximum number of __call metamethod chain depth.
-const MaxCCMT = 0xF << state.CISTCCMTShift
+// maxCCMT is the maximum number of __call metamethod chain depth.
+const maxCCMT = 0xF << state.CISTCCMTShift
 
 // ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 
-// Throw raises a Lua error by panicking with a state.LuaError.
+// throw raises a Lua error by panicking with a state.LuaError.
 // This is the Go equivalent of C's luaD_throw / LUAI_THROW.
-// The panic will be caught by the nearest PCall/RunProtected.
-func Throw(L *state.LuaState, status int) {
+// The panic will be caught by the nearest PCall/runProtected.
+func throw(L *state.LuaState, status int) {
 	panic(state.LuaError{Status: status})
 }
 
-// SetErrorObj sets the error object on the stack at oldtop.
+// setErrorObj sets the error object on the stack at oldtop.
 // Mirrors: luaD_seterrorobj in ldo.c
-func SetErrorObj(L *state.LuaState, errcode int, oldtop int) {
+func setErrorObj(L *state.LuaState, errcode int, oldtop int) {
 	// Bounds check: if oldtop is beyond the stack, we can't set the error.
 	// This can happen during cascading errors in __close after stack overflow.
 	if oldtop >= len(L.Stack) {
-		Throw(L, state.StatusErrErr)
+		throw(L, state.StatusErrErr)
 		return
 	}
 	if errcode == state.StatusErrMem {
@@ -66,18 +66,18 @@ func SetErrorObj(L *state.LuaState, errcode int, oldtop int) {
 	L.Top = oldtop + 1
 }
 
-// ErrorErr raises an error during error handling (error in error handler).
+// errorErr raises an error during error handling (error in error handler).
 // Mirrors: luaD_errerr in ldo.c
-func ErrorErr(L *state.LuaState) {
+func errorErr(L *state.LuaState) {
 	// Bounds check: if L.Top is at or beyond the stack limit,
 	// we can't push the error message. Just throw directly.
 	if L.Top >= len(L.Stack) {
-		Throw(L, state.StatusErrErr)
+		throw(L, state.StatusErrErr)
 		return
 	}
 	L.Stack[L.Top].Val = makeInternedString(L, "error in error handling")
 	L.Top++
-	Throw(L, state.StatusErrErr)
+	throw(L, state.StatusErrErr)
 }
 
 // ErrorMsg calls the error handler (if set) then throws a runtime error.
@@ -96,7 +96,7 @@ func ErrorMsg(L *state.LuaState) {
 		// Bounds check: need L.Top to be a valid index for writing
 		if L.Top >= len(L.Stack) {
 			// No room to rearrange stack for handler call — error in error handling
-			ErrorErr(L)
+			errorErr(L)
 			return
 		}
 		// Stack: [..., errmsg] (at Top-1)
@@ -107,23 +107,23 @@ func ErrorMsg(L *state.LuaState) {
 		// Clear ErrFunc while running the handler to prevent recursive
 		// ErrorMsg calls from re-invoking the handler. In C Lua this
 		// recursion is naturally bounded by the C stack; in Go the
-		// RunProtected/recover mechanism allows unbounded recursion.
+		// runProtected/recover mechanism allows unbounded recursion.
 		// Clearing ErrFunc ensures that if the handler itself errors,
 		// the nested ErrorMsg throws directly (no handler), and our
-		// RunProtected catches it with a non-OK status.
+		// runProtected catches it with a non-OK status.
 		savedErrFunc := L.ErrFunc
 		L.ErrFunc = 0
-		status := RunProtected(L, func() {
+		status := runProtected(L, func() {
 			CallNoYield(L, L.Top-2, 1)
 		})
 		L.ErrFunc = savedErrFunc
 		if status != state.StatusOK {
 			// Error in error handler
-			ErrorErr(L)
+			errorErr(L)
 		}
 		// handler's return value is now at Top-1, replacing original error
 	}
-	Throw(L, state.StatusErrRun)
+	throw(L, state.StatusErrRun)
 }
 
 // RunError raises a runtime error with a string message.
@@ -138,10 +138,10 @@ func RunError(L *state.LuaState, msg string) {
 // Stack management
 // ---------------------------------------------------------------------------
 
-// ReallocStack reallocates the stack to newsize.
+// reallocStack reallocates the stack to newsize.
 // Returns true on success. If raiseerror is true, panics on failure.
 // Mirrors: luaD_reallocstack in ldo.c
-func ReallocStack(L *state.LuaState, newsize int) {
+func reallocStack(L *state.LuaState, newsize int) {
 	oldsize := len(L.Stack)
 	newStack := make([]object.StackValue, newsize)
 	copy(newStack, L.Stack)
@@ -152,10 +152,10 @@ func ReallocStack(L *state.LuaState, newsize int) {
 	L.Stack = newStack
 }
 
-// GrowStack ensures at least n free stack slots above L.Top.
+// growStack ensures at least n free stack slots above L.Top.
 // If raiseerror is true, raises an error on stack overflow.
 // Mirrors: luaD_growstack in ldo.c
-func GrowStack(L *state.LuaState, n int, raiseerror bool) bool {
+func growStack(L *state.LuaState, n int, raiseerror bool) bool {
 	size := len(L.Stack)
 	if size > state.MaxStack {
 		// Already beyond normal stack limit (in error stack space).
@@ -167,7 +167,7 @@ func GrowStack(L *state.LuaState, n int, raiseerror bool) bool {
 		// Try to grow to errorStackSize if not already there.
 		errSize := errorStackSize + state.ExtraStack
 		if size < errSize {
-			ReallocStack(L, errSize)
+			reallocStack(L, errSize)
 		}
 		// Raise "stack overflow" — do NOT return true here.
 		// C Lua (ldo.c:384-386): realloc to ERRORSTACKSIZE, then raise error.
@@ -188,12 +188,12 @@ func GrowStack(L *state.LuaState, n int, raiseerror bool) bool {
 			newsize = needed
 		}
 		if newsize <= state.MaxStack {
-			ReallocStack(L, newsize+state.ExtraStack)
+			reallocStack(L, newsize+state.ExtraStack)
 			return true
 		}
 	}
 	// Stack overflow — grow to error stack size for error handling room
-	ReallocStack(L, errorStackSize+state.ExtraStack)
+	reallocStack(L, errorStackSize+state.ExtraStack)
 	if raiseerror {
 		RunError(L, "stack overflow")
 	}
@@ -203,20 +203,20 @@ func GrowStack(L *state.LuaState, n int, raiseerror bool) bool {
 // CheckStack ensures at least n free stack slots, growing if needed.
 func CheckStack(L *state.LuaState, n int) {
 	if L.Top+n > L.StackLast() {
-		GrowStack(L, n, true)
+		growStack(L, n, true)
 	}
 }
 
-// IncTop increments L.Top with a stack check.
+// incTop increments L.Top with a stack check.
 // Mirrors: luaD_inctop in ldo.c
-func IncTop(L *state.LuaState) {
+func incTop(L *state.LuaState) {
 	L.Top++
 	CheckStack(L, 0)
 }
 
-// StackInUse computes how much of the stack is in use.
+// stackInUse computes how much of the stack is in use.
 // Mirrors: stackinuse in ldo.c
-func StackInUse(L *state.LuaState) int {
+func stackInUse(L *state.LuaState) int {
 	lim := L.Top
 	for ci := L.CI; ci != nil; ci = ci.Prev {
 		if lim < ci.Top {
@@ -230,10 +230,10 @@ func StackInUse(L *state.LuaState) int {
 	return res
 }
 
-// ShrinkStack reduces the stack size if it's much larger than needed.
+// shrinkStack reduces the stack size if it's much larger than needed.
 // Mirrors: luaD_shrinkstack in ldo.c
-func ShrinkStack(L *state.LuaState) {
-	inuse := StackInUse(L)
+func shrinkStack(L *state.LuaState) {
+	inuse := stackInUse(L)
 	maxUse := inuse * 3
 	if maxUse > state.MaxStack {
 		maxUse = state.MaxStack
@@ -243,7 +243,7 @@ func ShrinkStack(L *state.LuaState) {
 		if nsize > state.MaxStack {
 			nsize = state.MaxStack
 		}
-		ReallocStack(L, nsize+state.ExtraStack)
+		reallocStack(L, nsize+state.ExtraStack)
 	}
 	state.ShrinkCI(L)
 }
@@ -276,25 +276,25 @@ func prepCallInfo(L *state.LuaState, funcIdx int, status uint32, top int) *state
 }
 
 // precallC handles the call to a C function (Go function).
-// Executes the function immediately and calls PosCall.
+// Executes the function immediately and calls posCall.
 func precallC(L *state.LuaState, funcIdx int, status uint32, f state.CFunction) int {
 	// Ensure minimum stack size
 	CheckStack(L, luaMinStack)
 	ci := prepCallInfo(L, funcIdx, status|state.CISTC, L.Top+luaMinStack)
 	// Fire call hook if active
 	if L.HookMask&state.MaskCall != 0 {
-		CallHook(L, ci)
+		callHook(L, ci)
 	}
-	// Execute the C function
+	// execute the C function
 	n := f(L)
-	PosCall(L, ci, n)
+	posCall(L, ci, n)
 	return n
 }
 
-// TryFuncTM tries the __call metamethod for a non-function value.
+// tryFuncTM tries the __call metamethod for a non-function value.
 // Shifts the stack to make room for the metamethod and returns updated status.
 // Mirrors: tryfuncTM in ldo.c
-func TryFuncTM(L *state.LuaState, funcIdx int, status uint32) uint32 {
+func tryFuncTM(L *state.LuaState, funcIdx int, status uint32) uint32 {
 	tm := metamethod.GetTMByObj(L.Global, L.Stack[funcIdx].Val, metamethod.TM_CALL)
 	if tm.IsNil() {
 		// Build error message with context.
@@ -309,16 +309,16 @@ func TryFuncTM(L *state.LuaState, funcIdx int, status uint32) uint32 {
 	}
 	L.Top++
 	L.Stack[funcIdx].Val = tm // metamethod is the new function
-	if status&MaxCCMT == MaxCCMT {
+	if status&maxCCMT == maxCCMT {
 		RunError(L, "'__call' chain too long")
 	}
 	return status + (1 << state.CISTCCMTShift)
 }
 
-// PreCall prepares a function call. For C functions, executes immediately
+// preCall prepares a function call. For C functions, executes immediately
 // and returns nil. For Lua functions, creates a CallInfo and returns it.
 // Mirrors: luaD_precall in ldo.c
-func PreCall(L *state.LuaState, funcIdx int, nResults int) *state.CallInfo {
+func preCall(L *state.LuaState, funcIdx int, nResults int) *state.CallInfo {
 	status := uint32(nResults + 1)
 retry:
 	fval := L.Stack[funcIdx].Val
@@ -339,11 +339,11 @@ retry:
 		}
 		// Fire call hook if active.
 		// For vararg functions (PF_VAHID), defer the call hook to OP_VARARGPREP
-		// (after AdjustVarargs shifts the stack). This matches C Lua where
+		// (after adjustVarargs shifts the stack). This matches C Lua where
 		// luaG_tracecall returns 0 for vararg functions, and the hook fires
 		// inside OP_VARARGPREP instead.
 		if L.HookMask != 0 && !p.IsVararg() {
-			CallHook(L, ci)
+			callHook(L, ci)
 		}
 		return ci
 
@@ -360,14 +360,14 @@ retry:
 	default:
 		// Not a function — try __call metamethod
 		CheckStack(L, 1)
-		status = TryFuncTM(L, funcIdx, status)
+		status = tryFuncTM(L, funcIdx, status)
 		goto retry
 	}
 }
 
-// PosCall performs post-call cleanup: moves results, adjusts top, unwinds CI.
+// posCall performs post-call cleanup: moves results, adjusts top, unwinds CI.
 // Mirrors: luaD_poscall in ldo.c
-func PosCall(L *state.LuaState, ci *state.CallInfo, nres int) {
+func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 	wanted := ci.NResults()
 	res := ci.Func // destination for results
 
@@ -484,9 +484,9 @@ func retHook(L *state.LuaState, ci *state.CallInfo, nres int) {
 	}
 }
 
-// CallHook fires the call hook for a new function call.
+// callHook fires the call hook for a new function call.
 // Mirrors: luaD_hookcall in ldo.c
-func CallHook(L *state.LuaState, ci *state.CallInfo) {
+func callHook(L *state.LuaState, ci *state.CallInfo) {
 	L.OldPC = 0 // set 'oldpc' for new function
 	if L.HookMask&state.MaskCall == 0 {
 		return
@@ -515,10 +515,10 @@ func CallHook(L *state.LuaState, ci *state.CallInfo) {
 	}
 }
 
-// TraceExec handles line and count hooks during VM execution.
+// traceExec handles line and count hooks during VM execution.
 // Returns true if trap should stay active.
 // Mirrors: luaG_traceexec in ldebug.c
-func TraceExec(L *state.LuaState, ci *state.CallInfo) bool {
+func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	mask := L.HookMask
 	if mask&(state.MaskLine|state.MaskCount) == 0 {
 		return false // no line/count hooks, turn off trap
@@ -632,11 +632,11 @@ func genMoveResults(L *state.LuaState, res int, nres int, wanted int) {
 	L.Top = res + wanted
 }
 
-// PreTailCall prepares a tail call. Returns number of C function results,
+// preTailCall prepares a tail call. Returns number of C function results,
 // or -1 for Lua function (caller should continue the loop).
 // delta is the vararg adjustment: ci.NExtraArgs + nparams1 (or 0 for non-vararg).
 // Mirrors: luaD_pretailcall in ldo.c
-func PreTailCall(L *state.LuaState, ci *state.CallInfo, funcIdx int, narg1 int, delta int) int {
+func preTailCall(L *state.LuaState, ci *state.CallInfo, funcIdx int, narg1 int, delta int) int {
 	status := uint32(state.MultiRet + 1)
 retry:
 	fval := L.Stack[funcIdx].Val
@@ -673,33 +673,33 @@ retry:
 
 	default:
 		CheckStack(L, 1)
-		status = TryFuncTM(L, funcIdx, status)
+		status = tryFuncTM(L, funcIdx, status)
 		narg1++
 		goto retry
 	}
 }
 
-// Call performs a function call. For Lua functions, calls Execute.
+// Call performs a function call. For Lua functions, calls execute.
 // Mirrors: luaD_call / ccall in ldo.c
 func Call(L *state.LuaState, funcIdx int, nResults int) {
 	// Increment C call depth and check for overflow.
 	// Mirrors C Lua's luaE_incCstack + luaE_checkcstack:
 	//   == MaxCCalls: raise "C stack overflow" (error handler gets 10% buffer)
-	//   >= MaxCCalls * 11/10: ErrorErr (no handler, exhausted buffer)
+	//   >= MaxCCalls * 11/10: errorErr (no handler, exhausted buffer)
 	L.NCCalls++
 	if L.CCalls() >= state.MaxCCalls {
 		if L.CCalls() == state.MaxCCalls {
 			RunError(L, "C stack overflow")
 		} else if L.CCalls() >= state.MaxCCalls*11/10 {
-			ErrorErr(L)
+			errorErr(L)
 		}
 		// Between MaxCCalls and MaxCCalls*1.1: allow (error handler buffer)
 	}
-	ci := PreCall(L, funcIdx, nResults)
+	ci := preCall(L, funcIdx, nResults)
 	if ci != nil {
 		// Lua function — execute it
 		ci.CallStatus |= state.CISTFresh
-		Execute(L, ci)
+		execute(L, ci)
 	}
 	L.NCCalls--
 }
@@ -712,13 +712,13 @@ func CallNoYield(L *state.LuaState, funcIdx int, nResults int) {
 		if L.CCalls() == state.MaxCCalls {
 			RunError(L, "C stack overflow")
 		} else if L.CCalls() >= state.MaxCCalls*11/10 {
-			ErrorErr(L)
+			errorErr(L)
 		}
 	}
-	ci := PreCall(L, funcIdx, nResults)
+	ci := preCall(L, funcIdx, nResults)
 	if ci != nil {
 		ci.CallStatus |= state.CISTFresh
-		Execute(L, ci)
+		execute(L, ci)
 	}
 	L.NCCalls -= 0x00010001
 }
@@ -727,10 +727,10 @@ func CallNoYield(L *state.LuaState, funcIdx int, nResults int) {
 // Protected calls
 // ---------------------------------------------------------------------------
 
-// RunProtected runs a function in protected mode using Go's panic/recover.
+// runProtected runs a function in protected mode using Go's panic/recover.
 // Returns the status code (StatusOK on success, error status on failure).
 // Mirrors: luaD_rawrunprotected in ldo.c
-func RunProtected(L *state.LuaState, f func()) (status int) {
+func runProtected(L *state.LuaState, f func()) (status int) {
 	oldNCCalls := L.NCCalls
 	status = state.StatusOK
 	defer func() {
@@ -738,7 +738,7 @@ func RunProtected(L *state.LuaState, f func()) (status int) {
 			switch e := r.(type) {
 			case state.LuaBaseLevel:
 				// Self-close: propagate past all inner error handlers
-				// to the outermost RunProtected (Resume).
+				// to the outermost runProtected (Resume).
 				// Mirrors: luaD_throwbaselevel in ldo.c
 				panic(e)
 			case state.LuaError:
@@ -793,13 +793,13 @@ func finishPCallK(L *state.LuaState, ci *state.CallInfo) int {
 		// Save error object at funcIdx so it survives across yields
 		L.Stack[funcIdx].Val = errObj
 		L.Top = funcIdx + 1
-		CloseTBCWithError(L, funcIdx, status, errObj, true) // yieldable!
+		closeTBCWithError(L, funcIdx, status, errObj, true) // yieldable!
 		// Recover error object from funcIdx (in case close changed L.Top)
 		errObj = L.Stack[funcIdx].Val
-		// Put error back at top for SetErrorObj
+		// Put error back at top for setErrorObj
 		L.Stack[L.Top-1].Val = errObj
-		SetErrorObj(L, status, funcIdx)
-		ShrinkStack(L)
+		setErrorObj(L, status, funcIdx)
+		shrinkStack(L)
 		ci.SetRecst(state.StatusOK) // clear for next iteration
 	}
 	ci.CallStatus &^= state.CISTYPCall
@@ -817,7 +817,7 @@ func PCall(L *state.LuaState, funcIdx int, nResults int, errFunc int) int {
 	L.ErrFunc = errFunc
 
 	// PATH B: Yieldable with continuation — use plain Call (unprotected).
-	// Errors propagate to Resume's RunProtected → precover → finishPCallK.
+	// Errors propagate to Resume's runProtected → precover → finishPCallK.
 	// Mirrors: lua_pcallk PATH B in lapi.c:1099-1108
 	if L.Yieldable() && oldCI.K != nil {
 		oldCI.CallStatus |= state.CISTYPCall
@@ -830,9 +830,9 @@ func PCall(L *state.LuaState, funcIdx int, nResults int, errFunc int) int {
 		return state.StatusOK
 	}
 
-	// PATH A: Non-yieldable — use RunProtected (catches errors locally).
+	// PATH A: Non-yieldable — use runProtected (catches errors locally).
 	// Mirrors: lua_pcallk PATH A → luaD_pcall in ldo.c
-	status := RunProtected(L, func() {
+	status := runProtected(L, func() {
 		Call(L, funcIdx, nResults)
 	})
 
@@ -861,13 +861,13 @@ func PCall(L *state.LuaState, funcIdx int, nResults int, errFunc int) int {
 			if L.Top > oldTop {
 				errObj = L.Stack[L.Top-1].Val
 			}
-			status, errObj = CloseProtected(L, oldTop, status, errObj)
+			status, errObj = closeProtected(L, oldTop, status, errObj)
 			if L.Top > oldTop {
 				L.Stack[L.Top-1].Val = errObj
 			}
 		}
-		SetErrorObj(L, status, oldTop)
-		ShrinkStack(L)
+		setErrorObj(L, status, oldTop)
+		shrinkStack(L)
 	}
 	L.ErrFunc = oldErrFunc
 	return status
@@ -877,30 +877,30 @@ func PCall(L *state.LuaState, funcIdx int, nResults int, errFunc int) int {
 // Parser integration
 // ---------------------------------------------------------------------------
 
-// ProtectedParser calls the parser in protected mode.
+// protectedParser calls the parser in protected mode.
 // Pushes the resulting closure on the stack.
 // Mirrors: luaD_protectedparser in ldo.c
-func ProtectedParser(L *state.LuaState, reader lex.LexReader, source string) int {
+func protectedParser(L *state.LuaState, reader lex.LexReader, source string) int {
 	// Increment non-yieldable count during parsing
 	L.NCCalls += 0x00010000
 
 	oldTop := L.Top
-	status := RunProtected(L, func() {
-		FParser(L, reader, source)
+	status := runProtected(L, func() {
+		fParser(L, reader, source)
 	})
 
 	if status != state.StatusOK {
 		// Parsing failed
-		SetErrorObj(L, status, oldTop)
+		setErrorObj(L, status, oldTop)
 	}
 
 	L.NCCalls -= 0x00010000
 	return status
 }
 
-// FParser calls the parser and pushes the resulting closure on the stack.
+// fParser calls the parser and pushes the resulting closure on the stack.
 // Mirrors: f_parser in ldo.c
-func FParser(L *state.LuaState, reader lex.LexReader, source string) {
+func fParser(L *state.LuaState, reader lex.LexReader, source string) {
 	// Parse source into a Proto
 	proto := parse.Parse(source, reader)
 
@@ -948,7 +948,7 @@ func FParser(L *state.LuaState, reader lex.LexReader, source string) {
 // Load compiles Lua source and pushes the resulting closure.
 // Returns StatusOK on success, StatusErrSyntax on parse error.
 func Load(L *state.LuaState, reader lex.LexReader, source string) int {
-	return ProtectedParser(L, reader, source)
+	return protectedParser(L, reader, source)
 }
 
 // ---------------------------------------------------------------------------
@@ -987,7 +987,7 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 	L.NCCalls++
 
 	// Catch LuaBaseLevel (self-close) that propagates past all inner
-	// RunProtected calls. This is the outermost handler.
+	// runProtected calls. This is the outermost handler.
 	// Mirrors: luaD_throwbaselevel reaching the base luaD_rawrunprotected.
 	var status int
 	var baseLevelCaught bool
@@ -1003,7 +1003,7 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 				}
 			}
 		}()
-		status = RunProtected(L, func() {
+		status = runProtected(L, func() {
 			if L.Status == state.StatusOK {
 				// Starting — call the function on the stack
 				funcIdx := L.Top - nArgs - 1
@@ -1016,7 +1016,7 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 					// C function with continuation
 					if ci.K != nil {
 						n := ci.K(L, state.StatusYield, ci.Ctx)
-						PosCall(L, ci, n)
+						posCall(L, ci, n)
 					}
 				}
 				// Continue executing
@@ -1085,7 +1085,7 @@ func precover(L *state.LuaState, status int) int {
 		// Uses bits 12-14 of CallStatus (not ci.Ctx, which is continuation context).
 		// Mirrors: setcistrecst(ci, status) in C Lua precover (ldo.c:960)
 		ci.SetRecst(status)
-		status = RunProtected(L, func() {
+		status = runProtected(L, func() {
 			unroll(L)
 		})
 	}
@@ -1112,7 +1112,7 @@ func unroll(L *state.LuaState) {
 				status := finishPCallK(L, ci)
 				if ci.K != nil {
 					n := ci.K(L, status, ci.Ctx)
-					PosCall(L, ci, n)
+					posCall(L, ci, n)
 				} else {
 					if isErrorStatus(status) {
 						errMsg := L.Stack[ci.Func].Val
@@ -1121,32 +1121,32 @@ func unroll(L *state.LuaState) {
 						L.Stack[top].Val = object.False
 						L.Stack[top+1].Val = errMsg
 						L.Top = top + 2
-						PosCall(L, ci, 2)
+						posCall(L, ci, 2)
 					} else {
 						nres := L.Top - (ci.Func + 1)
-						PosCall(L, ci, nres)
+						posCall(L, ci, nres)
 					}
 				}
 			} else if ci.CallStatus&state.CISTClsRet != 0 {
-				// Normal return close (no pcall) — just redo PosCall.
-				PosCall(L, ci, ci.NRes)
+				// Normal return close (no pcall) — just redo posCall.
+				posCall(L, ci, ci.NRes)
 			} else {
 				// Normal C function resume (no pcall, no close).
 				status := state.StatusYield
 				if ci.K != nil {
 					n := ci.K(L, status, ci.Ctx)
-					PosCall(L, ci, n)
+					posCall(L, ci, n)
 				} else {
 					nres := L.Top - (ci.Func + 1)
-					PosCall(L, ci, nres)
+					posCall(L, ci, nres)
 				}
 			}
 		} else {
 			// Finish any interrupted op before resuming execution.
 			// Mirrors: luaV_finishOp call in ldo.c unroll() —
 			// called UNCONDITIONALLY for all Lua CIs.
-			FinishOp(L, ci)
-			Execute(L, ci)
+			finishOp(L, ci)
+			execute(L, ci)
 		}
 	}
 }
@@ -1298,11 +1298,11 @@ func getLocalName(L *state.LuaState, ci *state.CallInfo, idx int) string {
 // dummy nodes (delta=0) are inserted every maxTBCDelta slots.
 const maxTBCDelta = 65535
 
-// MarkTBC marks a stack slot as to-be-closed.
+// markTBC marks a stack slot as to-be-closed.
 // For large gaps between TBC variables, inserts dummy nodes every maxTBCDelta
 // slots so the uint16 delta never overflows.
 // Mirrors: luaF_newtbcupval in lfunc.c
-func MarkTBC(L *state.LuaState, level int) {
+func markTBC(L *state.LuaState, level int) {
 	obj := L.Stack[level].Val
 	// false and nil don't need closing (C Lua: l_isfalse check)
 	if obj.IsNil() || obj.Tt == object.TagFalse {
@@ -1367,20 +1367,20 @@ func popTBCList(L *state.LuaState) {
 	}
 }
 
-// CloseTBC calls __close on all TBC variables from L.TBCList down to (but not including) level.
+// closeTBC calls __close on all TBC variables from L.TBCList down to (but not including) level.
 // Then resets L.TBCList to the previous TBC variable below level.
 // status: state.StatusOK for normal close, or an error status for error close.
 // errObj: the error object to pass to __close (nil for normal close).
 // Mirrors: luaF_close (the TBC portion) in lfunc.c + prepcallclosemth + callclosemethod
-func CloseTBC(L *state.LuaState, level int) {
-	CloseTBCWithError(L, level, state.StatusOK, object.Nil, true)
+func closeTBC(L *state.LuaState, level int) {
+	closeTBCWithError(L, level, state.StatusOK, object.Nil, true)
 }
 
-// CloseTBCWithError is CloseTBC with error status and error object.
+// closeTBCWithError is closeTBC with error status and error object.
 // For normal close: status=StatusOK, errObj=Nil → __close(obj) with 1 arg
 // For error close: status!=StatusOK, errObj=error → __close(obj, err) with 2 args
-// yieldable controls whether __close can yield (false in CloseProtected path).
-func CloseTBCWithError(L *state.LuaState, level int, status int, errObj object.TValue, yieldable bool) {
+// yieldable controls whether __close can yield (false in closeProtected path).
+func closeTBCWithError(L *state.LuaState, level int, status int, errObj object.TValue, yieldable bool) {
 	for L.TBCList >= level {
 		tbc := L.TBCList
 		// Pop from TBC list first (removes real node + any dummy chain below it).
@@ -1400,7 +1400,7 @@ func CloseTBCWithError(L *state.LuaState, level int, status int, errObj object.T
 
 // callCloseMethod calls a __close metamethod: tm(obj) or tm(obj, err).
 // This is the unprotected version used by OP_CLOSE / OP_RETURN.
-// yieldable: true for normal close (OP_CLOSE/OP_RETURN), false for CloseProtected.
+// yieldable: true for normal close (OP_CLOSE/OP_RETURN), false for closeProtected.
 // Mirrors: prepcallclosemth + callclosemethod in lfunc.c
 func callCloseMethod(L *state.LuaState, tm, obj object.TValue, level int, status int, errObj object.TValue, yieldable bool) {
 	// C Lua's prepcallclosemth has a three-way switch:
@@ -1453,21 +1453,21 @@ func callCloseMethod(L *state.LuaState, tm, obj object.TValue, level int, status
 	L.CI.CallStatus = oldStatus
 }
 
-// CloseProtected closes TBC variables in protected mode.
+// closeProtected closes TBC variables in protected mode.
 // Used by PCall error path: if a __close method errors, the error
 // replaces the previous one and closing continues with remaining vars.
 // Mirrors: luaD_closeprotected in ldo.c
-func CloseProtected(L *state.LuaState, level int, status int, errObj object.TValue) (int, object.TValue) {
+func closeProtected(L *state.LuaState, level int, status int, errObj object.TValue) (int, object.TValue) {
 	oldCI := L.CI
 	oldAllowHook := L.AllowHook
 	for L.TBCList >= level {
-		// runProtectedCatchBaseLevel wraps RunProtected and also catches
-		// LuaBaseLevel panics that RunProtected re-panics. In C Lua,
+		// runProtectedCatchBaseLevel wraps runProtected and also catches
+		// LuaBaseLevel panics that runProtected re-panics. In C Lua,
 		// luaD_throwbaselevel longjmps to the BASE rawrunprotected, but
 		// Go's panic/recover always catches at the nearest recover.
-		// RunProtected re-panics LuaBaseLevel so it can reach Resume's
+		// runProtected re-panics LuaBaseLevel so it can reach Resume's
 		// outer wrapper for the self-close-from-within case. But when
-		// CloseProtected is called from an EXTERNAL close (e.g., main
+		// closeProtected is called from an EXTERNAL close (e.g., main
 		// thread closing a coroutine whose __close re-closes itself),
 		// the LuaBaseLevel must not escape. We catch it here and convert
 		// to a status code, which is what C Lua's rawrunprotected does.
@@ -1484,8 +1484,8 @@ func CloseProtected(L *state.LuaState, level int, status int, errObj object.TVal
 					}
 				}
 			}()
-			newStatus = RunProtected(L, func() {
-				CloseTBCWithError(L, level, status, errObj, false)
+			newStatus = runProtected(L, func() {
+				closeTBCWithError(L, level, status, errObj, false)
 			})
 		}()
 		if baseLevelCaught {
@@ -1551,11 +1551,11 @@ func CloseThread(L *state.LuaState, from *state.LuaState) int {
 	if L.Top > 1 {
 		errObj = L.Stack[L.Top-1].Val
 	}
-	newStatus, newErrObj := CloseProtected(L, 1, status, errObj)
+	newStatus, newErrObj := closeProtected(L, 1, status, errObj)
 	if newStatus != state.StatusOK {
 		// Place the error object at stack[1] and set Top = 2.
-		// We can't use SetErrorObj here because L.Top may be wrong after
-		// CloseProtected ran __close methods. Use the returned errObj directly.
+		// We can't use setErrorObj here because L.Top may be wrong after
+		// closeProtected ran __close methods. Use the returned errObj directly.
 		L.Stack[1].Val = newErrObj
 		L.Top = 2
 		// If closing itself, throw to base level (bypasses all inner pcalls).

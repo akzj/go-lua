@@ -82,7 +82,7 @@ func TestHashMatchesC(t *testing.T) {
 func TestHashBytesMatchesHash(t *testing.T) {
 	s := "test string for hash"
 	h1 := Hash(s, 999)
-	h2 := HashBytes([]byte(s), 999)
+	h2 := hashBytes([]byte(s), 999)
 	if h1 != h2 {
 		t.Errorf("Hash and HashBytes differ: %d != %d", h1, h2)
 	}
@@ -282,7 +282,7 @@ func TestEqualShortShortSame(t *testing.T) {
 	st := NewStringTable(42)
 	s1 := st.Intern("hello")
 	s2 := st.Intern("hello")
-	if !Equal(s1, s2) {
+	if !equal(s1, s2) {
 		t.Error("Equal should return true for same interned short string")
 	}
 }
@@ -291,7 +291,7 @@ func TestEqualShortShortDifferent(t *testing.T) {
 	st := NewStringTable(42)
 	s1 := st.Intern("hello")
 	s2 := st.Intern("world")
-	if Equal(s1, s2) {
+	if equal(s1, s2) {
 		t.Error("Equal should return false for different short strings")
 	}
 }
@@ -305,7 +305,7 @@ func TestEqualLongLongSameContent(t *testing.T) {
 	if s1 == s2 {
 		t.Fatal("Precondition: long strings should be different pointers")
 	}
-	if !Equal(s1, s2) {
+	if !equal(s1, s2) {
 		t.Error("Equal should return true for long strings with same content")
 	}
 }
@@ -314,7 +314,7 @@ func TestEqualLongLongDifferentContent(t *testing.T) {
 	st := NewStringTable(42)
 	s1 := st.Intern(strings.Repeat("x", MaxShortLen+1))
 	s2 := st.Intern(strings.Repeat("y", MaxShortLen+1))
-	if Equal(s1, s2) {
+	if equal(s1, s2) {
 		t.Error("Equal should return false for long strings with different content")
 	}
 }
@@ -324,14 +324,14 @@ func TestEqualShortLongSameContent(t *testing.T) {
 	// in practice since length determines short/long, but test the logic)
 	short := &object.LuaString{Data: "hello", Hash_: 0, IsShort: true}
 	long := &object.LuaString{Data: "hello", Hash_: 0, IsShort: false}
-	if !Equal(short, long) {
+	if !equal(short, long) {
 		t.Error("Equal should compare content when one is long")
 	}
 }
 
 func TestEqualSamePointer(t *testing.T) {
 	s := &object.LuaString{Data: "test", Hash_: 0, IsShort: true}
-	if !Equal(s, s) {
+	if !equal(s, s) {
 		t.Error("Equal should return true for same pointer")
 	}
 }

@@ -1,6 +1,6 @@
 // VM execution loop — the heart of the Lua interpreter.
 //
-// This is the Go equivalent of C's lvm.c. The core is Execute(),
+// This is the Go equivalent of C's lvm.c. The core is execute(),
 // a giant switch on opcodes that runs Lua bytecode.
 //
 // Reference: lua-master/lvm.c, .analysis/05-vm-execution-loop.md
@@ -38,16 +38,16 @@ func checkPeriodicGC(g *state.GlobalState, L *state.LuaState) {
 }
 
 // ---------------------------------------------------------------------------
-// Execute — the main VM execution loop
+// execute — the main VM execution loop
 // ---------------------------------------------------------------------------
 
-// FinishOp finishes execution of an opcode interrupted by a yield.
+// finishOp finishes execution of an opcode interrupted by a yield.
 // When a metamethod yields (via panic(LuaYield{})), intermediate Go frames
 // (callTMRes, tryBinTM, callOrderTM) are destroyed. This function places
-// the metamethod result into the correct register before Execute resumes.
+// the metamethod result into the correct register before execute resumes.
 // Also handles __close interruption (OP_CLOSE/OP_RETURN).
 // Mirrors: luaV_finishOp in lvm.c:568-618
-func FinishOp(L *state.LuaState, ci *state.CallInfo) {
+func finishOp(L *state.LuaState, ci *state.CallInfo) {
 	cl := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	code := cl.Proto.Code
 	inst := code[ci.SavedPC-1] // interrupted instruction
@@ -115,9 +115,9 @@ func FinishOp(L *state.LuaState, ci *state.CallInfo) {
 	}
 }
 
-// Execute runs the VM main loop for the given CallInfo.
+// execute runs the VM main loop for the given CallInfo.
 // This is the Go equivalent of luaV_execute in lvm.c.
-func Execute(L *state.LuaState, ci *state.CallInfo) {
+func execute(L *state.LuaState, ci *state.CallInfo) {
 startfunc:
 	cl := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	k := cl.Proto.Constants
@@ -125,13 +125,13 @@ startfunc:
 	base := ci.Func + 1
 
 	// Mirrors: luaG_tracecall in ldebug.c — fire call hook at function entry.
-	// For tail calls, PreTailCall sets CISTTail and savedpc=0, then jumps here.
-	// The call hook for non-tail calls is already fired by PreCall (non-vararg)
+	// For tail calls, preTailCall sets CISTTail and savedpc=0, then jumps here.
+	// The call hook for non-tail calls is already fired by preCall (non-vararg)
 	// or OP_VARARGPREP (vararg). Only tail calls need this path.
 	// For vararg tail calls, defer to OP_VARARGPREP.
 	if L.HookMask != 0 && ci.CallStatus&state.CISTTail != 0 &&
 		ci.SavedPC == 0 && !cl.Proto.IsVararg() {
-		CallHook(L, ci)
+		callHook(L, ci)
 	}
 
 	for {
@@ -145,7 +145,7 @@ startfunc:
 		// Mirrors: vmfetch trap check in lvm.c + luaG_tracecall in ldebug.c
 		if L.HookMask&(state.MaskLine|state.MaskCount) != 0 && L.AllowHook &&
 			opcode.GetOpCode(inst) != opcode.OP_VARARGPREP {
-			TraceExec(L, ci)
+			traceExec(L, ci)
 		}
 		op := opcode.GetOpCode(inst)
 		ra := base + opcode.GetArgA(inst)
@@ -200,11 +200,11 @@ startfunc:
 
 		case opcode.OP_CLOSE:
 			closure.CloseUpvals(L, ra)
-			CloseTBC(L, ra)
+			closeTBC(L, ra)
 
 		case opcode.OP_TBC:
 			// To-be-closed: mark the variable in the TBC linked list
-			MarkTBC(L, ra)
+			markTBC(L, ra)
 
 		// ===== Table access =====
 
@@ -435,16 +435,16 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = object.MakeInteger(IMod(L, rb.Integer(), kc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(iMod(L, rb.Integer(), kc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(kc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = object.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(iMod(L, nb.Integer(), nc.Integer()))
 					} else {
-						L.Stack[ra].Val = object.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
+						L.Stack[ra].Val = object.MakeFloat(fMod(toFloat(nb), toFloat(nc)))
 					}
 					ci.SavedPC++
 				}
@@ -453,8 +453,8 @@ startfunc:
 		case opcode.OP_POWK:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			kc := k[opcode.GetArgC(inst)]
-			nb, ok1 := ToNumberNS(rb)
-			nc, ok2 := ToNumberNS(kc)
+			nb, ok1 := toNumberNSFloat(rb)
+			nc, ok2 := toNumberNSFloat(kc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
 				ci.SavedPC++
@@ -463,8 +463,8 @@ startfunc:
 		case opcode.OP_DIVK:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			kc := k[opcode.GetArgC(inst)]
-			nb, ok1 := ToNumberNS(rb)
-			nc, ok2 := ToNumberNS(kc)
+			nb, ok1 := toNumberNSFloat(rb)
+			nc, ok2 := toNumberNSFloat(kc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = object.MakeFloat(nb / nc)
 				ci.SavedPC++
@@ -474,14 +474,14 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			kc := k[opcode.GetArgC(inst)]
 			if rb.IsInteger() && kc.IsInteger() {
-				L.Stack[ra].Val = object.MakeInteger(IDiv(L, rb.Integer(), kc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(iDiv(L, rb.Integer(), kc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(kc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = object.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(iDiv(L, nb.Integer(), nc.Integer()))
 					} else {
 						L.Stack[ra].Val = object.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
 					}
@@ -526,7 +526,7 @@ startfunc:
 			ic := int64(opcode.GetArgSC(inst))
 			ib, ok := toIntegerStrict(rb)
 			if ok {
-				L.Stack[ra].Val = object.MakeInteger(ShiftL(ic, ib))
+				L.Stack[ra].Val = object.MakeInteger(shiftL(ic, ib))
 				ci.SavedPC++
 			}
 
@@ -535,7 +535,7 @@ startfunc:
 			ic := int64(opcode.GetArgSC(inst))
 			ib, ok := toIntegerStrict(rb)
 			if ok {
-				L.Stack[ra].Val = object.MakeInteger(ShiftL(ib, -ic))
+				L.Stack[ra].Val = object.MakeInteger(shiftL(ib, -ic))
 				ci.SavedPC++
 			}
 
@@ -590,16 +590,16 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = object.MakeInteger(IMod(L, rb.Integer(), rc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(iMod(L, rb.Integer(), rc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(rc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = object.MakeInteger(IMod(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(iMod(L, nb.Integer(), nc.Integer()))
 					} else {
-						L.Stack[ra].Val = object.MakeFloat(FMod(toFloat(nb), toFloat(nc)))
+						L.Stack[ra].Val = object.MakeFloat(fMod(toFloat(nb), toFloat(nc)))
 					}
 					ci.SavedPC++
 				}
@@ -608,8 +608,8 @@ startfunc:
 		case opcode.OP_POW:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			rc := L.Stack[base+opcode.GetArgC(inst)].Val
-			nb, ok1 := ToNumberNS(rb)
-			nc, ok2 := ToNumberNS(rc)
+			nb, ok1 := toNumberNSFloat(rb)
+			nc, ok2 := toNumberNSFloat(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
 				ci.SavedPC++
@@ -618,8 +618,8 @@ startfunc:
 		case opcode.OP_DIV:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			rc := L.Stack[base+opcode.GetArgC(inst)].Val
-			nb, ok1 := ToNumberNS(rb)
-			nc, ok2 := ToNumberNS(rc)
+			nb, ok1 := toNumberNSFloat(rb)
+			nc, ok2 := toNumberNSFloat(rc)
 			if ok1 && ok2 {
 				L.Stack[ra].Val = object.MakeFloat(nb / nc)
 				ci.SavedPC++
@@ -629,14 +629,14 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsInteger() && rc.IsInteger() {
-				L.Stack[ra].Val = object.MakeInteger(IDiv(L, rb.Integer(), rc.Integer()))
+				L.Stack[ra].Val = object.MakeInteger(iDiv(L, rb.Integer(), rc.Integer()))
 				ci.SavedPC++
 			} else {
 				nb, ok1 := toNumberNS(rb)
 				nc, ok2 := toNumberNS(rc)
 				if ok1 && ok2 {
 					if nb.IsInteger() && nc.IsInteger() {
-						L.Stack[ra].Val = object.MakeInteger(IDiv(L, nb.Integer(), nc.Integer()))
+						L.Stack[ra].Val = object.MakeInteger(iDiv(L, nb.Integer(), nc.Integer()))
 					} else {
 						L.Stack[ra].Val = object.MakeFloat(math.Floor(toFloat(nb) / toFloat(nc)))
 					}
@@ -682,7 +682,7 @@ startfunc:
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = object.MakeInteger(ShiftL(ib, ic))
+				L.Stack[ra].Val = object.MakeInteger(shiftL(ib, ic))
 				ci.SavedPC++
 			}
 
@@ -692,7 +692,7 @@ startfunc:
 			ib, ok1 := toIntegerStrict(rb)
 			ic, ok2 := toIntegerStrict(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = object.MakeInteger(ShiftL(ib, -ic))
+				L.Stack[ra].Val = object.MakeInteger(shiftL(ib, -ic))
 				ci.SavedPC++
 			}
 
@@ -802,7 +802,7 @@ startfunc:
 
 		case opcode.OP_EQK:
 			rb := k[opcode.GetArgB(inst)]
-			cond := RawEqualObj(L.Stack[ra].Val, rb)
+			cond := rawEqualObj(L.Stack[ra].Val, rb)
 			if cond != (opcode.GetArgK(inst) != 0) {
 				ci.SavedPC++
 			} else {
@@ -928,12 +928,12 @@ startfunc:
 		// ===== For loops =====
 
 		case opcode.OP_FORPREP:
-			if ForPrep(L, ra) {
+			if forPrep(L, ra) {
 				ci.SavedPC += opcode.GetArgBx(inst) + 1 // skip loop
 			}
 
 		case opcode.OP_FORLOOP:
-			if ForLoop(L, ra) {
+			if forLoop(L, ra) {
 				ci.SavedPC -= opcode.GetArgBx(inst) // jump back
 			}
 
@@ -946,7 +946,7 @@ startfunc:
 			L.Stack[ra+2].Val = temp
 			// Mark the closing variable (now at ra+2) as to-be-closed
 			// C Lua: halfProtect(luaF_newtbcupval(L, ra + 2))
-			MarkTBC(L, ra+2)
+			markTBC(L, ra+2)
 			ci.SavedPC += opcode.GetArgBx(inst)
 			// Fall through to TFORCALL
 			inst = code[ci.SavedPC]
@@ -971,7 +971,7 @@ startfunc:
 				L.Top = ra + b
 			}
 			// SavedPC already set by dispatch loop
-			newci := PreCall(L, ra, nresults)
+			newci := preCall(L, ra, nresults)
 			if newci != nil {
 				ci = newci
 				goto startfunc
@@ -993,14 +993,14 @@ startfunc:
 			if opcode.GetArgK(inst) != 0 {
 				closure.CloseUpvals(L, base)
 			}
-			n := PreTailCall(L, ci, ra, b, delta)
+			n := preTailCall(L, ci, ra, b, delta)
 			if n < 0 {
 				// Lua function — ci.Func already adjusted by delta
 				goto startfunc
 			}
 			// C function executed — restore func and finish
 			ci.Func -= delta
-			PosCall(L, ci, n)
+			posCall(L, ci, n)
 			goto ret
 
 		case opcode.OP_RETURN:
@@ -1019,7 +1019,7 @@ startfunc:
 					L.Top = ci.Top
 				}
 				closure.CloseUpvals(L, base)
-				CloseTBCWithError(L, base, state.StatusCloseKTop, object.Nil, true)
+				closeTBCWithError(L, base, state.StatusCloseKTop, object.Nil, true)
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
 				base = ci.Func + 1
@@ -1029,14 +1029,14 @@ startfunc:
 				ci.Func -= ci.NExtraArgs + nparams1
 			}
 			L.Top = ra + n
-			PosCall(L, ci, n)
+			posCall(L, ci, n)
 			goto ret
 
 		case opcode.OP_RETURN0:
 			if L.HookMask != 0 {
-				// Hooks active — fall back to full PosCall (fires return hook)
+				// Hooks active — fall back to full posCall (fires return hook)
 				L.Top = ra
-				PosCall(L, ci, 0)
+				posCall(L, ci, 0)
 			} else {
 				// Fast path — no hooks
 				nres := ci.NResults()
@@ -1054,9 +1054,9 @@ startfunc:
 
 		case opcode.OP_RETURN1:
 			if L.HookMask != 0 {
-				// Hooks active — fall back to full PosCall (fires return hook)
+				// Hooks active — fall back to full posCall (fires return hook)
 				L.Top = ra + 1
-				PosCall(L, ci, 1)
+				posCall(L, ci, 1)
 			} else {
 				// Fast path — no hooks
 				nres := ci.NResults()
@@ -1079,7 +1079,7 @@ startfunc:
 		case opcode.OP_CLOSURE:
 			bx := opcode.GetArgBx(inst)
 			p := cl.Proto.Protos[bx]
-			PushClosure(L, p, cl.UpVals, base, ra)
+			pushClosure(L, p, cl.UpVals, base, ra)
 
 			// Periodic GC: closures are heap-allocated objects.
 			if g := L.Global; !g.GCStopped {
@@ -1092,17 +1092,17 @@ startfunc:
 			if opcode.GetArgK(inst) != 0 {
 				vatab = opcode.GetArgB(inst)
 			}
-			GetVarargs(L, ci, ra, n, vatab)
+			getVarargs(L, ci, ra, n, vatab)
 
 		case opcode.OP_VARARGPREP:
-			AdjustVarargs(L, ci, cl.Proto)
+			adjustVarargs(L, ci, cl.Proto)
 			// Update base after adjustment
 			base = ci.Func + 1
-			// Fire call hook AFTER adjustment (deferred from PreCall).
+			// Fire call hook AFTER adjustment (deferred from preCall).
 			// Mirrors: OP_VARARGPREP in lvm.c calls luaD_hookcall after
 			// luaT_adjustvarargs, so debug.getlocal sees correct params.
 			if L.HookMask != 0 {
-				CallHook(L, ci)
+				callHook(L, ci)
 				L.OldPC = 1 // next opcode seen as "new" line
 			}
 
@@ -1147,7 +1147,7 @@ startfunc:
 				}
 			case object.TagFloat:
 				f := rc.Val.(float64)
-				if idx, ok := FloatToInteger(f); ok {
+				if idx, ok := floatToInteger(f); ok {
 					nExtra := ci.NExtraArgs
 					if uint64(idx-1) < uint64(nExtra) {
 						varBase := ci.Func - nExtra
@@ -1224,7 +1224,7 @@ startfunc:
 		// The callee overwrites L.OldPC with its own PCs during execution.
 		// Set it to the caller's current SavedPC so the line hook won't
 		// fire a spurious event for the same line as the CALL instruction.
-		// Only done here (not in PosCall) because coroutine yield/resume
+		// Only done here (not in posCall) because coroutine yield/resume
 		// needs OldPC left alone to fire the correct line event on resume.
 		// Mirrors: rethook in ldo.c (L->oldpc = pcRel(ci->u.l.savedpc, ...))
 		if ci.IsLua() {

@@ -57,24 +57,24 @@ func TestHasFastTM(t *testing.T) {
 	// All bits clear = all might be present
 	var flags byte = 0
 	for i := TMS(0); i <= TM_EQ; i++ {
-		if !HasFastTM(flags, i) {
+		if !hasFastTM(flags, i) {
 			t.Errorf("HasFastTM(0, %d) should be true", i)
 		}
 	}
 
 	// Set TM_INDEX as absent
-	SetAbsent(&flags, TM_INDEX)
-	if HasFastTM(flags, TM_INDEX) {
+	setAbsent(&flags, TM_INDEX)
+	if hasFastTM(flags, TM_INDEX) {
 		t.Error("After SetAbsent, TM_INDEX should be absent")
 	}
 	// Others still present
-	if !HasFastTM(flags, TM_NEWINDEX) {
+	if !hasFastTM(flags, TM_NEWINDEX) {
 		t.Error("TM_NEWINDEX should still be present")
 	}
 
 	// Invalidate cache
-	InvalidateCache(&flags)
-	if !HasFastTM(flags, TM_INDEX) {
+	invalidateCache(&flags)
+	if !hasFastTM(flags, TM_INDEX) {
 		t.Error("After InvalidateCache, TM_INDEX should be present again")
 	}
 }
@@ -86,7 +86,7 @@ func TestHasFastTM(t *testing.T) {
 func TestInitTMNames(t *testing.T) {
 	g := &state.GlobalState{}
 	strtab := luastring.NewStringTable(12345)
-	InitTMNames(g, strtab)
+	initTMNames(g, strtab)
 
 	for i := TMS(0); i < TM_N; i++ {
 		if g.TMNames[i] == nil {
@@ -110,7 +110,7 @@ func newTestGlobal() (*state.GlobalState, *luastring.StringTable) {
 	g := &state.GlobalState{}
 	strtab := luastring.NewStringTable(42)
 	g.StringTable = strtab
-	InitTMNames(g, strtab)
+	initTMNames(g, strtab)
 	return g, strtab
 }
 

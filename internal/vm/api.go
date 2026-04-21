@@ -17,7 +17,7 @@ package vm
 // will be package-level functions in internal/vm/.
 //
 // Core execution:
-//   func Execute(L *state.LuaState)
+//   func execute(L *state.LuaState)
 //     Runs the VM main loop for the current CallInfo.
 //     Handles Lua→Lua calls internally via trampoline (no recursion).
 //     Returns only when hitting a CIST_Fresh boundary or error.
@@ -29,11 +29,11 @@ package vm
 //   func CallNoYield(L *state.LuaState, funcIdx int, nResults int)
 //     Performs a non-yieldable function call. Equivalent to luaD_callnoyield.
 //
-//   func PreCall(L *state.LuaState, funcIdx int, nResults int) *state.CallInfo
+//   func preCall(L *state.LuaState, funcIdx int, nResults int) *state.CallInfo
 //     Prepares a function call. For C functions: executes and returns nil.
 //     For Lua functions: creates CallInfo and returns it.
 //
-//   func PosCall(L *state.LuaState, ci *state.CallInfo, nResults int)
+//   func posCall(L *state.LuaState, ci *state.CallInfo, nResults int)
 //     Post-call cleanup: moves results, adjusts top, unwinds CI.
 //
 // Protected calls:
@@ -41,11 +41,11 @@ package vm
 //     Protected function call. Returns status code.
 //
 // Error handling:
-//   func Throw(L *state.LuaState, status int)
+//   func throw(L *state.LuaState, status int)
 //     Raises a Lua error via panic(state.LuaError{...}).
 //
 // Stack management:
-//   func GrowStack(L *state.LuaState, n int)
+//   func growStack(L *state.LuaState, n int)
 //     Ensures n free stack slots.
 //
 // Coroutine support:

@@ -61,8 +61,8 @@ func Hash(data string, seed uint32) uint32 {
 	return h
 }
 
-// HashBytes is like Hash but for a byte slice.
-func HashBytes(data []byte, seed uint32) uint32 {
+// hashBytes is like Hash but for a byte slice.
+func hashBytes(data []byte, seed uint32) uint32 {
 	l := len(data)
 	h := seed ^ uint32(l)
 	for l > 0 {
@@ -86,9 +86,9 @@ type stringEntry struct {
 // StringTable interns short strings for pointer-equality lookups.
 // It is owned by GlobalState and shared across all threads.
 type StringTable struct {
-	buckets  [][]stringEntry // hash buckets (power-of-2 count)
-	count    int             // number of interned strings (may be stale until sweep)
-	seed     uint32          // hash seed (randomized per state)
+	buckets  [][]stringEntry       // hash buckets (power-of-2 count)
+	count    int                   // number of interned strings (may be stale until sweep)
+	seed     uint32                // hash seed (randomized per state)
 	OnCreate func(object.GCObject) // V5: called when a new string is created (for GC linking)
 }
 
@@ -124,7 +124,7 @@ func (st *StringTable) InternBytes(b []byte) *object.LuaString {
 		}
 		return ts
 	}
-	h := HashBytes(b, st.seed)
+	h := hashBytes(b, st.seed)
 	// Convert to string for lookup/storage. For short strings (≤40 bytes),
 	// this allocation is amortized by interning (only once per unique string).
 	s := string(b)
@@ -274,10 +274,10 @@ func newLong(s string) *object.LuaString {
 // String equality
 // ---------------------------------------------------------------------------
 
-// Equal compares two LuaStrings.
+// equal compares two LuaStrings.
 // For two short strings: pointer equality (both interned in the same table).
 // For any other combination: content comparison.
-func Equal(a, b *object.LuaString) bool {
+func equal(a, b *object.LuaString) bool {
 	if a == b {
 		return true
 	}

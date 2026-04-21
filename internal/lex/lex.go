@@ -116,10 +116,10 @@ func SetInput(ls *LexState) {
 	ls.Current = ls.Reader.NextByte()
 }
 
-// SkipShebang skips a Unix shebang line (#! or # comment) at the start of
+// skipShebang skips a Unix shebang line (#! or # comment) at the start of
 // source. Must be called after SetInput and before Next.
 // Mirrors skipcomment in lauxlib.c.
-func SkipShebang(ls *LexState) {
+func skipShebang(ls *LexState) {
 	if ls.Current == '#' {
 		for ls.Current != '\n' && ls.Current != EOZ {
 			next(ls)
@@ -412,7 +412,7 @@ func readString(ls *LexState, delimiter int) Token {
 			case 'z':
 				// \z — skip whitespace
 				ls.Buf = ls.Buf[:len(ls.Buf)-1] // remove '\'
-				next(ls)                          // skip 'z'
+				next(ls)                        // skip 'z'
 				for isSpace(ls.Current) {
 					if currIsNewline(ls) {
 						incLineNumber(ls)
@@ -481,7 +481,6 @@ func readHexaEsc(ls *LexState) int {
 	next(ls) // advance past second hex digit
 	return r
 }
-
 
 // readDecEsc reads \ddd escape (up to 3 decimal digits). Returns the byte value.
 func readDecEsc(ls *LexState) int {
@@ -562,7 +561,6 @@ func readUTF8Esc(ls *LexState) {
 		save(ls, int(buf[j]))
 	}
 }
-
 
 func escError(ls *LexState, msg string) {
 	// Save current char for error message if not EOF
