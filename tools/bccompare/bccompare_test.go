@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	parseapi "github.com/akzj/go-lua/internal/parse/api"
+	parseapi "github.com/akzj/go-lua/internal/parse"
 )
 
 // stringReader implements lexapi.LexReader for test strings.

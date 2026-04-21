@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	luaapi "github.com/akzj/go-lua/internal/api/api"
-	stdlibapi "github.com/akzj/go-lua/internal/stdlib/api"
+	luaapi "github.com/akzj/go-lua/internal/api"
+	stdlibapi "github.com/akzj/go-lua/internal/stdlib"
 )
 
 // cLuaPath is the reference C Lua 5.5.1 binary.
