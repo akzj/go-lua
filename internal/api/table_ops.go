@@ -227,6 +227,7 @@ func (L *State) CreateTable(nArr, nRec int) {
 	t := table.New(nArr, nRec)
 	L.ls().Global.LinkGC(t) // V5: register in allgc chain
 	size := t.EstimateBytes()
+	t.GCHeader.ObjSize = size
 	L.TrackAlloc(size)
 	L.push(object.TValue{Tt: object.TagTable, Obj: t})
 
