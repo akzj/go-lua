@@ -1,5 +1,9 @@
 package lua
 
+import (
+	"github.com/akzj/go-lua/internal/api"
+)
+
 // ---------------------------------------------------------------------------
 // Table operations
 // ---------------------------------------------------------------------------
@@ -124,7 +128,7 @@ func (L *State) RawEqual(idx1, idx2 int) bool {
 // Compare compares two values using the given comparison operation.
 // May trigger __eq, __lt, or __le metamethods.
 func (L *State) Compare(idx1, idx2 int, op CompareOp) bool {
-	return L.s.Compare(idx1, idx2, op)
+	return L.s.Compare(idx1, idx2, api.CompareOp(op))
 }
 
 // Concat concatenates the n values at the top of the stack, pops them,
@@ -137,7 +141,7 @@ func (L *State) Concat(n int) {
 // top of the stack. For binary operations, pops two operands; for unary,
 // pops one. Pushes the result.
 func (L *State) Arith(op ArithOp) {
-	L.s.Arith(op)
+	L.s.Arith(api.ArithOp(op))
 }
 
 // GetSubTable ensures that t[fname] is a table, creating it if needed.
