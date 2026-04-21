@@ -1071,8 +1071,42 @@ func testCheckmemory(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testGcstate(L *luaapi.State) int {
-	L.PushString(L.GetGCMode())
+	if L.GetTop() >= 1 {
+		// T.gcstate("statename") — advance GC to that state
+		targetName := L.CheckString(1)
+		result := L.RunGCUntilState(gcNameToStateByte(targetName))
+		L.PushString(result)
+		return 1
+	}
+	// T.gcstate() — return current state name
+	L.PushString(L.GCStateName())
 	return 1
+}
+
+// gcNameToStateByte maps C Lua state names to GC state constants.
+func gcNameToStateByte(name string) byte {
+	switch name {
+	case "pause":
+		return object.GCSpause
+	case "propagate":
+		return object.GCSpropagate
+	case "enteratomic":
+		return object.GCSenteratomic
+	case "atomic":
+		return object.GCSatomic
+	case "sweepallgc":
+		return object.GCSswpallgc
+	case "sweepfinobj":
+		return object.GCSswpfinobj
+	case "sweeptobefnz":
+		return object.GCSswptobefnz
+	case "sweepend":
+		return object.GCSswpend
+	case "callfin":
+		return object.GCScallfin
+	default:
+		return object.GCSpause
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,7 +1115,13 @@ func testGcstate(L *luaapi.State) int {
 
 func testGccolor(L *luaapi.State) int {
 	L.CheckAny(1)
-	L.PushString("white") // stub — Go GC doesn't expose tri-color state
+	color := L.GCColorName(1)
+	if color == "" {
+		// Non-GC value (nil, boolean, number, light userdata)
+		L.PushString("white")
+	} else {
+		L.PushString(color)
+	}
 	return 1
 }
 
@@ -1118,7 +1158,6 @@ func testQuerystr(L *luaapi.State) int {
 
 func testQuerytab(L *luaapi.State) int {
 	L.CheckType(1, object.TypeTable)
-	// Use RawLen for array size and a helper for hash size
 	if L.GetTop() >= 2 {
 		// querytab(t, i) — return value at internal position i
 		// This is used for debugging; return nil as stub
@@ -1126,9 +1165,9 @@ func testQuerytab(L *luaapi.State) int {
 		return 1
 	}
 	// Return (arrayPart, hashPart) sizes
-	arrLen := L.RawLen(1)
-	L.PushInteger(arrLen)
-	L.PushInteger(0) // hash size not easily accessible; return 0
+	arrSize, hashSize := L.TableSizes(1)
+	L.PushInteger(int64(arrSize))
+	L.PushInteger(int64(hashSize))
 	return 2
 }
 
@@ -1243,9 +1282,13 @@ func testTotalmem(L *luaapi.State) int {
 
 func testGcage(L *luaapi.State) int {
 	L.CheckAny(1)
-	// Go GC doesn't have generational ages. Return "old" as default
-	// since most gengc.lua tests check `not T or T.gcage(x) == "old"`.
-	L.PushString("old")
+	age := L.GCAgeName(1)
+	if age == "" {
+		// Non-GC value — return "old" as safe default
+		L.PushString("old")
+	} else {
+		L.PushString(age)
+	}
 	return 1
 }
 

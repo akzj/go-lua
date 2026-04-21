@@ -334,3 +334,156 @@ func (L *State) SetGCParam(name string, value int64) int64 {
 	g.GCParams[name] = value
 	return prev
 }
+
+// ---------------------------------------------------------------------------
+// GC Inspection API — used by T library (testlib.go)
+// ---------------------------------------------------------------------------
+
+// GCObjectAt returns the GCHeader for the GC-collectable object at stack index idx.
+// Returns nil if the value is not a GC object (nil, boolean, number, light userdata).
+func (L *State) GCObjectAt(idx int) *object.GCHeader {
+	v := L.index2val(idx)
+	if v == nil {
+		return nil
+	}
+	if gcObj, ok := v.Obj.(object.GCObject); ok && gcObj != nil {
+		return gcObj.GC()
+	}
+	return nil
+}
+
+// GCStateName returns the name of the current GC state.
+// Maps GCState byte constants to their C Lua names.
+func (L *State) GCStateName() string {
+	g := L.ls().Global
+	return gcStateToName(g.GCState)
+}
+
+// RunGCUntilState advances the GC state machine by calling SingleStep
+// until it reaches the target state. Returns the state name reached.
+// Used by T.gcstate("statename") in the test library.
+func (L *State) RunGCUntilState(targetState byte) string {
+	ls := L.ls()
+	g := ls.Global
+	// Clear stale stack first (same as GCCollect)
+	clearStaleStack(ls)
+	// Run SingleStep until we reach the target state.
+	// Safety limit to prevent infinite loops.
+	for i := 0; i < 100000; i++ {
+		if g.GCState == targetState {
+			return gcStateToName(g.GCState)
+		}
+		gc.SingleStep(g, ls)
+	}
+	return gcStateToName(g.GCState)
+}
+
+// gcStateToName converts a GC state byte to its C Lua name.
+func gcStateToName(st byte) string {
+	switch st {
+	case object.GCSpause:
+		return "pause"
+	case object.GCSpropagate:
+		return "propagate"
+	case object.GCSenteratomic:
+		return "enteratomic"
+	case object.GCSatomic:
+		return "atomic"
+	case object.GCSswpallgc:
+		return "sweepallgc"
+	case object.GCSswpfinobj:
+		return "sweepfinobj"
+	case object.GCSswptobefnz:
+		return "sweeptobefnz"
+	case object.GCSswpend:
+		return "sweepend"
+	case object.GCScallfin:
+		return "callfin"
+	default:
+		return "unknown"
+	}
+}
+
+// gcNameToState converts a C Lua state name to its byte constant.
+// Returns (state, ok). If the name is not recognized, ok is false.
+func gcNameToState(name string) (byte, bool) {
+	switch name {
+	case "pause":
+		return object.GCSpause, true
+	case "propagate":
+		return object.GCSpropagate, true
+	case "enteratomic":
+		return object.GCSenteratomic, true
+	case "atomic":
+		return object.GCSatomic, true
+	case "sweepallgc":
+		return object.GCSswpallgc, true
+	case "sweepfinobj":
+		return object.GCSswpfinobj, true
+	case "sweeptobefnz":
+		return object.GCSswptobefnz, true
+	case "sweepend":
+		return object.GCSswpend, true
+	case "callfin":
+		return object.GCScallfin, true
+	default:
+		return 0, false
+	}
+}
+
+// GCColorName returns "white", "gray", or "black" for the GC object at idx.
+// Returns "" if the value is not a GC object.
+func (L *State) GCColorName(idx int) string {
+	h := L.GCObjectAt(idx)
+	if h == nil {
+		return ""
+	}
+	if h.IsBlack() {
+		return "black"
+	}
+	if h.IsWhite() {
+		return "white"
+	}
+	return "gray"
+}
+
+// GCAgeName returns the generational age name for the GC object at idx.
+// Returns "" if the value is not a GC object.
+func (L *State) GCAgeName(idx int) string {
+	h := L.GCObjectAt(idx)
+	if h == nil {
+		return ""
+	}
+	switch h.Age {
+	case object.G_NEW:
+		return "new"
+	case object.G_SURVIVAL:
+		return "survival"
+	case object.G_OLD0:
+		return "old0"
+	case object.G_OLD1:
+		return "old1"
+	case object.G_OLD:
+		return "old"
+	case object.G_TOUCHED1:
+		return "touched1"
+	case object.G_TOUCHED2:
+		return "touched2"
+	default:
+		return "new"
+	}
+}
+
+// TableSizes returns the array part length and hash part capacity for a table at idx.
+// Returns (0, 0) if the value is not a table.
+func (L *State) TableSizes(idx int) (int, int) {
+	v := L.index2val(idx)
+	if v == nil {
+		return 0, 0
+	}
+	t, ok := v.Obj.(*table.Table)
+	if !ok || t == nil {
+		return 0, 0
+	}
+	return len(t.Array), len(t.Nodes)
+}

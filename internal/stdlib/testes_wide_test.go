@@ -64,10 +64,18 @@ func TestTestesWide(t *testing.T) {
 			}()
 			L := luaapi.NewState()
 			OpenAll(L)
-			// Only register T (testC library) for api.lua — other tests
-			// have `if T then` blocks that need fully-functional stubs
-			// we haven't implemented yet.
-			if f == "api.lua" {
+			// Register T (testC library) for test files that use it.
+			// T provides testC, gcstate, gccolor, gcage, newuserdata, etc.
+			// Files NOT enabled for T and why:
+			//   nextvar.lua  — T.querytab exposes Go table rehash differences
+			//   errors.lua   — T.totalmem memory-limit feature not supported in Go
+			//   calls.lua    — T.listk string pointer identity differs (Go interning)
+			//   cstack.lua   — T blocks use T.sethook (not implemented)
+			//   gc.lua       — T blocks test warning system + memory limits
+			//   gengc.lua    — T.gcage age transitions differ from C Lua
+			//   coroutine.lua — T.sethook yields-inside-hooks not implemented
+			switch f {
+			case "api.lua", "events.lua", "closure.lua":
 				OpenTestLib(L)
 			}
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)
@@ -270,20 +278,7 @@ func TestTestesWide(t *testing.T) {
 					"  assert(m2 > m1 and m2 - m1 < 400)\n",
 					"  -- assert(m2 > m1 and m2 - m1 < 400)  -- SKIP: Go memory accounting differs\n",
 					1)
-				// Patch 4: Skip GC barrier test + dependent assertion (needs gcstate/gccolor)
-				src = strings.Replace(src,
-					"-- test barrier for uservalues\ndo\n  local oldmode = collectgarbage(\"incremental\")\n  T.gcstate(\"enteratomic\")\n  assert(T.gccolor(b) == \"black\")",
-					"-- test barrier for uservalues\nif false then  -- SKIP: GC state/color not controllable in Go\n  local oldmode = collectgarbage(\"incremental\")\n  T.gcstate(\"enteratomic\")\n  assert(T.gccolor(b) == \"black\")",
-					1)
-				// Also skip the assertion that depends on the skipped barrier test
-				src = strings.Replace(src,
-					"assert(debug.getuservalue(b).x == 100)\nb = nil",
-					"-- assert(debug.getuservalue(b).x == 100)  -- SKIP: depends on GC barrier test\nb = nil",
-					1)
-				// Patch 5: Skip entire GC finalizer ordering section (lines 887-1040)
-				// This section tests GC finalizer ordering, re-entrant GC, and
-				// memory counting — all fundamentally different in Go's GC bridge.
-				// The __gc finalizer creates garbage during GC causing infinite loops.
+				// Patch 4: REMOVED — gcstate/gccolor now return real values from GC state machine
 				src = strings.Replace(src,
 					"-- colect in cl the `val' of all collected userdata\n",
 					"if false then  -- SKIP: GC finalizer ordering tests (Go GC bridge limitation)\n-- colect in cl the `val' of all collected userdata\n",
