@@ -220,20 +220,29 @@ func (L *State) SweepStrings() {
 }
 
 // gcParamDefaults are the C Lua 5.5.1 default GC parameter values.
-// Reference: lgc.h — LUAI_GCPAUSE=200, LUAI_GCMUL=200, LUAI_GCSTEPSIZE=8
+// Reference: lgc.h — LUAI_GCPAUSE=200, LUAI_GCMUL=200, LUAI_GCSTEPSIZE=13
 var gcParamDefaults = map[string]int64{
 	"pause":      200,
 	"stepmul":    200,
-	"stepsize":   8,
+	"stepsize":   13,
 	"minormul":   25,
 	"majorminor": 50,
 	"minormajor": 100,
 }
 
 // GetGCParam returns the current value of a GC parameter.
-// If the parameter was never set, returns the C Lua default.
+// For pause/stepmul/stepsize, reads from the direct GlobalState fields.
+// For other params, falls back to the GCParams map.
 func (L *State) GetGCParam(name string) int64 {
 	g := L.ls().Global
+	switch name {
+	case "pause":
+		return int64(g.GCPause)
+	case "stepmul":
+		return int64(g.GCStepMul)
+	case "stepsize":
+		return int64(g.GCStepSize)
+	}
 	if g.GCParams != nil {
 		if v, ok := g.GCParams[name]; ok {
 			return v
@@ -246,9 +255,19 @@ func (L *State) GetGCParam(name string) int64 {
 }
 
 // SetGCParam sets a GC parameter and returns the previous value.
+// For pause/stepmul/stepsize, updates the direct GlobalState fields
+// used by the debt-based GC pacer.
 func (L *State) SetGCParam(name string, value int64) int64 {
 	g := L.ls().Global
 	prev := L.GetGCParam(name)
+	switch name {
+	case "pause":
+		g.GCPause = int(value)
+	case "stepmul":
+		g.GCStepMul = int(value)
+	case "stepsize":
+		g.GCStepSize = int(value)
+	}
 	if g.GCParams == nil {
 		g.GCParams = make(map[string]int64)
 	}
