@@ -387,13 +387,15 @@ retry:
 func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 	wanted := ci.NResults()
 	res := ci.Func // destination for results
+	hasTBC := ci.CallStatus&state.CISTTBC != 0
 
 	// Fire return hook and restore OldPC for caller.
 	// Mirrors: rethook in ldo.c — called when ANY hook is active, not just MaskRet.
+	// When CIST_TBC is set, defer the hook until after closing TBC vars.
 	// The OldPC restoration is unconditional (needed by line hook even when
 	// return hook is off). This is critical: without it, the line hook fires
 	// spurious events when returning from calls (e.g. hook function returns).
-	if L.HookMask != 0 {
+	if L.HookMask != 0 && !hasTBC {
 		if L.AllowHook && L.HookMask&state.MaskRet != 0 {
 			retHook(L, ci, nres)
 		}
@@ -403,6 +405,22 @@ func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 		// otherwise changedline() sees stale OldPC and misses a line event.
 		if prev := ci.Prev; prev != nil && prev.IsLua() {
 			L.OldPC = prev.SavedPC - 1
+		}
+	}
+
+	// Handle to-be-closed variables before moving results.
+	// Mirrors C Lua: moveresults checks CIST_TBC and calls luaF_close.
+	if hasTBC {
+		// Close TBC vars from TBCList down to res (CLOSEKTOP semantics).
+		closeTBCWithError(L, res, state.StatusCloseKTop, object.Nil, true)
+		// Call return hook after __close methods (C Lua defers hook for TBC).
+		if L.HookMask != 0 {
+			if L.AllowHook && L.HookMask&state.MaskRet != 0 {
+				retHook(L, ci, nres)
+			}
+			if prev := ci.Prev; prev != nil && prev.IsLua() {
+				L.OldPC = prev.SavedPC - 1
+			}
 		}
 	}
 
@@ -1331,8 +1349,15 @@ func markTBC(L *state.LuaState, level int) {
 		// Get variable name from debug info (C Lua: luaG_findlocal)
 		vname := "?"
 		if L.CI != nil {
-			idx := level - L.CI.Func // stack offset from function slot
-			vname = getLocalName(L, L.CI, idx)
+			if L.CI.IsLua() {
+				idx := level - L.CI.Func // stack offset from function slot
+				vname = getLocalName(L, L.CI, idx)
+				if vname == "?" {
+					vname = "(temporary)"
+				}
+			} else {
+				vname = "(C temporary)"
+			}
 		}
 		RunError(L, "variable '"+vname+"' got a non-closable value")
 	}
@@ -1401,9 +1426,17 @@ func MarkTBC(L *state.LuaState, level int) {
 
 // CloseTBC is the exported wrapper for closeTBC.
 // Closes all TBC variables from L.TBCList down to (but not including) level.
-// Used by the API layer (lua_settop, lua_closeslot).
+// Uses StatusOK semantics: resets L.Top to level+1 before calling __close.
+// Used by the API layer (lua_settop).
 func CloseTBC(L *state.LuaState, level int) {
 	closeTBC(L, level)
+}
+
+// CloseTBCKeepTop closes TBC variables with CLOSEKTOP semantics:
+// does NOT reset L.Top, preserving values above the closed slot.
+// Used by lua_closeslot where return values sit above TBC vars.
+func CloseTBCKeepTop(L *state.LuaState, level int) {
+	closeTBCWithError(L, level, state.StatusCloseKTop, object.Nil, true)
 }
 
 
