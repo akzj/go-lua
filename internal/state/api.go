@@ -168,6 +168,11 @@ type LuaState struct {
 	ErrFunc int // error handler stack index
 	OldPC   int // last traced PC
 
+	// CallInfo slab allocation — reduces GC pressure by allocating
+	// CallInfos in batches of ciSlabSize instead of individually.
+	CISlab    []CallInfo // slab for CallInfo allocation
+	CISlabIdx int        // next free index in slab
+
 	// C10 FIX: Debug hook fields (needed by debug.sethook/gethook)
 	Hook          any  // debug hook function (typed later)
 	BaseHookCount int  // base hook count setting

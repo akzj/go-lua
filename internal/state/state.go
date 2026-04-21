@@ -240,6 +240,10 @@ func PushValue(L *LuaState, v object.TValue) {
 // CallInfo management
 // ---------------------------------------------------------------------------
 
+// ciSlabSize is the number of CallInfos allocated in each slab.
+// Reduces GC pressure: one allocation per 32 calls instead of one per call.
+const ciSlabSize = 32
+
 // NewCI allocates or reuses the next CallInfo in the chain.
 // Mirrors: luaE_extendCI in lstate.c
 func NewCI(L *LuaState) *CallInfo {
@@ -250,8 +254,13 @@ func NewCI(L *LuaState) *CallInfo {
 		return ci.Next
 	}
 
-	// Allocate new CI
-	newCI := &CallInfo{}
+	// Allocate from slab
+	if L.CISlab == nil || L.CISlabIdx >= len(L.CISlab) {
+		L.CISlab = make([]CallInfo, ciSlabSize)
+		L.CISlabIdx = 0
+	}
+	newCI := &L.CISlab[L.CISlabIdx]
+	L.CISlabIdx++
 	newCI.Prev = ci
 	newCI.Next = nil
 	ci.Next = newCI
