@@ -153,6 +153,7 @@ func (L *State) SetTable(idx int) {
 			L.Errorf("table index is NaN")
 		}
 		tbl.Set(key, val)
+		gc.BarrierBack(ls.Global, tbl) // GC write barrier: table mutated
 	}
 	ls.Top -= 2
 }
@@ -178,6 +179,7 @@ func (L *State) SetField(idx int, key string) {
 		ks := L.internStr(key)
 		val := ls.Stack[ls.Top-1].Val
 		tbl.SetStr(ks, val)
+		gc.BarrierBack(ls.Global, tbl) // GC write barrier: table mutated
 	}
 	ls.Top--
 }
@@ -193,6 +195,7 @@ func (L *State) SetI(idx int, n int64) {
 		// Matches C Lua's luaV_fastseti in lua_seti.
 		if _, found := tbl.GetInt(n); found {
 			tbl.SetInt(n, val)
+			gc.BarrierBack(ls.Global, tbl) // GC write barrier: table mutated
 			ls.Top--
 			return
 		}
@@ -211,6 +214,7 @@ func (L *State) SetGlobal(name string) {
 	ks := L.internStr(name)
 	val := ls.Stack[ls.Top-1].Val
 	gt.SetStr(ks, val)
+	gc.BarrierBack(ls.Global, gt) // GC write barrier: global table mutated
 	ls.Top--
 }
 
@@ -297,6 +301,10 @@ func (L *State) SetMetatable(idx int) {
 	case object.TagTable:
 		tbl := v.Obj.(*table.Table)
 		tbl.SetMetatable(mt)
+		// GC write barrier: table got a new metatable reference
+		if mt != nil {
+			gc.Barrier(ls.Global, tbl, mt)
+		}
 		// V5 GC: Move object from allgc to finobj if __gc detected.
 		// Dealloc tracking is handled by V5 GC sweep.
 		if mt != nil {
@@ -330,6 +338,10 @@ func (L *State) SetMetatable(idx int) {
 	case object.TagUserdata:
 		if ud, ok := v.Obj.(*object.Userdata); ok {
 			ud.MetaTable = mt
+			// GC write barrier: userdata got a new metatable reference
+			if mt != nil {
+				gc.Barrier(ls.Global, ud, mt)
+			}
 			// V5 GC: Move object from allgc to finobj if __gc detected.
 			if mt != nil {
 				g := ls.Global

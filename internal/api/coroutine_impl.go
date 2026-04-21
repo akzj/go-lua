@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"unsafe"
 
+	"github.com/akzj/go-lua/internal/gc"
 	"github.com/akzj/go-lua/internal/object"
 
 	"github.com/akzj/go-lua/internal/state"
@@ -183,6 +184,7 @@ func (L *State) SetIUserValue(idx int, n int) bool {
 		if ok && n >= 1 && n <= len(ud.UserVals) {
 			ls.Top--
 			ud.UserVals[n-1] = ls.Stack[ls.Top].Val
+			gc.BarrierBack(ls.Global, ud) // GC write barrier: userdata mutated
 			return true
 		}
 	}
