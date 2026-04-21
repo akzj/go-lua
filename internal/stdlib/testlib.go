@@ -708,11 +708,17 @@ func testCEntry(L *luaapi.State) int {
 	var L1 *luaapi.State
 	var pc string
 
-	if L.IsUserdata(1) {
-		// getstate — not implemented yet, treat as L
-		L1 = L
+	tp := L.Type(1)
+	if tp == object.TypeLightUserdata || tp == object.TypeUserdata {
+		// First arg is a state (light userdata from T.newstate)
+		ud := L.ToUserdata(1)
+		if s, ok := ud.(*luaapi.State); ok {
+			L1 = s
+		} else {
+			L1 = L
+		}
 		pc = L.CheckString(2)
-	} else if L.Type(1) == object.TypeThread {
+	} else if tp == object.TypeThread {
 		L1 = L.ToThread(1)
 		pc = L.CheckString(2)
 	} else {
@@ -936,15 +942,56 @@ func testCheckpanic(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testDoremote(L *luaapi.State) int {
-	// Simplified: just execute the code on the current state
-	code := L.CheckString(2)
-	err := L.DoString(code)
-	if err != nil {
+	// T.doremote(L1, code) — run code on remote state L1
+	// On success: return all L1 stack values as strings
+	// On error: return nil, errmsg, status_code
+	ud := L.ToUserdata(1)
+	L1, ok := ud.(*luaapi.State)
+	if !ok {
 		L.PushNil()
-		L.PushString(err.Error())
-		return 2
+		L.PushString("invalid state")
+		L.PushInteger(0)
+		return 3
 	}
-	return 0
+	code := L.CheckString(2)
+
+	// Clean L1's stack before loading (previous operations may leave values)
+	oldTop := L1.GetTop()
+
+	// Load the code on L1
+	status := L1.Load(code, "doremote", "bt")
+	if status != 0 {
+		// Syntax error
+		msg, _ := L1.ToString(-1)
+		L1.Pop(1)
+		L.PushNil()
+		L.PushString(msg)
+		L.PushInteger(3) // 3 = syntax error
+		return 3
+	}
+
+	// Execute on L1
+	status = L1.PCall(0, luaapi.MultiRet, 0)
+	if status != 0 {
+		// Runtime error
+		msg, _ := L1.ToString(-1)
+		L1.Pop(1)
+		L.PushNil()
+		L.PushString(msg)
+		L.PushInteger(2) // 2 = runtime error
+		return 3
+	}
+
+	// Transfer results from L1 to L as strings
+	// Only get values above oldTop (results from this PCall)
+	n := L1.GetTop() - oldTop
+	for i := oldTop + 1; i <= oldTop+n; i++ {
+		L1.ToString(i) // convert to string in-place
+		s, _ := L1.ToString(i)
+		L.PushString(s)
+	}
+	L1.SetTop(oldTop) // restore L1's stack
+	return n
 }
 
 // ---------------------------------------------------------------------------
@@ -966,10 +1013,47 @@ func testClosestate(L *luaapi.State) int {
 }
 
 func testLoadlib(L *luaapi.State) int {
+	// T.loadlib(L1, what, preload)
+	// what: bitmask of libs to open fully
+	// preload: bitmask of libs to preload (available via require)
+	// Bit mapping: 0=_G, 1=package, 2=coroutine, 3=table,
+	//   4=io, 5=os, 6=string, 7=math, 8=utf8, 9=debug
 	ud := L.ToUserdata(1)
-	if s, ok := ud.(*luaapi.State); ok {
-		OpenAll(s)
-		OpenTestLib(s)
+	L1, ok := ud.(*luaapi.State)
+	if !ok {
+		return 0
+	}
+	what := int(L.OptInteger(2, 0))
+	preload := int(L.OptInteger(3, 0))
+
+	// Library openers in order matching C Lua's loadedlibs
+	type libEntry struct {
+		name string
+		open func(*luaapi.State) int
+	}
+	libs := []libEntry{
+		{"_G", OpenBase},
+		{"package", OpenPackage},
+		{"coroutine", OpenCoroutineLib},
+		{"table", OpenTable},
+		{"io", OpenIO},
+		{"os", OpenOS},
+		{"string", OpenString},
+		{"math", OpenMath},
+		{"utf8", OpenUTF8},
+		{"debug", OpenDebug},
+	}
+
+	for i, lib := range libs {
+		bit := 1 << i
+		if what&bit != 0 {
+			// Load fully
+			lib.open(L1)
+		} else if preload&bit != 0 {
+			// Preload: register in package.preload so require() works
+			// For simplicity, just open it (Go doesn't have a clean preload mechanism)
+			lib.open(L1)
+		}
 	}
 	return 0
 }
