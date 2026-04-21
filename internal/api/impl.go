@@ -130,11 +130,17 @@ func NewState() *State {
 	// without importing this package.
 
 	// GCStepFn: periodic GC during VM allocation loops.
-	// Runs FullGC (mark/sweep + weak table clearing) AND drains
+	// Runs a full GC cycle (mark/sweep + weak table clearing) AND drains
 	// pending finalizers (__gc). This is required for gc.lua tests
 	// where allocation loops depend on __gc setting a finish flag.
 	// The traverseThread function marks ALL allocated stack slots,
 	// preventing premature collection of live registers.
+	//
+	// Note: This uses FullGC (not incremental GCStep) because Lua tests
+	// and user code rely on finalizers running promptly during allocation
+	// loops. The debt-based pacer (GCPause/GCDebt) controls how often
+	// this runs — with GCPause=250, it triggers when memory reaches
+	// 2.5x live data, which is infrequent enough for good performance.
 	ls.Global.GCStepFn = func(thread *state.LuaState) {
 		g := thread.Global
 		if g.GCRunning || g.GCRunningFinalizer || g.GCStopped {
