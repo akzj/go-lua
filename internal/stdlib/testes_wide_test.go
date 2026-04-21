@@ -68,13 +68,13 @@ func TestTestesWide(t *testing.T) {
 			// T provides testC, gcstate, gccolor, gcage, newuserdata, etc.
 			// Files NOT enabled for T and why:
 			//   nextvar.lua   — T enabled; OP_SETLIST pre-resize + checktab fix
+			//   calls.lua     — T enabled; T.listk preserves string pointer identity
 			//   errors.lua    — T.totalmem memory-limit feature not supported in Go
-			//   calls.lua     — T.listk string pointer identity differs (Go interning)
 			//   cstack.lua    — T blocks use T.sethook (not implemented); hangs
 			//   gc.lua        — T enabled; skip T.totalmem + T.alloccount blocks (Go memory control)
 			//   coroutine.lua — T.sethook yields-inside-hooks not implemented
 			switch f {
-			case "api.lua", "events.lua", "closure.lua", "gengc.lua", "gc.lua", "nextvar.lua":
+			case "api.lua", "events.lua", "closure.lua", "gengc.lua", "gc.lua", "nextvar.lua", "calls.lua":
 				OpenTestLib(L)
 			}
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)

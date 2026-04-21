@@ -1185,7 +1185,10 @@ func testListk(L *luaapi.State) int {
 	p := lc.Proto
 	L.CreateTable(len(p.Constants), 0)
 	for i, k := range p.Constants {
-		pushTValue(L, k)
+		// Push the original TValue directly to preserve object identity
+		// (e.g., long string pointers must be the same across functions
+		// sharing the same constant from a single dump).
+		L.PushTValue(k)
 		L.RawSetI(-2, int64(i+1))
 	}
 	return 1

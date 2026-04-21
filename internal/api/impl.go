@@ -101,6 +101,12 @@ func (L *State) push(v object.TValue) {
 	state.PushValue(ls, v)
 }
 
+// PushTValue pushes an existing TValue directly onto the stack.
+// Unlike PushString etc., this preserves object identity (pointer).
+func (L *State) PushTValue(v object.TValue) {
+	L.push(v)
+}
+
 // wrapCFunctionStatic creates an adapter without capturing a specific State.
 // Each call creates a temporary State wrapper.
 func wrapCFunctionStatic(f CFunction) state.CFunction {
