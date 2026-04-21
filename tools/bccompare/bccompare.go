@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	objectapi "github.com/akzj/go-lua/internal/object/api"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode/api"
+	objectapi "github.com/akzj/go-lua/internal/object"
+	opcodeapi "github.com/akzj/go-lua/internal/opcode"
 )
 
 // DumpProto produces a text disassembly of a Proto in the same format
