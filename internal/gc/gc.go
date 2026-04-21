@@ -479,9 +479,9 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			// Dead — unlink from chain and decrement GCTotalBytes
 			*p = h.Next
 			h.Next = nil // help Go GC
-			// Decrement byte counter for known object types
-			if t, ok := obj.(*table.Table); ok {
-				atomic.AddInt64(&g.GCTotalBytes, -t.EstimateBytes())
+			// Decrement byte counter using pre-computed size (avoids type assertion)
+			if h.ObjSize > 0 {
+				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
 			}
 			freed++
 		} else {

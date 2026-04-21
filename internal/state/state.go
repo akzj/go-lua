@@ -110,7 +110,8 @@ func initRegistry(L *LuaState, g *GlobalState) {
 	// Matches C: luaH_resize(L, registry, LUA_RIDX_LAST, 0)
 	registry := table.New(RegistryIndexLast, 0)
 	g.LinkGC(registry) // link to allgc so sweep resets mark bits each cycle
-	g.GCTotalBytes += registry.EstimateBytes()
+	registry.GCHeader.ObjSize = registry.EstimateBytes()
+	g.GCTotalBytes += registry.GCHeader.ObjSize
 
 	// Store as TValue in GlobalState
 	g.Registry = object.TValue{
@@ -124,7 +125,8 @@ func initRegistry(L *LuaState, g *GlobalState) {
 	// registry[LUA_RIDX_GLOBALS] = new table (the global table _G)
 	globals := table.New(0, 0)
 	g.LinkGC(globals) // link to allgc so sweep resets mark bits each cycle
-	g.GCTotalBytes += globals.EstimateBytes()
+	globals.GCHeader.ObjSize = globals.EstimateBytes()
+	g.GCTotalBytes += globals.GCHeader.ObjSize
 	registry.SetInt(int64(RegistryIndexGlobals), object.TValue{
 		Tt:  object.TagTable,
 		Obj: globals,
