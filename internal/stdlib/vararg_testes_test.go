@@ -9,7 +9,7 @@ import (
 func TestVarargTestes(t *testing.T) {
 	L := luaapi.NewState()
 	OpenAll(L)
-	data, err := os.ReadFile("../../../lua-master/testes/vararg.lua")
+	data, err := os.ReadFile("../../lua-master/testes/vararg.lua")
 	if err != nil {
 		t.Skipf("vararg.lua not found: %v", err)
 	}
