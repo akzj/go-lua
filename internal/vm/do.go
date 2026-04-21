@@ -475,6 +475,9 @@ func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntra
 	ci := L.CI
 	savedTop := L.Top
 	savedCITop := ci.Top
+	// Save for hook-yield resume (survives panic/yield)
+	L.HookSavedTop = savedTop
+	L.HookSavedCITop = savedCITop
 	L.AllowHook = false // cannot call hooks inside a hook
 	ci.CallStatus |= state.CISTHooked // mark caller as hook frame
 
@@ -1133,11 +1136,12 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 					// Restore hook state that hookDispatch left dirty:
 					L.AllowHook = true
 					ci.CallStatus &^= state.CISTHooked
+					// Restore stack state saved by hookDispatch
+					ci.Top = L.HookSavedCITop
+					L.Top = L.HookSavedTop
 					// Undo the savedpc increment from traceExec
 					// (instruction was not executed yet).
 					ci.SavedPC--
-					// Discard yield arguments — restore top to firstArg
-					L.Top = L.Top - nArgs
 					// Re-enter the VM to continue executing
 					execute(L, ci)
 				} else {
