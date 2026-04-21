@@ -1130,7 +1130,10 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 				if ci.IsLua() {
 					// Yielded inside a hook — ci is the Lua frame.
 					// Mirrors: resume() in ldo.c — isLua(ci) branch.
-					// Undo the savedpc increment from traceExec/callHook
+					// Restore hook state that hookDispatch left dirty:
+					L.AllowHook = true
+					ci.CallStatus &^= state.CISTHooked
+					// Undo the savedpc increment from traceExec
 					// (instruction was not executed yet).
 					ci.SavedPC--
 					// Discard yield arguments — restore top to firstArg
