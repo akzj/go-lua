@@ -161,9 +161,9 @@ func TestGrowStack(t *testing.T) {
 		}
 	}
 
-	// Grow the stack
+	// Grow the stack — request enough slots to exceed current capacity
 	oldLen := len(L.Stack)
-	GrowStack(L, 100)
+	GrowStack(L, BasicStackSize+100)
 	if len(L.Stack) <= oldLen {
 		t.Error("Stack should have grown")
 	}

@@ -68,7 +68,9 @@ const MaxCCalls = 200
 const MaxStack = 1_000_000
 
 // BasicStackSize is the initial stack allocation.
-const BasicStackSize = 40 // 2 * LUA_MINSTACK
+// Go pays higher cost for stack growth (alloc+copy+GC) than C, so we start
+// larger to avoid reallocStack calls in typical programs like Fibonacci(20).
+const BasicStackSize = 200
 
 // ExtraStack is reserved space beyond stack_last for error handling.
 const ExtraStack = 5
