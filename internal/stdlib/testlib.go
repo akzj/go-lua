@@ -637,10 +637,10 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			L1.CloseSlot(idx)
 
 		case "sethook":
-			_ = p.getNum(L, L1)
-			_ = p.getNum(L, L1)
-			_ = p.getString()
-			// no-op stub
+			mask := p.getNum(L, L1)
+			count := p.getNum(L, L1)
+			scpt := p.getString()
+			sethookaux(L, L1, mask, count, scpt)
 
 		case "traceback":
 			msg := p.getString()

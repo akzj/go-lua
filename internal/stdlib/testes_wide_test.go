@@ -293,15 +293,7 @@ func TestTestesWide(t *testing.T) {
 					"assert(#cl == 1 and cl[1] == x)   -- old `x' must be collected\n",
 					"assert(#cl == 1 and cl[1] == x)   -- old `x' must be collected\nend  -- END SKIP GC finalizer ordering\n",
 					1)
-				// Patch 6: Skip hooks section (T.sethook not implemented)
-				src = strings.Replace(src,
-					"-- testing changing hooks during hooks\n",
-					"if false then  -- SKIP: T.sethook not implemented\n-- testing changing hooks during hooks\n",
-					1)
-				src = strings.Replace(src,
-					"_G.TT = nil\n\n\n-----",
-					"_G.TT = nil\nend  -- END SKIP hooks\n\n\n-----",
-					1)
+				// Patch 6 REMOVED: hooks section now works (hookDispatch rewrite)
 				// Patch 7: Skip GC errors during collection (hangs with Go GC)
 				src = strings.Replace(src,
 					"do   -- testing errors during GC\n  warn(\"@off\")\n  collectgarbage(\"stop\")",
