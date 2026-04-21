@@ -180,8 +180,10 @@ func traverseTable(g *state.GlobalState, t *table.Table) {
 		// Do NOT mark black — stays in weak/grayagain list
 	case table.WeakKey: // weak keys only (ephemeron)
 		traverseEphemeron(g, t, false)
+		g.EphemeronCount++ // track for clearDeadKeysAllEphemerons optimization
 		// Do NOT mark black — stays in ephemeron/allweak list
 	default: // both weak keys and weak values (mode == 3)
+		g.EphemeronCount++ // track for clearDeadKeysAllEphemerons optimization
 		// Don't mark any entries. Link to grayagain (propagate phase)
 		// or allweak (atomic phase) for later clearing.
 		if g.GCState == object.GCSpropagate {
@@ -595,7 +597,13 @@ func Udata2Finalize(g *state.GlobalState) object.GCObject {
 // with WeakKey mode and clears their dead key entries. This is needed because
 // convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
 // so clearByKeys(g, g.Ephemeron) would operate on an empty list.
+//
+// Optimization: if no ephemeron tables were encountered during mark phase
+// (EphemeronCount == 0), skip the expensive full-chain walk entirely.
 func clearDeadKeysAllEphemerons(g *state.GlobalState) {
+	if g.EphemeronCount == 0 {
+		return // no weak-key tables this cycle — nothing to clear
+	}
 	clearDeadKeysInList(g, g.Allgc)
 	clearDeadKeysInList(g, g.FinObj)
 }
@@ -742,6 +750,9 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 	// - New objects created during the cycle get the NEW white → survive sweep
 	// - Sweep kills objects with OLD white that weren't marked
 	g.CurrentWhite ^= object.WhiteBits
+
+	// Reset ephemeron counter for this cycle (used to skip clearDeadKeysAllEphemerons)
+	g.EphemeronCount = 0
 
 	// Phase 1: Mark roots
 	g.GCState = object.GCSpropagate

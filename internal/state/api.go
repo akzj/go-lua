@@ -286,6 +286,11 @@ type GlobalState struct {
 	AllWeak   object.GCObject // all-weak (kv) tables
 	Ephemeron object.GCObject // ephemeron tables
 
+	// EphemeronCount tracks how many weak-key (ephemeron) tables were
+	// encountered during the current GC mark phase. When zero, the
+	// expensive clearDeadKeysAllEphemerons walk can be skipped entirely.
+	EphemeronCount int
+
 }
 
 // ---------------------------------------------------------------------------
