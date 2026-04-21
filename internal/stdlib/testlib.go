@@ -579,7 +579,8 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "Ltolstring":
 			idx := p.getIndex(L, L1)
-			L1.PushString(L1.TolString(idx))
+			// luaL_tolstring already pushes the result onto the stack
+			L1.TolString(idx)
 
 		case "type":
 			idx := p.getNum(L, L1)
