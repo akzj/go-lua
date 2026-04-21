@@ -622,3 +622,57 @@ func TestDeleteAndReinsert(t *testing.T) {
 		t.Errorf("after re-insert: Get = %v, %v; want 2, true", v, ok)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression: rehash must preserve array part when adding hash key
+// ---------------------------------------------------------------------------
+
+func TestRehashPreservesFilledArray(t *testing.T) {
+	// Filled array: 1000 elements, add a hash key
+	tbl := New(1000, 0)
+	for i := int64(1); i <= 1000; i++ {
+		tbl.SetInt(i, object.MakeInteger(i*10))
+	}
+
+	key := mkstr("x")
+	tbl.Set(object.MakeString(key), object.MakeInteger(10))
+
+	// Array should be >= 512 (optimal for 1000 dense keys)
+	if tbl.ArrayLen() < 512 {
+		t.Errorf("array part too small after rehash: got %d, want >= 512", tbl.ArrayLen())
+	}
+
+	// Verify all values are still accessible
+	for i := int64(1); i <= 1000; i++ {
+		v, ok := tbl.GetInt(i)
+		if !ok || v.Integer() != i*10 {
+			t.Fatalf("GetInt(%d) = %v, %v after rehash; want %d, true", i, v, ok, i*10)
+		}
+	}
+	v, ok := tbl.Get(object.MakeString(key))
+	if !ok || v.Integer() != 10 {
+		t.Errorf("Get('x') = %v, %v; want 10, true", v, ok)
+	}
+}
+
+func TestRehashPreservesEmptyPreallocArray(t *testing.T) {
+	// This is the exact bug scenario from nextvar.lua:
+	// table.create(1000) then a.x = 10
+	// Pre-allocated array (all nil) must NOT be collapsed to 0.
+	tbl := New(1000, 0)
+
+	key := mkstr("x")
+	tbl.Set(object.MakeString(key), object.MakeInteger(10))
+
+	// C Lua expects: arr=1000 hash=1
+	if tbl.ArrayLen() != 1000 {
+		t.Errorf("array part changed from 1000 to %d; want 1000", tbl.ArrayLen())
+	}
+	if tbl.HashLen() < 1 {
+		t.Errorf("hash part should have at least 1 slot, got %d", tbl.HashLen())
+	}
+	v, ok := tbl.Get(object.MakeString(key))
+	if !ok || v.Integer() != 10 {
+		t.Errorf("Get('x') = %v, %v; want 10, true", v, ok)
+	}
+}

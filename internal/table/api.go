@@ -173,7 +173,7 @@ func (t *Table) ArrayLen() int {
 
 // HashLen returns the hash part capacity (always a power of 2, or 0).
 func (t *Table) HashLen() int {
-	if t.LsizeNode == 0 {
+	if len(t.Nodes) == 0 {
 		return 0
 	}
 	return 1 << t.LsizeNode
