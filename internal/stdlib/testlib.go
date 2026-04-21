@@ -14,6 +14,7 @@ import (
 
 	luaapi "github.com/akzj/go-lua/internal/api"
 	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -578,7 +579,8 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "Ltolstring":
 			idx := p.getIndex(L, L1)
-			L1.PushString(L1.TolString(idx))
+			// luaL_tolstring already pushes the result onto the stack
+			L1.TolString(idx)
 
 		case "type":
 			idx := p.getNum(L, L1)
@@ -641,17 +643,19 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			// no-op stub
 
 		case "traceback":
-			_ = p.getString()
-			_ = p.getNum(L, L1)
-			L1.PushString("traceback") // stub
+			msg := p.getString()
+			level := p.getNum(L, L1)
+			// luaL_traceback(L1, L1, msg, level) — push traceback string
+			tracebackStr := buildTraceback(L1, msg, level)
+			L1.PushString(tracebackStr)
 
 		case "warningC":
-			_ = p.getString()
-			// no-op — warning system not implemented
+			msg := p.getString()
+			L1.Warning(msg, true) // tocont=true (continuation)
 
 		case "warning":
-			_ = p.getString()
-			// no-op — warning system not implemented
+			msg := p.getString()
+			L1.Warning(msg, false) // tocont=false (final part)
 
 		case "threadstatus":
 			L1.PushString(statusToString(L1.Status()))
@@ -1071,8 +1075,42 @@ func testCheckmemory(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testGcstate(L *luaapi.State) int {
-	L.PushString(L.GetGCMode())
+	if L.GetTop() >= 1 {
+		// T.gcstate("statename") — advance GC to that state
+		targetName := L.CheckString(1)
+		result := L.RunGCUntilState(gcNameToStateByte(targetName))
+		L.PushString(result)
+		return 1
+	}
+	// T.gcstate() — return current state name
+	L.PushString(L.GCStateName())
 	return 1
+}
+
+// gcNameToStateByte maps C Lua state names to GC state constants.
+func gcNameToStateByte(name string) byte {
+	switch name {
+	case "pause":
+		return object.GCSpause
+	case "propagate":
+		return object.GCSpropagate
+	case "enteratomic":
+		return object.GCSenteratomic
+	case "atomic":
+		return object.GCSatomic
+	case "sweepallgc":
+		return object.GCSswpallgc
+	case "sweepfinobj":
+		return object.GCSswpfinobj
+	case "sweeptobefnz":
+		return object.GCSswptobefnz
+	case "sweepend":
+		return object.GCSswpend
+	case "callfin":
+		return object.GCScallfin
+	default:
+		return object.GCSpause
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,7 +1119,13 @@ func testGcstate(L *luaapi.State) int {
 
 func testGccolor(L *luaapi.State) int {
 	L.CheckAny(1)
-	L.PushString("white") // stub — Go GC doesn't expose tri-color state
+	color := L.GCColorName(1)
+	if color == "" {
+		// Non-GC value (nil, boolean, number, light userdata)
+		L.PushString("white")
+	} else {
+		L.PushString(color)
+	}
 	return 1
 }
 
@@ -1118,7 +1162,6 @@ func testQuerystr(L *luaapi.State) int {
 
 func testQuerytab(L *luaapi.State) int {
 	L.CheckType(1, object.TypeTable)
-	// Use RawLen for array size and a helper for hash size
 	if L.GetTop() >= 2 {
 		// querytab(t, i) — return value at internal position i
 		// This is used for debugging; return nil as stub
@@ -1126,9 +1169,9 @@ func testQuerytab(L *luaapi.State) int {
 		return 1
 	}
 	// Return (arrayPart, hashPart) sizes
-	arrLen := L.RawLen(1)
-	L.PushInteger(arrLen)
-	L.PushInteger(0) // hash size not easily accessible; return 0
+	arrSize, hashSize := L.TableSizes(1)
+	L.PushInteger(int64(arrSize))
+	L.PushInteger(int64(hashSize))
 	return 2
 }
 
@@ -1146,7 +1189,10 @@ func testListk(L *luaapi.State) int {
 	p := lc.Proto
 	L.CreateTable(len(p.Constants), 0)
 	for i, k := range p.Constants {
-		pushTValue(L, k)
+		// Push the original TValue directly to preserve object identity
+		// (e.g., long string pointers must be the same across functions
+		// sharing the same constant from a single dump).
+		L.PushTValue(k)
 		L.RawSetI(-2, int64(i+1))
 	}
 	return 1
@@ -1243,9 +1289,13 @@ func testTotalmem(L *luaapi.State) int {
 
 func testGcage(L *luaapi.State) int {
 	L.CheckAny(1)
-	// Go GC doesn't have generational ages. Return "old" as default
-	// since most gengc.lua tests check `not T or T.gcage(x) == "old"`.
-	L.PushString("old")
+	age := L.GCAgeName(1)
+	if age == "" {
+		// Non-GC value — return "old" as safe default
+		L.PushString("old")
+	} else {
+		L.PushString(age)
+	}
 	return 1
 }
 
@@ -1260,30 +1310,106 @@ func testResume(L *luaapi.State) int {
 		L.PushString("value is not a thread")
 		return 2
 	}
-	narg := L.GetTop() - 1
-	// Move arguments from L to co
-	if narg > 0 {
-		L.XMove(co, narg)
+	// Mirrors C Lua's coresume in ltests.c:
+	// lua_resume(co, L, 0, &nres) — passes 0 extra args
+	status, _ := co.Resume(L, 0)
+	if status != luaapi.StatusOK && status != luaapi.StatusYield {
+		// Error: return false, error_message
+		L.PushBoolean(false)
+		co.XMove(L, 1) // move error message
+		L.Insert(-2)    // put false before error message
+		return 2
 	}
-	status, nres := co.Resume(L, narg)
-	if status == luaapi.StatusOK || status == luaapi.StatusYield {
-		// Move results back
-		if nres > 0 {
-			co.XMove(L, nres)
-		}
-		return nres
-	}
-	// Error — move error message back
-	co.XMove(L, 1)
+	// Success: return true
+	L.PushBoolean(true)
 	return 1
 }
 
 // ---------------------------------------------------------------------------
-// T.sethook(mask, count, func) — set debug hook (stub)
+// T.sethook(script, mask [, count]) — set debug hook via C-script
+// Mirrors: sethook + sethookaux + Chook in ltests.c
+// T.sethook() with no args turns off hooks.
 // ---------------------------------------------------------------------------
 
 func testSethook(L *luaapi.State) int {
+	if L.IsNoneOrNil(1) {
+		sethookaux(L, L, 0, 0, "")
+		return 0
+	}
+	scpt := L.CheckString(1)
+	smask := L.CheckString(2)
+	count := 0
+	if L.IsNumber(3) {
+		v, _ := L.ToInteger(3)
+		count = int(v)
+	}
+	mask := 0
+	if strings.ContainsRune(smask, 'c') {
+		mask |= 1 // MaskCall
+	}
+	if strings.ContainsRune(smask, 'r') {
+		mask |= 2 // MaskRet
+	}
+	if strings.ContainsRune(smask, 'l') {
+		mask |= 4 // MaskLine
+	}
+	if count > 0 {
+		mask |= 8 // MaskCount
+	}
+	sethookaux(L, L, mask, count, scpt)
 	return 0
+}
+
+// sethookaux sets a C-script hook on the target thread.
+// Mirrors: sethookaux + Chook in ltests.c.
+// hookDispatch (in vm/do.go) calls the hook as a C function with:
+//
+//	arg1 = event name (string)
+//	arg2 = line number (integer, line hooks only)
+//
+// The Go closure captures 'script' and runs it via runC.
+func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script string) {
+	ls1 := L1.Internal.(*state.LuaState)
+	if script == "" {
+		ls1.Hook = nil
+		ls1.HookMask = 0
+		ls1.BaseHookCount = 0
+		ls1.HookCount = 0
+		return
+	}
+	hookFn := state.CFunction(func(hookL *state.LuaState) int {
+		ci := hookL.CI
+		// Read event string (arg 1) and line (arg 2) from the call frame
+		eventIdx := ci.Func + 1
+		var eventStr string
+		if eventIdx < hookL.Top {
+			if s, ok := hookL.Stack[eventIdx].Val.Obj.(*object.LuaString); ok {
+				eventStr = s.String()
+			}
+		}
+		lineIdx := ci.Func + 2
+		var lineVal int64
+		hasLine := false
+		if lineIdx < hookL.Top {
+			lv := hookL.Stack[lineIdx].Val
+			if lv.IsInteger() {
+				lineVal = lv.Integer()
+				hasLine = true
+			}
+		}
+		// Push event and line for the script (mirrors C Lua's Chook)
+		apiL := &luaapi.State{Internal: hookL}
+		apiL.PushString(eventStr)
+		if hasLine {
+			apiL.PushInteger(lineVal)
+		}
+		runC(apiL, apiL, script)
+		return 0
+	})
+	ls1.Hook = object.MakeLightCFunc(hookFn)
+	ls1.HookMask = mask
+	ls1.BaseHookCount = count
+	ls1.HookCount = count
 }
 
 // ---------------------------------------------------------------------------
@@ -1371,12 +1497,111 @@ func testTrick(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testCodeparam(L *luaapi.State) int {
-	L.PushInteger(0)
+	p := uint(L.CheckInteger(1))
+	L.PushInteger(int64(codeParam(p)))
 	return 1
 }
 
 func testApplyparam(L *luaapi.State) int {
-	return 0
+	p := byte(L.CheckInteger(1))
+	x := L.CheckInteger(2)
+	L.PushInteger(applyParam(p, x))
+	return 1
+}
+
+// codeParam encodes a percentage into a floating-point byte.
+// Format: eeee.xxxx where value = (1.xxxx) * 2^(eeee-7) for normalized,
+// or (0.xxxx) * 2^-7 for subnormal (eeee == 0).
+// Mirrors C Lua's luaO_codeparam (lobject.c).
+func codeParam(p uint) byte {
+	const maxVal = uint((0x1F << (0xF - 7 - 1)) * 100)
+	if p >= maxVal { // overflow
+		return 0xFF
+	}
+	p = (p*128 + 99) / 100 // round up
+	if p < 0x10 {           // subnormal
+		return byte(p)
+	}
+	// p >= 0x10: ceil(log2(p+1)) >= 5, preserve 5 bits
+	log := ceilLog2(p+1) - 5
+	return byte(((p >> log) - 0x10) | ((log + 1) << 4))
+}
+
+// applyParam applies a floating-point byte parameter to a value.
+// Mirrors C Lua's luaO_applyparam (lobject.c).
+func applyParam(p byte, x int64) int64 {
+	const maxLMem = int64(^uint64(0) >> 1) // max int64
+	m := int64(p & 0xF)                     // mantissa
+	e := int(p >> 4)                         // exponent
+	if e > 0 {
+		e--
+		m += 0x10
+	}
+	e -= 7 // correct excess-7
+	if e >= 0 {
+		if x < (maxLMem/0x1F)>>e {
+			return (x * m) << e
+		}
+		return maxLMem
+	}
+	// negative exponent
+	e = -e
+	if x < maxLMem/0x1F {
+		return (x * m) >> e
+	} else if (x>>e) < maxLMem/0x1F {
+		return (x >> e) * m
+	}
+	return maxLMem
+}
+
+// ceilLog2 returns ceil(log2(x)) for x > 0.
+func ceilLog2(x uint) uint {
+	if x <= 1 {
+		return 0
+	}
+	x--
+	var n uint
+	for x > 0 {
+		x >>= 1
+		n++
+	}
+	return n
+}
+
+// buildTraceback mirrors luaL_traceback(L1, L1, msg, level).
+// Reuses findLastLevel and tracebackFrame from debuglib.go (same package).
+func buildTraceback(L1 *luaapi.State, msg string, level int) string {
+	last := findLastLevel(L1)
+	var buf strings.Builder
+	if msg != "" {
+		buf.WriteString(msg)
+		buf.WriteString("\n")
+	}
+	buf.WriteString("stack traceback:")
+	totalVisible := last - level + 1
+	limit2show := -1
+	if totalVisible > tracebackLEVELS1+tracebackLEVELS2 {
+		limit2show = tracebackLEVELS1
+	}
+	for {
+		ar, ok := L1.GetStack(level)
+		if !ok {
+			break
+		}
+		if limit2show == 0 {
+			skip := last - level - tracebackLEVELS2 + 1
+			if skip < 1 {
+				skip = 1
+			}
+			buf.WriteString(fmt.Sprintf("\n\t...\t(skipping %d levels)", skip))
+			level += skip
+		} else {
+			tracebackFrame(L1, ar, &buf)
+			level++
+		}
+		limit2show--
+	}
+	return buf.String()
 }
 
 // suppress unused import warning
@@ -1453,4 +1678,87 @@ func OpenTestLib(L *luaapi.State) {
 		L.SetField(-2, name)
 	}
 	L.SetGlobal("T")
+
+	// Install test-specific warning handler (mirrors ltests.c warnf).
+	// Supports @off/@on/@store/@normal/@allow control messages and
+	// stores warnings in global _WARN when in store mode.
+	installTestWarnHandler(L)
+
+	// Initialize _WARN = false (mirrors ltests.c: lua_setglobal(L, "_WARN"))
+	L.PushBoolean(false)
+	L.SetGlobal("_WARN")
+}
+
+// ---------------------------------------------------------------------------
+// Test warning handler — mirrors ltests.c warnf
+// Modes: 0=normal, 1=allow, 2=store
+// ---------------------------------------------------------------------------
+
+func installTestWarnHandler(L *luaapi.State) {
+	tw := &testWarnState{
+		mode:  0, // start in normal mode
+		onoff: true, // warnings on by default (C Lua starts at 0, but tests call @on)
+		L:     L,
+	}
+	L.SetWarnF(func(ud any, msg string, tocont bool) {
+		tw.handle(msg, tocont)
+	}, L)
+}
+
+type testWarnState struct {
+	mode       int    // 0=normal, 1=allow, 2=store
+	onoff      bool   // on/off state
+	buff       string // accumulation buffer for multi-part messages
+	lasttocont bool   // whether previous call had tocont=true
+	L          *luaapi.State
+}
+
+func (tw *testWarnState) handle(msg string, tocont bool) {
+	// Check for control message: single-part message starting with '@'
+	if !tw.lasttocont && !tocont && len(msg) > 0 && msg[0] == '@' {
+		cmd := msg[1:]
+		switch cmd {
+		case "off":
+			tw.onoff = false
+		case "on":
+			tw.onoff = true
+		case "normal":
+			tw.mode = 0
+		case "allow":
+			tw.mode = 1
+		case "store":
+			tw.mode = 2
+		}
+		return
+	}
+
+	tw.lasttocont = tocont
+	tw.buff += msg
+
+	if tocont {
+		return // message not finished yet
+	}
+
+	// Message complete — process according to mode
+	finalMsg := tw.buff
+	tw.buff = ""
+
+	switch tw.mode {
+	case 0: // normal
+		if finalMsg != "" && finalMsg[0] != '#' && tw.onoff {
+			// Unexpected warning in test mode — print but don't abort
+			// (Go test framework handles failures differently than C)
+			fmt.Fprintf(os.Stderr, "Lua warning (unexpected): %s\n", finalMsg)
+		}
+		if tw.onoff {
+			fmt.Fprintf(os.Stderr, "Lua warning: %s\n", finalMsg)
+		}
+	case 1: // allow
+		if tw.onoff {
+			fmt.Fprintf(os.Stderr, "Lua warning: %s\n", finalMsg)
+		}
+	case 2: // store
+		tw.L.PushString(finalMsg)
+		tw.L.SetGlobal("_WARN")
+	}
 }

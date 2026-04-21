@@ -4,7 +4,10 @@
 package state
 
 import (
+	"fmt"
 	"math/rand"
+	"os"
+	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/luastring"
@@ -29,6 +32,14 @@ func NewState() *LuaState {
 	// Initialize V5 GC state (before any objects are created)
 	g.CurrentWhite = object.WhiteBit0
 	g.GCState = object.GCSpause
+	// GC tuning defaults (C Lua 5.5.1: LUAI_GCPAUSE=200, LUAI_GCMUL=200, LUAI_GCSTEPSIZE=13)
+	g.GCPause = 200
+	g.GCStepMul = 200
+	g.GCStepSize = 13
+	// Initial GC debt: give 64KB of allocation credit before first GC triggers.
+	// This matches the minDebt in SetPause and avoids premature collection
+	// during state initialization.
+	g.GCDebt = 64 * 1024
 
 	// String table
 	strtab := luastring.NewStringTable(g.Seed)
@@ -66,6 +77,9 @@ func NewState() *LuaState {
 
 	// Mark main thread as non-yieldable (mirrors incnny)
 	L.NCCalls += 0x00010000 // increment non-yieldable count
+
+	// Install default warning handler (mirrors luaL_newstate → lua_setwarnf(warnfon))
+	DefaultWarnHandler(g)
 
 	return L
 }
@@ -355,6 +369,19 @@ func (g *GlobalState) LinkGC(obj object.GCObject) {
 	h.Marked = g.CurrentWhite
 	h.Next = g.Allgc
 	g.Allgc = obj
+	// Track allocation for debt-based GC pacing.
+	// When GCDebt reaches ≤0, the VM triggers a GC step.
+	if h.ObjSize == 0 {
+		h.ObjSize = 64 // default estimate for non-table objects (closures, strings, etc.)
+	}
+	g.TrackAllocation(h.ObjSize)
+}
+
+// TrackAllocation increments GCTotalBytes and decrements GCDebt by n bytes.
+// Used for debt-based GC pacing: when GCDebt reaches 0, a GC step triggers.
+func (g *GlobalState) TrackAllocation(n int64) {
+	atomic.AddInt64(&g.GCTotalBytes, n)
+	atomic.AddInt64(&g.GCDebt, -n)
 }
 
 // ---------------------------------------------------------------------------
@@ -388,3 +415,108 @@ func CloseState(L *LuaState) {
 	L.Global = nil
 }
 
+// ---------------------------------------------------------------------------
+// Warning system — mirrors C Lua's lua_warning / lua_setwarnf / luaE_warnerror
+// ---------------------------------------------------------------------------
+
+// Warning issues a warning message through the registered handler.
+// If tocont is true, the message is a continuation (more parts follow).
+// Mirrors C Lua's luaE_warning (lstate.c).
+func (g *GlobalState) Warning(msg string, tocont bool) {
+	if g.WarnF != nil {
+		g.WarnF(g.WarnUd, msg, tocont)
+	}
+}
+
+// WarnError generates a warning from a __gc error.
+// Produces: "error in __gc (errmsg)"
+// Mirrors C Lua's luaE_warnerror (lstate.c).
+func (g *GlobalState) WarnError(where string, errMsg string) {
+	g.Warning("error in ", true)
+	g.Warning(where, true)
+	g.Warning(" (", true)
+	g.Warning(errMsg, true)
+	g.Warning(")", false)
+}
+
+// SetWarnF sets the warning handler function and its user data.
+// Mirrors C Lua's lua_setwarnf.
+func (g *GlobalState) SetWarnF(f func(ud any, msg string, tocont bool), ud any) {
+	g.WarnF = f
+	g.WarnUd = ud
+}
+
+// ---------------------------------------------------------------------------
+// Default warning handler — mirrors lauxlib.c warnfon/warnfoff/warnfcont
+// ---------------------------------------------------------------------------
+
+// DefaultWarnHandler is the standard warning handler installed by luaL_newstate.
+// It supports @on/@off control messages and prints warnings to stderr.
+// The handler uses a state machine with three modes:
+//   - warnOff: warnings are off (only @on control message is processed)
+//   - warnOn: ready for a new message (checks control messages, prints prefix)
+//   - warnCont: continuing a multi-part message
+//
+// State is stored via closure over a *warnState.
+func DefaultWarnHandler(g *GlobalState) {
+	ws := &warnState{mode: warnOn} // warnings start enabled
+	g.SetWarnF(func(ud any, msg string, tocont bool) {
+		ws.handle(g, msg, tocont)
+	}, g.MainThread)
+}
+
+// warnMode represents the warning handler state machine mode.
+type warnMode int
+
+const (
+	warnOff  warnMode = iota // warnings disabled
+	warnOn                   // ready for new message
+	warnCont                 // in middle of multi-part message
+)
+
+type warnState struct {
+	mode warnMode
+}
+
+// checkControl checks if msg is a control message (starts with '@', not a
+// continuation). Returns true if it was a control message.
+func (ws *warnState) checkControl(g *GlobalState, msg string, tocont bool) bool {
+	if tocont || len(msg) == 0 || msg[0] != '@' {
+		return false
+	}
+	switch msg[1:] {
+	case "off":
+		ws.mode = warnOff
+	case "on":
+		ws.mode = warnOn
+	}
+	// Unknown control messages are silently ignored (C Lua behavior)
+	return true
+}
+
+func (ws *warnState) handle(g *GlobalState, msg string, tocont bool) {
+	switch ws.mode {
+	case warnOff:
+		ws.checkControl(g, msg, tocont)
+	case warnOn:
+		if ws.checkControl(g, msg, tocont) {
+			return
+		}
+		// Start new warning: accumulate in buffer
+		g.WarnBuf = "Lua warning: " + msg
+		if tocont {
+			ws.mode = warnCont
+		} else {
+			fmt.Fprintln(os.Stderr, g.WarnBuf)
+			g.WarnBuf = ""
+			// stay in warnOn
+		}
+	case warnCont:
+		g.WarnBuf += msg
+		if !tocont {
+			fmt.Fprintln(os.Stderr, g.WarnBuf)
+			g.WarnBuf = ""
+			ws.mode = warnOn
+		}
+	}
+}

@@ -121,12 +121,14 @@ func luaB_warn(L *luaapi.State) int {
 	for i := 2; i <= n; i++ {
 		L.CheckString(i)
 	}
-	var sb strings.Builder
-	for i := 1; i <= n; i++ {
+	// Issue warning parts with tocont=true for all but the last.
+	// Mirrors C Lua's luaB_warn (lbaselib.c).
+	for i := 1; i < n; i++ {
 		s, _ := L.ToString(i)
-		sb.WriteString(s)
+		L.Warning(s, true)
 	}
-	fmt.Fprintln(os.Stderr, "Lua warning: "+sb.String())
+	s, _ := L.ToString(n)
+	L.Warning(s, false) // last part: tocont=false
 	return 0
 }
 
@@ -610,10 +612,10 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushNumber(kb)
 		return 1
 	case 4: // step
-		// V5: Run Lua mark-and-sweep GC step
-		L.GCCollect()
+		// V5: Run bounded incremental GC step
+		completed := L.GCStepAPI()
 		L.SweepStrings()
-		L.PushBoolean(true)
+		L.PushBoolean(completed)
 		return 1
 	case 5: // isrunning
 		L.PushBoolean(L.IsGCRunning())
@@ -624,6 +626,16 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		return 1
 	case 7: // incremental
 		prev := L.SetGCMode("incremental")
+		// collectgarbage("incremental" [, pause [, stepmul [, stepsize]]])
+		if pause := L.OptInteger(2, 0); pause != 0 {
+			L.SetGCParam("pause", pause)
+		}
+		if stepmul := L.OptInteger(3, 0); stepmul != 0 {
+			L.SetGCParam("stepmul", stepmul)
+		}
+		if stepsize := L.OptInteger(4, 0); stepsize != 0 {
+			L.SetGCParam("stepsize", stepsize)
+		}
 		L.PushString(prev)
 		return 1
 	case 8: // param

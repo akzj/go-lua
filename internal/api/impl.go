@@ -101,6 +101,12 @@ func (L *State) push(v object.TValue) {
 	state.PushValue(ls, v)
 }
 
+// PushTValue pushes an existing TValue directly onto the stack.
+// Unlike PushString etc., this preserves object identity (pointer).
+func (L *State) PushTValue(v object.TValue) {
+	L.push(v)
+}
+
 // wrapCFunctionStatic creates an adapter without capturing a specific State.
 // Each call creates a temporary State wrapper.
 func wrapCFunctionStatic(f CFunction) state.CFunction {
@@ -139,6 +145,9 @@ func NewState() *State {
 		// clearStaleStack is only needed for explicit GC (collectgarbage()).
 		gc.FullGC(g, thread)
 		g.GCRunning = false
+		// Recalculate debt based on live data so GC doesn't re-trigger
+		// immediately on the next checkGC call.
+		gc.SetPause(g)
 		// Drain pending finalizers — objects moved to tobefnz by
 		// separateTobeFnz in FullGC need their __gc called.
 		wrapper := &State{Internal: thread}
@@ -827,4 +836,23 @@ func (L *State) PushFuncFromDebug(ar *DebugInfo) bool {
 	}
 	L.push(ls.Stack[ci.Func].Val)
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// Warning system — mirrors C Lua's lua_warning / lua_setwarnf
+// ---------------------------------------------------------------------------
+
+// Warning issues a warning message through the registered handler.
+// tocont=true means the message is a continuation (more parts follow).
+// Mirrors C Lua's lua_warning (lapi.c).
+func (L *State) Warning(msg string, tocont bool) {
+	g := L.ls().Global
+	g.Warning(msg, tocont)
+}
+
+// SetWarnF sets the warning handler function.
+// Mirrors C Lua's lua_setwarnf (lapi.c).
+func (L *State) SetWarnF(f func(ud any, msg string, tocont bool), ud any) {
+	g := L.ls().Global
+	g.SetWarnF(f, ud)
 }
