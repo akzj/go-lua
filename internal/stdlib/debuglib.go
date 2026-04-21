@@ -580,7 +580,7 @@ func debugGethook(L *luaapi.State) int {
 	mask := L1.HookMask
 	// Get hook function from target thread's Hook field
 	hookVal, ok := L1.Hook.(object.TValue)
-	if !ok || hookVal.Val == nil || hookVal.Tt == object.TagNil {
+	if !ok || hookVal.Tt == object.TagNil || (hookVal.Obj == nil && !hookVal.IsNumber()) {
 		L.PushBoolean(false) // luaL_pushfail — no hook
 		return 1
 	}

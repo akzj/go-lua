@@ -48,7 +48,7 @@ func checkPeriodicGC(g *state.GlobalState, L *state.LuaState) {
 // Also handles __close interruption (OP_CLOSE/OP_RETURN).
 // Mirrors: luaV_finishOp in lvm.c:568-618
 func finishOp(L *state.LuaState, ci *state.CallInfo) {
-	cl := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+	cl := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 	code := cl.Proto.Code
 	inst := code[ci.SavedPC-1] // interrupted instruction
 	op := opcode.GetOpCode(inst)
@@ -119,7 +119,7 @@ func finishOp(L *state.LuaState, ci *state.CallInfo) {
 // This is the Go equivalent of luaV_execute in lvm.c.
 func execute(L *state.LuaState, ci *state.CallInfo) {
 startfunc:
-	cl := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
+	cl := L.Stack[ci.Func].Val.Obj.(*closure.LClosure)
 	k := cl.Proto.Constants
 	code := cl.Proto.Code
 	base := ci.Func + 1
@@ -213,7 +213,7 @@ startfunc:
 			upval := cl.UpVals[b].Get(L.Stack)
 			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
-				h := upval.Val.(*table.Table)
+				h := upval.Obj.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -228,7 +228,7 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			if rb.IsTable() {
-				h := rb.Val.(*table.Table)
+				h := rb.Obj.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -243,7 +243,7 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			c := int64(opcode.GetArgC(inst))
 			if rb.IsTable() {
-				h := rb.Val.(*table.Table)
+				h := rb.Obj.(*table.Table)
 				val, found := h.GetInt(c)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -258,7 +258,7 @@ startfunc:
 			rb := L.Stack[base+opcode.GetArgB(inst)].Val
 			rc := k[opcode.GetArgC(inst)]
 			if rb.IsTable() {
-				h := rb.Val.(*table.Table)
+				h := rb.Obj.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -346,7 +346,7 @@ startfunc:
 			size := t.EstimateBytes()
 			atomic.AddInt64(&L.Global.GCTotalBytes, size)
 			// V5 GC sweep handles dealloc accounting — no AddCleanup needed
-			L.Stack[ra].Val = object.TValue{Tt: object.TagTable, Val: t}
+			L.Stack[ra].Val = object.TValue{Tt: object.TagTable, Obj: t}
 
 			// Periodic GC: run Lua GC during tight allocation loops.
 			// V5 GC handles __gc via finobj list.
@@ -359,7 +359,7 @@ startfunc:
 			rc := k[opcode.GetArgC(inst)]
 			L.Stack[ra+1].Val = rb // save table as self
 			if rb.IsTable() {
-				h := rb.Val.(*table.Table)
+				h := rb.Obj.(*table.Table)
 				val, found := h.Get(rc)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -1111,7 +1111,7 @@ startfunc:
 		case opcode.OP_SETLIST:
 			n := opcode.GetArgVB(inst)
 			last := opcode.GetArgVC(inst)
-			h := L.Stack[ra].Val.Val.(*table.Table)
+			h := L.Stack[ra].Val.Obj.(*table.Table)
 			if n == 0 {
 				n = L.Top - ra - 1
 			}
@@ -1137,7 +1137,7 @@ startfunc:
 			rc := L.Stack[base+opcode.GetArgC(inst)].Val
 			switch rc.Tt {
 			case object.TagInteger:
-				idx := rc.Val.(int64)
+				idx := rc.N
 				nExtra := ci.NExtraArgs
 				if uint64(idx-1) < uint64(nExtra) {
 					varBase := ci.Func - nExtra
@@ -1146,7 +1146,7 @@ startfunc:
 					L.Stack[ra].Val = object.Nil
 				}
 			case object.TagFloat:
-				f := rc.Val.(float64)
+				f := rc.Float()
 				if idx, ok := floatToInteger(f); ok {
 					nExtra := ci.NExtraArgs
 					if uint64(idx-1) < uint64(nExtra) {
@@ -1159,7 +1159,7 @@ startfunc:
 					L.Stack[ra].Val = object.Nil
 				}
 			case object.TagShortStr, object.TagLongStr:
-				s := rc.Val.(*object.LuaString)
+				s := rc.Obj.(*object.LuaString)
 				if s.Data == "n" {
 					L.Stack[ra].Val = object.MakeInteger(int64(ci.NExtraArgs))
 				} else {

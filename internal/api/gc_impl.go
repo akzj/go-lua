@@ -153,12 +153,12 @@ func (L *State) callOneGCTM(ls *state.LuaState, g *state.GlobalState) {
 	switch v := obj.(type) {
 	case *table.Table:
 		mt = v.GetMetatable()
-		objVal = object.TValue{Val: v, Tt: object.TagTable}
+		objVal = object.TValue{Obj: v, Tt: object.TagTable}
 	case *object.Userdata:
 		if v.MetaTable != nil {
 			mt, _ = v.MetaTable.(*table.Table)
 		}
-		objVal = object.TValue{Val: v, Tt: object.TagUserdata}
+		objVal = object.TValue{Obj: v, Tt: object.TagUserdata}
 	default:
 		return
 	}

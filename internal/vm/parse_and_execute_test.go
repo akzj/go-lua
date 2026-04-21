@@ -47,11 +47,11 @@ func runLua(t *testing.T, src string) luaResult {
 	if len(cl.UpVals) > 0 {
 		gt := GetGlobalTable(L)
 		uv := &closure.UpVal{}
-		uv.Close(object.TValue{Tt: object.TagTable, Val: gt})
+		uv.Close(object.TValue{Tt: object.TagTable, Obj: gt})
 		cl.UpVals[0] = uv
 	}
 	funcIdx := L.Top
-	state.PushValue(L, object.TValue{Tt: object.TagLuaClosure, Val: cl})
+	state.PushValue(L, object.TValue{Tt: object.TagLuaClosure, Obj: cl})
 	Call(L, funcIdx, state.MultiRet)
 	return luaResult{L: L, top: L.Top, funcIdx: funcIdx}
 }
@@ -83,7 +83,7 @@ func TestReturnInteger(t *testing.T) {
 	r := runLua(t, "return 42")
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 42 {
-		t.Fatalf("expected 42, got tag=%d val=%v", v.Tt, v.Val)
+		t.Fatalf("expected 42, got tag=%d val=%v", v.Tt, v.Payload())
 	}
 }
 
@@ -91,7 +91,7 @@ func TestReturnFloat(t *testing.T) {
 	r := runLua(t, "return 3.14")
 	v := r.get(0)
 	if !v.IsFloat() || v.Float() != 3.14 {
-		t.Fatalf("expected 3.14, got tag=%d val=%v", v.Tt, v.Val)
+		t.Fatalf("expected 3.14, got tag=%d val=%v", v.Tt, v.Payload())
 	}
 }
 
@@ -99,7 +99,7 @@ func TestReturnString(t *testing.T) {
 	r := runLua(t, `return "hello"`)
 	v := r.get(0)
 	if !v.IsString() || v.StringVal().Data != "hello" {
-		t.Fatalf("expected 'hello', got tag=%d val=%v", v.Tt, v.Val)
+		t.Fatalf("expected 'hello', got tag=%d val=%v", v.Tt, v.Payload())
 	}
 }
 
@@ -134,7 +134,7 @@ func TestLocalArithmetic(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 30 {
-		t.Fatalf("expected 30, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 30, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -154,7 +154,7 @@ func TestArithmeticOperators(t *testing.T) {
 			r := runLua(t, tt.src)
 			v := r.get(0)
 			if !v.IsInteger() || v.Integer() != tt.expect {
-				t.Fatalf("expected %d, got %v (tag %d)", tt.expect, v.Val, v.Tt)
+				t.Fatalf("expected %d, got %v (tag %d)", tt.expect, v.Payload(), v.Tt)
 			}
 		})
 	}
@@ -176,7 +176,7 @@ func TestFloorDivision(t *testing.T) {
 	r := runLua(t, "return 10 // 3")
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 3 {
-		t.Fatalf("expected 3, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 3, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -189,7 +189,7 @@ func TestIfTrue(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 1 {
-		t.Fatalf("expected 1, got %v", v.Val)
+		t.Fatalf("expected 1, got %v", v.Payload())
 	}
 }
 
@@ -200,7 +200,7 @@ func TestIfFalse(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 2 {
-		t.Fatalf("expected 2, got %v", v.Val)
+		t.Fatalf("expected 2, got %v", v.Payload())
 	}
 }
 
@@ -218,7 +218,7 @@ func TestWhileLoop(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 55 {
-		t.Fatalf("expected 55, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 55, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -236,7 +236,7 @@ func TestRepeatLoop(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 55 {
-		t.Fatalf("expected 55, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 55, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestNumericFor(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 55 {
-		t.Fatalf("expected 55, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 55, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -266,7 +266,7 @@ func TestNumericForWithStep(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 25 {
-		t.Fatalf("expected 25, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 25, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -279,7 +279,7 @@ func TestTableConstructor(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 20 {
-		t.Fatalf("expected 20, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 20, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -290,7 +290,7 @@ func TestTableFieldAccess(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 42 {
-		t.Fatalf("expected 42, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 42, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -302,7 +302,7 @@ func TestTableFieldSet(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 99 {
-		t.Fatalf("expected 99, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 99, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -317,7 +317,7 @@ func TestLocalFunction(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 7 {
-		t.Fatalf("expected 7, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 7, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -339,7 +339,7 @@ func TestClosure(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 3 {
-		t.Fatalf("expected 3, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 3, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -349,7 +349,7 @@ func TestStringConcat(t *testing.T) {
 	r := runLua(t, `return "hello" .. " " .. "world"`)
 	v := r.get(0)
 	if !v.IsString() || v.StringVal().Data != "hello world" {
-		t.Fatalf("expected 'hello world', got %v", v.Val)
+		t.Fatalf("expected 'hello world', got %v", v.Payload())
 	}
 }
 
@@ -396,7 +396,7 @@ func TestMultipleReturns(t *testing.T) {
 	for i, want := range []int64{1, 2, 3} {
 		v := r.get(i)
 		if !v.IsInteger() || v.Integer() != want {
-			t.Fatalf("result[%d]: expected %d, got %v", i, want, v.Val)
+			t.Fatalf("result[%d]: expected %d, got %v", i, want, v.Payload())
 		}
 	}
 }
@@ -420,7 +420,7 @@ func TestNestedCalls(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 30 {
-		t.Fatalf("expected 30, got %v", v.Val)
+		t.Fatalf("expected 30, got %v", v.Payload())
 	}
 }
 
@@ -436,7 +436,7 @@ func TestFibonacci(t *testing.T) {
 	`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 55 {
-		t.Fatalf("expected 55, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 55, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestLengthOperator(t *testing.T) {
 	r := runLua(t, `return #"hello"`)
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 5 {
-		t.Fatalf("expected 5, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 5, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -456,7 +456,7 @@ func TestLogicalAnd(t *testing.T) {
 	r := runLua(t, "return 1 and 2")
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 2 {
-		t.Fatalf("expected 2, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 2, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -464,7 +464,7 @@ func TestLogicalOr(t *testing.T) {
 	r := runLua(t, "return false or 42")
 	v := r.get(0)
 	if !v.IsInteger() || v.Integer() != 42 {
-		t.Fatalf("expected 42, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 42, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 
@@ -481,22 +481,22 @@ func TestCFunction(t *testing.T) {
 		return 1
 	}
 	gt.Set(object.MakeString(&object.LuaString{Data: "myadd", IsShort: true}),
-		object.TValue{Tt: object.TagLightCFunc, Val: state.CFunction(addFn)})
+		object.TValue{Tt: object.TagLightCFunc, Obj: state.CFunction(addFn)})
 
 	reader := newStringReader("return myadd(10, 20)")
 	proto := parse.Parse("test", reader)
 	cl := closure.NewLClosure(proto, len(proto.Upvalues))
 	if len(cl.UpVals) > 0 {
 		uv := &closure.UpVal{}
-		uv.Close(object.TValue{Tt: object.TagTable, Val: gt})
+		uv.Close(object.TValue{Tt: object.TagTable, Obj: gt})
 		cl.UpVals[0] = uv
 	}
 	funcIdx := L.Top
-	state.PushValue(L, object.TValue{Tt: object.TagLuaClosure, Val: cl})
+	state.PushValue(L, object.TValue{Tt: object.TagLuaClosure, Obj: cl})
 	Call(L, funcIdx, state.MultiRet)
 	v := L.Stack[funcIdx].Val
 	if !v.IsInteger() || v.Integer() != 30 {
-		t.Fatalf("expected 30, got %v (tag %d)", v.Val, v.Tt)
+		t.Fatalf("expected 30, got %v (tag %d)", v.Payload(), v.Tt)
 	}
 }
 

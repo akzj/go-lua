@@ -50,16 +50,16 @@ func (uv *UpVal) Close(val object.TValue) {
 }
 
 // Get returns the current value of the upvalue.
-// For open upvalues, uses the stored stack reference (falls back to provided stack).
-// For closed upvalues, uses Own.
+// For closed upvalues (common case), returns Own directly.
+// For open upvalues, reads from the owning thread's stack.
 func (uv *UpVal) Get(stack []object.StackValue) object.TValue {
-	if uv.StackIdx >= 0 {
-		if uv.Stack != nil {
-			return (*uv.Stack)[uv.StackIdx].Val
-		}
-		return stack[uv.StackIdx].Val
+	if uv.StackIdx < 0 {
+		return uv.Own
 	}
-	return uv.Own
+	if uv.Stack != nil {
+		return (*uv.Stack)[uv.StackIdx].Val
+	}
+	return stack[uv.StackIdx].Val
 }
 
 // Set sets the value of the upvalue.

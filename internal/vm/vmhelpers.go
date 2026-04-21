@@ -22,11 +22,11 @@ import (
 func toNumber(v object.TValue) (float64, bool) {
 	switch v.Tt {
 	case object.TagFloat:
-		return v.Val.(float64), true
+		return v.Float(), true
 	case object.TagInteger:
-		return float64(v.Val.(int64)), true
+		return float64(v.N), true
 	case object.TagShortStr, object.TagLongStr:
-		return stringToNumber(v.Val.(*object.LuaString).Data)
+		return stringToNumber(v.Obj.(*object.LuaString).Data)
 	}
 	return 0, false
 }
@@ -37,9 +37,9 @@ func toNumber(v object.TValue) (float64, bool) {
 func toIntegerStrict(v object.TValue) (int64, bool) {
 	switch v.Tt {
 	case object.TagInteger:
-		return v.Val.(int64), true
+		return v.N, true
 	case object.TagFloat:
-		return floatToInteger(v.Val.(float64))
+		return floatToInteger(v.Float())
 	}
 	return 0, false
 }
@@ -47,11 +47,11 @@ func toIntegerStrict(v object.TValue) (int64, bool) {
 func toInteger(v object.TValue) (int64, bool) {
 	switch v.Tt {
 	case object.TagInteger:
-		return v.Val.(int64), true
+		return v.N, true
 	case object.TagFloat:
-		return floatToInteger(v.Val.(float64))
+		return floatToInteger(v.Float())
 	case object.TagShortStr, object.TagLongStr:
-		return stringToInteger(v.Val.(*object.LuaString).Data)
+		return stringToInteger(v.Obj.(*object.LuaString).Data)
 	}
 	return 0, false
 }
@@ -74,11 +74,11 @@ func floatToInteger(f float64) (int64, bool) {
 
 // toFloat extracts a float64 from a TValue that may hold int64 or float64.
 func toFloat(v object.TValue) float64 {
-	switch val := v.Val.(type) {
-	case float64:
-		return val
-	case int64:
-		return float64(val)
+	switch v.Tt {
+	case object.TagFloat:
+		return v.Float()
+	case object.TagInteger:
+		return float64(v.N)
 	}
 	return 0
 }
@@ -111,7 +111,7 @@ func toNumberTV(v object.TValue) (object.TValue, bool) {
 	case object.TagFloat, object.TagInteger:
 		return v, true
 	case object.TagShortStr, object.TagLongStr:
-		return object.StringToNumber(v.Val.(*object.LuaString).Data)
+		return object.StringToNumber(v.Obj.(*object.LuaString).Data)
 	}
 	return object.Nil, false
 }
@@ -427,33 +427,33 @@ func leFloatInt(f float64, i int64) bool {
 // ltNum compares two numbers (l < r).
 func ltNum(l, r object.TValue) bool {
 	if l.IsInteger() {
-		li := l.Val.(int64)
+		li := l.N
 		if r.IsInteger() {
-			return li < r.Val.(int64)
+			return li < r.N
 		}
-		return ltIntFloat(li, r.Val.(float64))
+		return ltIntFloat(li, r.Float())
 	}
-	lf := l.Val.(float64)
+	lf := l.Float()
 	if r.IsFloat() {
-		return lf < r.Val.(float64)
+		return lf < r.Float()
 	}
-	return ltFloatInt(lf, r.Val.(int64))
+	return ltFloatInt(lf, r.N)
 }
 
 // leNum compares two numbers (l <= r).
 func leNum(l, r object.TValue) bool {
 	if l.IsInteger() {
-		li := l.Val.(int64)
+		li := l.N
 		if r.IsInteger() {
-			return li <= r.Val.(int64)
+			return li <= r.N
 		}
-		return leIntFloat(li, r.Val.(float64))
+		return leIntFloat(li, r.Float())
 	}
-	lf := l.Val.(float64)
+	lf := l.Float()
 	if r.IsFloat() {
-		return lf <= r.Val.(float64)
+		return lf <= r.Float()
 	}
-	return leFloatInt(lf, r.Val.(int64))
+	return leFloatInt(lf, r.N)
 }
 
 // LessThan performs l < r with metamethods.
@@ -462,7 +462,7 @@ func LessThan(L *state.LuaState, l, r object.TValue) bool {
 		return ltNum(l, r)
 	}
 	if l.IsString() && r.IsString() {
-		return l.Val.(*object.LuaString).Data < r.Val.(*object.LuaString).Data
+		return l.Obj.(*object.LuaString).Data < r.Obj.(*object.LuaString).Data
 	}
 	// Try metamethod
 	return callOrderTM(L, l, r, metamethod.TM_LT)
@@ -474,7 +474,7 @@ func LessEqual(L *state.LuaState, l, r object.TValue) bool {
 		return leNum(l, r)
 	}
 	if l.IsString() && r.IsString() {
-		return l.Val.(*object.LuaString).Data <= r.Val.(*object.LuaString).Data
+		return l.Obj.(*object.LuaString).Data <= r.Obj.(*object.LuaString).Data
 	}
 	return callOrderTM(L, l, r, metamethod.TM_LE)
 }
@@ -536,12 +536,12 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 		// Different tags — check int/float cross-comparison
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
-				i2, ok := floatToInteger(t2.Val.(float64))
-				return ok && t1.Val.(int64) == i2
+				i2, ok := floatToInteger(t2.Float())
+				return ok && t1.N == i2
 			}
 			if t1.IsFloat() && t2.IsInteger() {
-				i1, ok := floatToInteger(t1.Val.(float64))
-				return ok && i1 == t2.Val.(int64)
+				i1, ok := floatToInteger(t1.Float())
+				return ok && i1 == t2.N
 			}
 		}
 		return false
@@ -553,31 +553,16 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 	case object.TagFalse, object.TagTrue:
 		return t1.Tt == t2.Tt
 	case object.TagInteger:
-		i1, ok1 := t1.Val.(int64)
-		i2, ok2 := t2.Val.(int64)
-		if ok1 && ok2 {
-			return i1 == i2
-		}
-		// Defensive: tag says integer but value may be float
-		f1 := toFloat(t1)
-		f2 := toFloat(t2)
-		return f1 == f2
+		return t1.N == t2.N
 	case object.TagFloat:
-		f1, ok1 := t1.Val.(float64)
-		f2, ok2 := t2.Val.(float64)
-		if ok1 && ok2 {
-			return f1 == f2
-		}
-		ff1 := toFloat(t1)
-		ff2 := toFloat(t2)
-		return ff1 == ff2
+		return t1.Float() == t2.Float()
 	case object.TagShortStr:
-		return t1.Val.(*object.LuaString).Data == t2.Val.(*object.LuaString).Data
+		return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
 	case object.TagLongStr:
-		return t1.Val.(*object.LuaString).Data == t2.Val.(*object.LuaString).Data
+		return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
 	case object.TagTable:
-		h1 := t1.Val.(*table.Table)
-		h2 := t2.Val.(*table.Table)
+		h1 := t1.Obj.(*table.Table)
+		h2 := t2.Obj.(*table.Table)
 		if h1 == h2 {
 			return true
 		}
@@ -595,15 +580,15 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 		result := callTMRes(L, tm, t1, t2)
 		return !result.IsFalsy()
 	case object.TagLuaClosure, object.TagCClosure:
-		return t1.Val == t2.Val // pointer comparison — struct pointers are comparable
+		return t1.Obj == t2.Obj // pointer comparison — struct pointers are comparable
 	case object.TagLightCFunc:
 		// Use interface data word for unique closure identity (reflect.Pointer is shared)
-		return object.LightCFuncEqual(t1.Val, t2.Val)
+		return object.LightCFuncEqual(t1.Obj, t2.Obj)
 	default:
 		if t1.Tt == object.TagLightCFunc || t2.Tt == object.TagLightCFunc {
 			return false // different tags already checked above
 		}
-		return t1.Val == t2.Val
+		return t1.Obj == t2.Obj
 	}
 }
 
@@ -612,12 +597,12 @@ func rawEqualObj(t1, t2 object.TValue) bool {
 	if t1.Tt != t2.Tt {
 		if t1.IsNumber() && t2.IsNumber() {
 			if t1.IsInteger() && t2.IsFloat() {
-				i2, ok := floatToInteger(t2.Val.(float64))
-				return ok && t1.Val.(int64) == i2
+				i2, ok := floatToInteger(t2.Float())
+				return ok && t1.N == i2
 			}
 			if t1.IsFloat() && t2.IsInteger() {
-				i1, ok := floatToInteger(t1.Val.(float64))
-				return ok && i1 == t2.Val.(int64)
+				i1, ok := floatToInteger(t1.Float())
+				return ok && i1 == t2.N
 			}
 		}
 		return false
@@ -628,32 +613,17 @@ func rawEqualObj(t1, t2 object.TValue) bool {
 	case object.TagFalse, object.TagTrue:
 		return t1.Tt == t2.Tt
 	case object.TagInteger:
-		i1, ok1 := t1.Val.(int64)
-		i2, ok2 := t2.Val.(int64)
-		if ok1 && ok2 {
-			return i1 == i2
-		}
-		// Defensive: tag says integer but value may be float
-		f1 := toFloat(t1)
-		f2 := toFloat(t2)
-		return f1 == f2
+		return t1.N == t2.N
 	case object.TagFloat:
-		f1, ok1 := t1.Val.(float64)
-		f2, ok2 := t2.Val.(float64)
-		if ok1 && ok2 {
-			return f1 == f2
-		}
-		ff1 := toFloat(t1)
-		ff2 := toFloat(t2)
-		return ff1 == ff2
+		return t1.Float() == t2.Float()
 	case object.TagShortStr, object.TagLongStr:
-		return t1.Val.(*object.LuaString).Data == t2.Val.(*object.LuaString).Data
+		return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
 	case object.TagLuaClosure, object.TagCClosure:
-		return t1.Val == t2.Val // pointer comparison
+		return t1.Obj == t2.Obj // pointer comparison
 	case object.TagLightCFunc:
-		return object.LightCFuncEqual(t1.Val, t2.Val)
+		return object.LightCFuncEqual(t1.Obj, t2.Obj)
 	default:
-		return t1.Val == t2.Val
+		return t1.Obj == t2.Obj
 	}
 }
 
@@ -805,11 +775,11 @@ func tryConcatTM(L *state.LuaState) {
 func toStringForConcat(v object.TValue) (string, bool) {
 	switch v.Tt {
 	case object.TagShortStr, object.TagLongStr:
-		return v.Val.(*object.LuaString).Data, true
+		return v.Obj.(*object.LuaString).Data, true
 	case object.TagInteger:
-		return intToString(v.Val.(int64)), true
+		return intToString(v.N), true
 	case object.TagFloat:
-		return floatToString(v.Val.(float64)), true
+		return floatToString(v.Float()), true
 	}
 	return "", false
 }
@@ -995,7 +965,7 @@ func Concat(L *state.LuaState, total int) {
 func ObjLen(L *state.LuaState, ra int, rb object.TValue) {
 	switch rb.Tt {
 	case object.TagTable:
-		h := rb.Val.(*table.Table)
+		h := rb.Obj.(*table.Table)
 		mt := h.GetMetatable()
 		if mt != nil {
 			tm := getTableTM(L.Global, h, metamethod.TM_LEN)
@@ -1011,7 +981,7 @@ func ObjLen(L *state.LuaState, ra int, rb object.TValue) {
 		}
 		L.Stack[ra].Val = object.MakeInteger(h.RawLen())
 	case object.TagShortStr, object.TagLongStr:
-		s := rb.Val.(*object.LuaString)
+		s := rb.Obj.(*object.LuaString)
 		L.Stack[ra].Val = object.MakeInteger(int64(len(s.Data)))
 	default:
 		tm := metamethod.GetTMByObj(L.Global, rb, metamethod.TM_LEN)
@@ -1036,7 +1006,7 @@ func FinishGet(L *state.LuaState, t, key object.TValue, ra int) {
 	for loop := 0; loop < maxTagLoop; loop++ {
 		var tm object.TValue
 		if t.IsTable() {
-			h := t.Val.(*table.Table)
+			h := t.Obj.(*table.Table)
 			tm = getTableTM(L.Global, h, metamethod.TM_INDEX)
 			if tm.IsNil() {
 				L.Stack[ra].Val = object.Nil
@@ -1062,7 +1032,7 @@ func FinishGet(L *state.LuaState, t, key object.TValue, ra int) {
 		// tm is a table — repeat with tm as the new table
 		t = tm
 		if t.IsTable() {
-			h := t.Val.(*table.Table)
+			h := t.Obj.(*table.Table)
 			val, found := h.Get(key)
 			if found && !val.IsNil() {
 				L.Stack[ra].Val = val
@@ -1084,7 +1054,7 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 	if key.IsFloat() && math.IsNaN(key.Float()) {
 		RunError(L, "table index is NaN")
 	}
-	h := tval.Val.(*table.Table)
+	h := tval.Obj.(*table.Table)
 	// Fast path: key already exists → just overwrite
 	_, found := h.Get(key)
 	if found {
@@ -1107,7 +1077,7 @@ func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 	for loop := 0; loop < maxTagLoop; loop++ {
 		var tm object.TValue
 		if t.IsTable() {
-			h := t.Val.(*table.Table)
+			h := t.Obj.(*table.Table)
 			tm = getTableTM(L.Global, h, metamethod.TM_NEWINDEX)
 			if tm.IsNil() {
 				h.Set(key, val)
@@ -1126,7 +1096,7 @@ func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 		// tm is a table — repeat
 		t = tm
 		if t.IsTable() {
-			h := t.Val.(*table.Table)
+			h := t.Obj.(*table.Table)
 			_, found := h.Get(key)
 			if found {
 				h.Set(key, val)
@@ -1185,13 +1155,13 @@ func forLimit(L *state.LuaState, init int64, plimit object.TValue, limit *int64,
 func flttointeger(v object.TValue, step int64) (int64, bool) {
 	switch v.Tt {
 	case object.TagInteger:
-		return v.Val.(int64), true
+		return v.N, true
 	case object.TagFloat:
-		f := v.Val.(float64)
+		f := v.Float()
 		return floatToIntegerRounded(f, step)
 	case object.TagShortStr, object.TagLongStr:
 		// String: try to parse as number, then convert with rounding
-		s := v.Val.(*object.LuaString).Data
+		s := v.Obj.(*object.LuaString).Data
 		if n, ok := stringToInteger(s); ok {
 			return n, true
 		}
@@ -1230,8 +1200,8 @@ func forPrep(L *state.LuaState, ra int) bool {
 	pstep := L.Stack[ra+2].Val
 
 	if pinit.IsInteger() && pstep.IsInteger() {
-		init := pinit.Val.(int64)
-		step := pstep.Val.(int64)
+		init := pinit.N
+		step := pstep.N
 		if step == 0 {
 			RunError(L, "'for' step is zero")
 		}
@@ -1331,7 +1301,7 @@ func pushClosure(L *state.LuaState, p *object.Proto, encup []*closure.UpVal, bas
 	nup := len(p.Upvalues)
 	ncl := closure.NewLClosure(p, nup)
 	L.Global.LinkGC(ncl) // V5: register in allgc chain
-	L.Stack[ra].Val = object.TValue{Tt: object.TagLuaClosure, Val: ncl}
+	L.Stack[ra].Val = object.TValue{Tt: object.TagLuaClosure, Obj: ncl}
 	for i := 0; i < nup; i++ {
 		if p.Upvalues[i].InStack {
 			ncl.UpVals[i] = closure.FindUpval(L, base+int(p.Upvalues[i].Idx))
@@ -1383,7 +1353,7 @@ func adjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 			t.SetInt(int64(i+1), L.Stack[ci.Func+nfixparams+1+i].Val)
 		}
 		// Place table at the vararg parameter slot (after fixed params)
-		L.Stack[ci.Func+nfixparams+1].Val = object.TValue{Tt: object.TagTable, Val: t}
+		L.Stack[ci.Func+nfixparams+1].Val = object.TValue{Tt: object.TagTable, Obj: t}
 		// Set top to after all params (fixed + vararg table)
 		L.Top = ci.Func + 1 + nfixparams + 1
 		ci.Top = ci.Func + 1 + int(p.MaxStackSize)
@@ -1417,7 +1387,7 @@ func adjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 func getVarargs(L *state.LuaState, ci *state.CallInfo, ra int, n int, vatab int) {
 	var h *table.Table
 	if vatab >= 0 {
-		h = L.Stack[ci.Func+vatab+1].Val.Val.(*table.Table)
+		h = L.Stack[ci.Func+vatab+1].Val.Obj.(*table.Table)
 	}
 
 	// Get number of available vararg args — mirrors getnumargs() in ltm.c
