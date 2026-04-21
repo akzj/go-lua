@@ -3,12 +3,12 @@
 **Pure Go implementation of Lua 5.5.1 | 纯 Go 实现的 Lua 5.5.1 虚拟机**
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-911%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Lua 5.5](https://img.shields.io/badge/Lua-5.5.1-blue?logo=lua&logoColor=white)
 ![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **26 official Lua 5.5 test suites** and achieves **near-parity performance** with the C reference implementation.
+A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **25 of 26 official Lua 5.5 test suites** (including the C-API test suite) and achieves **near-parity performance** with the C reference implementation.
 
 ---
 
@@ -20,6 +20,8 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 - **Coroutine yield across metamethods** — full support for yielding inside `__index`, `__newindex`, `__call`, etc.
 - **Mark-and-sweep GC** with generational mode, integrated with Go's garbage collector
 - **String interning** via `weak.Pointer` for memory-efficient string handling
+- **testC testing library** — 97 C-API-level instructions with multi-state testing (`newstate`/`closestate`/`doremote`)
+- **Public embedding API** — clean `pkg/lua/` package for external use
 - **~26,000 lines of source** across 13 internal packages, with **8,570 lines of tests**
 
 ## Performance
@@ -61,15 +63,13 @@ Benchmarked against C Lua 5.5.1 on the same hardware (Intel i7-14700KF):
 package main
 
 import (
-    luaapi "github.com/akzj/go-lua/internal/api"
-    "github.com/akzj/go-lua/internal/stdlib"
     "fmt"
+    lua "github.com/akzj/go-lua/pkg/lua"
 )
 
 func main() {
-    L := luaapi.NewState()
+    L := lua.NewState()  // Opens all standard libraries
     defer L.Close()
-    stdlib.OpenAll(L)
 
     // Execute Lua code
     if err := L.DoString(`print("Hello from Go-Lua!")`); err != nil {
@@ -77,7 +77,7 @@ func main() {
     }
 
     // Register a Go function and call it from Lua
-    L.PushCFunction(func(L *luaapi.State) int {
+    L.PushCFunction(func(L *lua.State) int {
         name := L.CheckString(1)
         L.PushString(fmt.Sprintf("Hello, %s!", name))
         return 1
@@ -103,30 +103,47 @@ func main() {
 | **utf8** | `char`, `codepoint`, `codes`, `len`, `offset`, `charpattern` |
 | **package** | `require`, `searchpath` |
 
+## testC Testing Library
+
+The official Lua 5.5 test suite includes `api.lua`, which tests the C API through a mini-language called `T.testC`. This project implements the full `T` library in pure Go:
+
+- **97 testC instructions** mapping to Lua C API functions (`pushvalue`, `gettable`, `call`, `yield`, `resume`, etc.)
+- **Multi-state testing** — `newstate`, `closestate`, and `doremote` for testing independent Lua states
+- **53 auxiliary functions** — `checkmemory`, `totalmem`, `udataval`, `makeCfunc`, `coresume`, and more
+- **~1,450 lines** in `internal/stdlib/testlib.go`
+
+A few C-specific test sections are skipped due to Go runtime differences:
+- `alloccount` — Go does not expose per-allocation counting
+- GC finalizer ordering — Go finalizers run non-deterministically
+- Certain `debug.sethook` edge cases involving C-level hook callbacks
+
 ## Architecture
 
 ```
+pkg/lua/            — Public embedding API (State, stack ops, type checks)
 internal/
-├── api/        — Public Lua API (State, stack ops, type checks)
-├── closure/    — Closures and upvalues
-├── gc/         — Mark-and-sweep garbage collector (V5)
-├── lex/        — Lexer/scanner
-├── luastring/  — String interning (weak.Pointer based)
-├── metamethod/ — Metamethod dispatch and tag method cache
-├── object/     — Core types (TValue, LuaString, Proto, etc.)
-├── opcode/     — Bytecode opcodes and instruction encoding
-├── parse/      — Parser and code generator
-├── state/      — Lua state and CallInfo
-├── stdlib/     — Standard library implementations
-├── table/      — Hash table with Brent's algorithm
-└── vm/         — Virtual machine (execute, do, debug)
+├── api/            — Internal Lua API implementation
+├── closure/        — Closures and upvalues
+├── gc/             — Mark-and-sweep garbage collector (V5)
+├── lex/            — Lexer/scanner
+├── luastring/      — String interning (weak.Pointer based)
+├── metamethod/     — Metamethod dispatch and tag method cache
+├── object/         — Core types (TValue, LuaString, Proto, etc.)
+├── opcode/         — Bytecode opcodes and instruction encoding
+├── parse/          — Parser and code generator
+├── state/          — Lua state and CallInfo
+├── stdlib/         — Standard library implementations + testC library
+├── table/          — Hash table with Brent's algorithm
+└── vm/             — Virtual machine (execute, do, debug)
 ```
 
 ## Test Suite
 
-**911 Go unit tests** plus **26 official Lua 5.5 test suites** from the reference implementation:
+**Go unit tests** plus **25 of 26 official Lua 5.5 test suites** from the reference implementation:
 
-`strings` · `math` · `sort` · `vararg` · `constructs` · `events` · `calls` · `locals` · `bitwise` · `tpack` · `code` · `api` · `nextvar` · `pm` · `db` · `attrib` · `coroutine` · `errors` · `goto` · `literals` · `utf8` · `closure` · `gc` · `gengc` · `files` · `cstack`
+`strings` · `math` · `sort` · `vararg` · `constructs` · `events` · `calls` · `locals` · `bitwise` · `tpack` · `code` · `api` · `nextvar` · `pm` · `db` · `attrib` · `coroutine` · `errors` · `goto` · `literals` · `utf8` · `closure` · `gc` · `files` · `cstack`
+
+> **Note:** `gengc.lua` is skipped — Go's garbage collector does not expose generational mode controls.
 
 ### Running Tests
 

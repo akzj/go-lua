@@ -434,6 +434,7 @@ type Userdata struct {
 	Data      any      // user data (Go value)
 	MetaTable any      // *Table at runtime (any to avoid import cycle)
 	UserVals  []TValue // user values (nuvalue)
+	Size      int      // allocated size in bytes (for lua_rawlen)
 }
 
 // GC returns the GC header for this userdata.

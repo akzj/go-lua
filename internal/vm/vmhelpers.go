@@ -579,6 +579,37 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 		}
 		result := callTMRes(L, tm, t1, t2)
 		return !result.IsFalsy()
+	case object.TagUserdata:
+		if t1.Obj == t2.Obj {
+			return true
+		}
+		if L == nil {
+			return false
+		}
+		// Try __eq metamethod for userdata
+		// For userdata, the metatable IS the table to search (not metatable's metatable)
+		u1 := t1.Obj.(*object.Userdata)
+		u2 := t2.Obj.(*object.Userdata)
+		var tm object.TValue
+		if mt1, ok := u1.MetaTable.(*table.Table); ok && mt1 != nil {
+			tmName := L.Global.TMNames[metamethod.TM_EQ]
+			if tmName != nil {
+				tm, _ = mt1.GetStr(tmName)
+			}
+		}
+		if tm.IsNil() {
+			if mt2, ok := u2.MetaTable.(*table.Table); ok && mt2 != nil {
+				tmName := L.Global.TMNames[metamethod.TM_EQ]
+				if tmName != nil {
+					tm, _ = mt2.GetStr(tmName)
+				}
+			}
+		}
+		if tm.IsNil() {
+			return false
+		}
+		result := callTMRes(L, tm, t1, t2)
+		return !result.IsFalsy()
 	case object.TagLuaClosure, object.TagCClosure:
 		return t1.Obj == t2.Obj // pointer comparison — struct pointers are comparable
 	case object.TagLightCFunc:
@@ -1445,4 +1476,24 @@ func getVarargs(L *state.LuaState, ci *state.CallInfo, ra int, n int, vatab int)
 	for i := touse; i < n; i++ {
 		L.Stack[ra+i].Val = object.Nil
 	}
+}
+
+// ---------------------------------------------------------------------------
+// API helpers — exported wrappers for metamethod-aware table operations
+// ---------------------------------------------------------------------------
+
+// APISetTable performs t[key] = val with __newindex metamethod support.
+// Used by the C API's lua_settable.
+func APISetTable(L *state.LuaState, t, key, val object.TValue) {
+	if t.IsTable() {
+		tableSetWithMeta(L, t, key, val)
+	} else {
+		FinishSet(L, t, key, val)
+	}
+}
+
+// APIGetTable performs result = t[key] with __index metamethod support.
+// Used by the C API's lua_gettable. Writes result to L.Stack[ra].
+func APIGetTable(L *state.LuaState, t, key object.TValue, ra int) {
+	FinishGet(L, t, key, ra)
 }

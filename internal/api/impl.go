@@ -549,6 +549,11 @@ func (L *State) RawLen(idx int) int64 {
 		return v.Obj.(*table.Table).RawLen()
 	case object.TagShortStr, object.TagLongStr:
 		return int64(len(v.Obj.(*object.LuaString).Data))
+	case object.TagUserdata:
+		if ud, ok := v.Obj.(*object.Userdata); ok {
+			return int64(ud.Size)
+		}
+		return 0
 	default:
 		return 0
 	}
@@ -628,7 +633,17 @@ func (L *State) TolString(idx int) string {
 			}
 			L.Pop(1)
 		}
-		s := fmt.Sprintf("%s: 0x%x", tn, reflect.ValueOf(v.Obj).Pointer())
+		var ptr uintptr
+		rv := reflect.ValueOf(v.Obj)
+		switch rv.Kind() {
+		case reflect.Ptr, reflect.Func, reflect.Chan, reflect.Map, reflect.Slice, reflect.UnsafePointer:
+			ptr = rv.Pointer()
+		case reflect.Uintptr:
+			ptr = uintptr(rv.Uint())
+		default:
+			ptr = uintptr(rv.Uint())
+		}
+		s := fmt.Sprintf("%s: 0x%x", tn, ptr)
 		L.PushString(s)
 		return s
 	}
