@@ -579,6 +579,37 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 		}
 		result := callTMRes(L, tm, t1, t2)
 		return !result.IsFalsy()
+	case object.TagUserdata:
+		if t1.Obj == t2.Obj {
+			return true
+		}
+		if L == nil {
+			return false
+		}
+		// Try __eq metamethod for userdata
+		// For userdata, the metatable IS the table to search (not metatable's metatable)
+		u1 := t1.Obj.(*object.Userdata)
+		u2 := t2.Obj.(*object.Userdata)
+		var tm object.TValue
+		if mt1, ok := u1.MetaTable.(*table.Table); ok && mt1 != nil {
+			tmName := L.Global.TMNames[metamethod.TM_EQ]
+			if tmName != nil {
+				tm, _ = mt1.GetStr(tmName)
+			}
+		}
+		if tm.IsNil() {
+			if mt2, ok := u2.MetaTable.(*table.Table); ok && mt2 != nil {
+				tmName := L.Global.TMNames[metamethod.TM_EQ]
+				if tmName != nil {
+					tm, _ = mt2.GetStr(tmName)
+				}
+			}
+		}
+		if tm.IsNil() {
+			return false
+		}
+		result := callTMRes(L, tm, t1, t2)
+		return !result.IsFalsy()
 	case object.TagLuaClosure, object.TagCClosure:
 		return t1.Obj == t2.Obj // pointer comparison — struct pointers are comparable
 	case object.TagLightCFunc:
