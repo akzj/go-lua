@@ -1,25 +1,26 @@
+// table_ops.go — Table access operations (GetTable, SetTable, GetField, SetField, Next, Len).
 package api
 
 import (
 	"math"
 
-	gcapi "github.com/akzj/go-lua/internal/gc"
-	metamethodapi "github.com/akzj/go-lua/internal/metamethod"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/gc"
+	"github.com/akzj/go-lua/internal/metamethod"
+	"github.com/akzj/go-lua/internal/object"
 
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
 // Table operations
 // ---------------------------------------------------------------------------
 
-func (L *State) getTableVal(idx int) *tableapi.Table {
+func (L *State) getTableVal(idx int) *table.Table {
 	v := L.index2val(idx)
-	if v.Tt == objectapi.TagTable {
-		return v.Val.(*tableapi.Table)
+	if v.Tt == object.TagTable {
+		return v.Val.(*table.Table)
 	}
 	return nil
 }
@@ -28,11 +29,11 @@ func (L *State) getTableVal(idx int) *tableapi.Table {
 // apiGetWithIndex performs a table get with __index metamethod chain walking.
 // Mirrors C Lua's luaV_gettable but without VM stack manipulation.
 // Walks up to 20 levels of __index chain (table or function).
-func apiGetWithIndex(L *State, t objectapi.TValue, key objectapi.TValue) objectapi.TValue {
+func apiGetWithIndex(L *State, t object.TValue, key object.TValue) object.TValue {
 	const maxLoop = 20
 	for loop := 0; loop < maxLoop; loop++ {
 		if t.IsTable() {
-			tbl := t.Val.(*tableapi.Table)
+			tbl := t.Val.(*table.Table)
 			val, found := tbl.Get(key)
 			if found && !val.IsNil() {
 				return val
@@ -40,12 +41,12 @@ func apiGetWithIndex(L *State, t objectapi.TValue, key objectapi.TValue) objecta
 			// Key not found — check for __index metamethod
 			mt := tbl.GetMetatable()
 			if mt == nil {
-				return objectapi.Nil
+				return object.Nil
 			}
 			indexStr := L.internStr("__index")
 			tm, tmFound := mt.GetStr(indexStr)
 			if !tmFound || tm.IsNil() {
-				return objectapi.Nil
+				return object.Nil
 			}
 			if tm.IsTable() {
 				// __index is a table — recurse into it
@@ -56,30 +57,30 @@ func apiGetWithIndex(L *State, t objectapi.TValue, key objectapi.TValue) objecta
 				// __index is a function — call it with (table, key)
 				ls := L.ls()
 				oldTop := ls.Top
-				stateapi.EnsureStack(ls, 4)
+				state.EnsureStack(ls, 4)
 				ls.Stack[ls.Top].Val = tm
 				ls.Top++
 				ls.Stack[ls.Top].Val = t
 				ls.Top++
 				ls.Stack[ls.Top].Val = key
 				ls.Top++
-				vmapi.Call(ls, ls.Top-3, 1)
+				vm.Call(ls, ls.Top-3, 1)
 				result := ls.Stack[ls.Top-1].Val
 				ls.Top = oldTop
 				return result
 			}
 			// __index is not table or function — error
-			return objectapi.Nil
+			return object.Nil
 		}
 		// Non-table value — check for type metatable __index
 		// (userdata, etc.) For now, return nil
-		return objectapi.Nil
+		return object.Nil
 	}
 	// Too many __index levels
-	return objectapi.Nil
+	return object.Nil
 }
 
-func (L *State) GetTable(idx int) objectapi.Type {
+func (L *State) GetTable(idx int) object.Type {
 	ls := L.ls()
 	t := L.index2val(idx)
 	key := ls.Stack[ls.Top-1].Val
@@ -91,10 +92,10 @@ func (L *State) GetTable(idx int) objectapi.Type {
 }
 
 // GetField pushes t[key] where t is at idx.
-func (L *State) GetField(idx int, key string) objectapi.Type {
+func (L *State) GetField(idx int, key string) object.Type {
 	t := L.index2val(idx)
 	ks := L.internStr(key)
-	val := apiGetWithIndex(L, *t, objectapi.MakeString(ks))
+	val := apiGetWithIndex(L, *t, object.MakeString(ks))
 	L.push(val)
 	return val.Type()
 }
@@ -102,11 +103,11 @@ func (L *State) GetField(idx int, key string) objectapi.Type {
 // GetI pushes t[n] where t is at idx.
 // Mirrors lua_geti: handles __index metamethods for non-table types
 // and for table keys that are not found.
-func (L *State) GetI(idx int, n int64) objectapi.Type {
+func (L *State) GetI(idx int, n int64) object.Type {
 	ls := L.ls()
 	t := L.index2val(idx)
-	if t.Tt == objectapi.TagTable {
-		tbl := t.Val.(*tableapi.Table)
+	if t.Tt == object.TagTable {
+		tbl := t.Val.(*table.Table)
 		val, found := tbl.GetInt(n)
 		if found && !val.IsNil() {
 			L.push(val)
@@ -117,9 +118,9 @@ func (L *State) GetI(idx int, n int64) objectapi.Type {
 	// Non-table or key not found: use FinishGet for __index metamethod chain.
 	// FinishGet writes result to Stack[ra].
 	ra := ls.Top
-	stateapi.EnsureStack(ls, 1)
-	ls.Stack[ra].Val = objectapi.Nil // default
-	vmapi.FinishGet(ls, *t, objectapi.MakeInteger(n), ra)
+	state.EnsureStack(ls, 1)
+	ls.Stack[ra].Val = object.Nil // default
+	vm.FinishGet(ls, *t, object.MakeInteger(n), ra)
 	// FinishGet already wrote result to Stack[ra]. Just advance Top.
 	result := ls.Stack[ra].Val
 	ls.Top = ra + 1
@@ -127,24 +128,24 @@ func (L *State) GetI(idx int, n int64) objectapi.Type {
 }
 
 // GetGlobal pushes the value of global variable name.
-func (L *State) GetGlobal(name string) objectapi.Type {
-	gt := vmapi.GetGlobalTable(L.ls())
+func (L *State) GetGlobal(name string) object.Type {
+	gt := vm.GetGlobalTable(L.ls())
 	ks := L.internStr(name)
 	val, found := gt.GetStr(ks)
 	if found && !val.IsNil() {
 		L.push(val)
 		return val.Type()
 	}
-	L.push(objectapi.Nil)
-	return objectapi.TypeNil
+	L.push(object.Nil)
+	return object.TypeNil
 }
 
 // SetTable does t[k] = v where t is at idx, k at top-1, v at top.
 func (L *State) SetTable(idx int) {
 	ls := L.ls()
 	t := L.index2val(idx)
-	if t.Tt == objectapi.TagTable {
-		tbl := t.Val.(*tableapi.Table)
+	if t.Tt == object.TagTable {
+		tbl := t.Val.(*table.Table)
 		key := ls.Stack[ls.Top-2].Val
 		val := ls.Stack[ls.Top-1].Val
 		// Check for NaN key — C Lua raises error, not panic
@@ -160,8 +161,8 @@ func (L *State) SetTable(idx int) {
 func (L *State) SetField(idx int, key string) {
 	ls := L.ls()
 	t := L.index2val(idx)
-	if t.Tt == objectapi.TagTable {
-		tbl := t.Val.(*tableapi.Table)
+	if t.Tt == object.TagTable {
+		tbl := t.Val.(*table.Table)
 		ks := L.internStr(key)
 		val := ls.Stack[ls.Top-1].Val
 		tbl.SetStr(ks, val)
@@ -174,8 +175,8 @@ func (L *State) SetI(idx int, n int64) {
 	ls := L.ls()
 	t := L.index2val(idx)
 	val := ls.Stack[ls.Top-1].Val
-	if t.Tt == objectapi.TagTable {
-		tbl := t.Val.(*tableapi.Table)
+	if t.Tt == object.TagTable {
+		tbl := t.Val.(*table.Table)
 		// Fast path: if key already exists in table, do raw set (no metamethod).
 		// Matches C Lua's luaV_fastseti in lua_seti.
 		if _, found := tbl.GetInt(n); found {
@@ -186,15 +187,15 @@ func (L *State) SetI(idx int, n int64) {
 	}
 	// Non-table or key not found in table: go through full metamethod chain.
 	// FinishSet handles __newindex for tables and non-tables.
-	key := objectapi.MakeInteger(n)
-	vmapi.FinishSet(ls, *t, key, val)
+	key := object.MakeInteger(n)
+	vm.FinishSet(ls, *t, key, val)
 	ls.Top--
 }
 
 // SetGlobal pops a value and sets it as global variable name.
 func (L *State) SetGlobal(name string) {
 	ls := L.ls()
-	gt := vmapi.GetGlobalTable(ls)
+	gt := vm.GetGlobalTable(ls)
 	ks := L.internStr(name)
 	val := ls.Stack[ls.Top-1].Val
 	gt.SetStr(ks, val)
@@ -202,12 +203,12 @@ func (L *State) SetGlobal(name string) {
 }
 
 // RawGet pushes t[k] without metamethods.
-func (L *State) RawGet(idx int) objectapi.Type {
+func (L *State) RawGet(idx int) object.Type {
 	return L.GetTable(idx) // our GetTable already skips metamethods
 }
 
 // RawGetI pushes t[n] without metamethods.
-func (L *State) RawGetI(idx int, n int64) objectapi.Type {
+func (L *State) RawGetI(idx int, n int64) object.Type {
 	return L.GetI(idx, n)
 }
 
@@ -223,11 +224,11 @@ func (L *State) RawSetI(idx int, n int64) {
 
 // CreateTable pushes a new table with pre-allocated space.
 func (L *State) CreateTable(nArr, nRec int) {
-	t := tableapi.New(nArr, nRec)
+	t := table.New(nArr, nRec)
 	L.ls().Global.LinkGC(t) // V5: register in allgc chain
 	size := t.EstimateBytes()
 	L.TrackAlloc(size)
-	L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: t})
+	L.push(object.TValue{Tt: object.TagTable, Val: t})
 
 	// V5 GC sweep handles dealloc accounting — no AddCleanup needed.
 	// Periodic GC is handled by checkPeriodicGC in the VM dispatch loop.
@@ -241,13 +242,13 @@ func (L *State) NewTable() {
 // GetMetatable pushes the metatable of the value at idx.
 func (L *State) GetMetatable(idx int) bool {
 	v := L.index2val(idx)
-	var mt *tableapi.Table
+	var mt *table.Table
 	switch v.Tt {
-	case objectapi.TagTable:
-		mt = v.Val.(*tableapi.Table).GetMetatable()
-	case objectapi.TagUserdata:
-		if ud, ok := v.Val.(*objectapi.Userdata); ok {
-			if tbl, ok := ud.MetaTable.(*tableapi.Table); ok {
+	case object.TagTable:
+		mt = v.Val.(*table.Table).GetMetatable()
+	case object.TagUserdata:
+		if ud, ok := v.Val.(*object.Userdata); ok {
+			if tbl, ok := ud.MetaTable.(*table.Table); ok {
 				mt = tbl
 			}
 		}
@@ -256,13 +257,13 @@ func (L *State) GetMetatable(idx int) bool {
 		ls := L.ls()
 		tp := v.Type()
 		if int(tp) < len(ls.Global.MT) {
-			if tbl, ok := ls.Global.MT[tp].(*tableapi.Table); ok {
+			if tbl, ok := ls.Global.MT[tp].(*table.Table); ok {
 				mt = tbl
 			}
 		}
 	}
 	if mt != nil {
-		L.push(objectapi.TValue{Tt: objectapi.TagTable, Val: mt})
+		L.push(object.TValue{Tt: object.TagTable, Val: mt})
 		return true
 	}
 	return false
@@ -272,40 +273,40 @@ func (L *State) GetMetatable(idx int) bool {
 func (L *State) SetMetatable(idx int) {
 	ls := L.ls()
 	v := L.index2val(idx)
-	var mt *tableapi.Table
+	var mt *table.Table
 	mtVal := ls.Stack[ls.Top-1].Val
-	if mtVal.Tt == objectapi.TagTable {
-		mt = mtVal.Val.(*tableapi.Table)
+	if mtVal.Tt == object.TagTable {
+		mt = mtVal.Val.(*table.Table)
 	}
 	ls.Top--
 
 	switch v.Tt {
-	case objectapi.TagTable:
-		tbl := v.Val.(*tableapi.Table)
+	case object.TagTable:
+		tbl := v.Val.(*table.Table)
 		tbl.SetMetatable(mt)
 		// V5 GC: Move object from allgc to finobj if __gc detected.
 		// Dealloc tracking is handled by V5 GC sweep.
 		if mt != nil {
 			g := ls.Global
-			tmName := g.TMNames[metamethodapi.TM_GC]
-			gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+			tmName := g.TMNames[metamethod.TM_GC]
+			gcTM := metamethod.GetTM(mt, metamethod.TM_GC, tmName)
 			if !gcTM.IsNil() {
-				gcapi.CheckFinalizer(g, tbl)
+				gc.CheckFinalizer(g, tbl)
 			}
 		}
 		// Parse __mode from metatable for weak table support
 		if mt != nil {
-			modeName := ls.Global.TMNames[metamethodapi.TM_MODE]
+			modeName := ls.Global.TMNames[metamethod.TM_MODE]
 			modeVal, found := mt.GetStr(modeName)
-			if found && (modeVal.Tt == objectapi.TagShortStr || modeVal.Tt == objectapi.TagLongStr) {
-				modeStr := modeVal.Val.(*objectapi.LuaString).Data
+			if found && (modeVal.Tt == object.TagShortStr || modeVal.Tt == object.TagLongStr) {
+				modeStr := modeVal.Val.(*object.LuaString).Data
 				var mode byte
 				for _, c := range modeStr {
 					if c == 'k' {
-						mode |= tableapi.WeakKey
+						mode |= table.WeakKey
 					}
 					if c == 'v' {
-						mode |= tableapi.WeakValue
+						mode |= table.WeakValue
 					}
 				}
 				tbl.WeakMode = mode
@@ -313,23 +314,23 @@ func (L *State) SetMetatable(idx int) {
 		} else {
 			tbl.WeakMode = 0
 		}
-	case objectapi.TagUserdata:
-		if ud, ok := v.Val.(*objectapi.Userdata); ok {
+	case object.TagUserdata:
+		if ud, ok := v.Val.(*object.Userdata); ok {
 			ud.MetaTable = mt
 			// V5 GC: Move object from allgc to finobj if __gc detected.
 			if mt != nil {
 				g := ls.Global
-				tmName := g.TMNames[metamethodapi.TM_GC]
-				gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+				tmName := g.TMNames[metamethod.TM_GC]
+				gcTM := metamethod.GetTM(mt, metamethod.TM_GC, tmName)
 				if !gcTM.IsNil() {
-					gcapi.CheckFinalizer(g, ud)
+					gc.CheckFinalizer(g, ud)
 				}
 			}
 		}
 	default:
 		tp := v.Type()
 		if int(tp) < len(ls.Global.MT) {
-			ls.Global.MT[tp] = mt // mt is *tableapi.Table, MT is [9]any — OK
+			ls.Global.MT[tp] = mt // mt is *table.Table, MT is [9]any — OK
 		}
 	}
 }
@@ -338,15 +339,15 @@ func (L *State) SetMetatable(idx int) {
 func (L *State) Next(idx int) bool {
 	ls := L.ls()
 	t := L.index2val(idx)
-	if t.Tt != objectapi.TagTable {
+	if t.Tt != object.TagTable {
 		return false
 	}
-	tbl := t.Val.(*tableapi.Table)
+	tbl := t.Val.(*table.Table)
 	key := ls.Stack[ls.Top-1].Val
 	ls.Top--
 	nextKey, nextVal, ok, err := tbl.Next(key)
 	if err != nil {
-		vmapi.RunError(ls, err.Error())
+		vm.RunError(ls, err.Error())
 	}
 	if ok {
 		L.push(nextKey)
@@ -364,8 +365,8 @@ func (L *State) Len(idx int) {
 	// Use ObjLen which handles metamethods for all types (including tables).
 	// ObjLen writes result to Stack[ra].
 	ra := ls.Top
-	stateapi.EnsureStack(ls, 1)
-	vmapi.ObjLen(ls, ra, *v)
+	state.EnsureStack(ls, 1)
+	vm.ObjLen(ls, ra, *v)
 	// ObjLen already wrote result to Stack[ra]. Just advance Top.
 	ls.Top = ra + 1
 }
@@ -383,8 +384,8 @@ func (L *State) RawEqual(idx1, idx2 int) bool {
 	// Light C functions: use interface data-word comparison (unique per
 	// closure instance). reflect.Pointer returns the shared code address
 	// which is identical for all closures of the same function literal.
-	if v1.Tt == objectapi.TagLightCFunc {
-		return objectapi.LightCFuncEqual(v1.Val, v2.Val)
+	if v1.Tt == object.TagLightCFunc {
+		return object.LightCFuncEqual(v1.Val, v2.Val)
 	}
 	return v1.Val == v2.Val
 }
@@ -395,11 +396,11 @@ func (L *State) Compare(idx1, idx2 int, op CompareOp) bool {
 	v2 := L.index2val(idx2)
 	switch op {
 	case OpEQ:
-		return vmapi.EqualObj(L.ls(), *v1, *v2)
+		return vm.EqualObj(L.ls(), *v1, *v2)
 	case OpLT:
-		return vmapi.LessThan(L.ls(), *v1, *v2)
+		return vm.LessThan(L.ls(), *v1, *v2)
 	case OpLE:
-		return vmapi.LessEqual(L.ls(), *v1, *v2)
+		return vm.LessEqual(L.ls(), *v1, *v2)
 	}
 	return false
 }
@@ -408,7 +409,7 @@ func (L *State) Compare(idx1, idx2 int, op CompareOp) bool {
 func (L *State) Concat(n int) {
 	ls := L.ls()
 	if n >= 2 {
-		vmapi.Concat(ls, n)
+		vm.Concat(ls, n)
 	} else if n == 0 {
 		L.PushString("")
 	}
@@ -420,7 +421,7 @@ func (L *State) Arith(op ArithOp) {
 	ls := L.ls()
 	// For unary ops (UNM, BNOT), both operands are the same (top of stack).
 	// For binary ops, operands are top-2 and top-1.
-	var p1, p2 objectapi.TValue
+	var p1, p2 object.TValue
 	if op == OpUnm || op == OpBNot {
 		// Unary: operand is at top of stack
 		p1 = ls.Stack[ls.Top-1].Val
@@ -432,11 +433,11 @@ func (L *State) Arith(op ArithOp) {
 	}
 
 	// Try raw arithmetic (includes string→number coercion via ToNumber)
-	result, ok := objectapi.RawArith(int(op), p1, p2)
+	result, ok := object.RawArith(int(op), p1, p2)
 	if !ok {
 		// Raw arithmetic failed — error (metamethods should have been tried
 		// before reaching lua_arith in the string metamethod path)
-		vmapi.RunError(ls, "attempt to perform arithmetic on incompatible types")
+		vm.RunError(ls, "attempt to perform arithmetic on incompatible types")
 	}
 
 	// Pop operands and push result

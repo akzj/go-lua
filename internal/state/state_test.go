@@ -3,8 +3,8 @@ package state
 import (
 	"testing"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,17 +41,17 @@ func TestNewState_Registry(t *testing.T) {
 	g := L.Global
 
 	// Registry should be a table
-	if g.Registry.Type() != objectapi.TypeTable {
+	if g.Registry.Type() != object.TypeTable {
 		t.Fatalf("Registry type = %v, want TypeTable", g.Registry.Type())
 	}
-	registry := g.Registry.Val.(*tableapi.Table)
+	registry := g.Registry.Val.(*table.Table)
 
 	// registry[1] = false (C: setbfvalue)
 	v, found := registry.GetInt(1)
 	if !found {
 		t.Fatal("registry[1] not found")
 	}
-	if v.Tt != objectapi.TagFalse {
+	if v.Tt != object.TagFalse {
 		t.Errorf("registry[1] tag = %v, want TagFalse", v.Tt)
 	}
 
@@ -60,7 +60,7 @@ func TestNewState_Registry(t *testing.T) {
 	if !found {
 		t.Fatal("registry[GLOBALS] not found")
 	}
-	if v.Tt != objectapi.TagTable {
+	if v.Tt != object.TagTable {
 		t.Errorf("registry[GLOBALS] tag = %v, want TagTable", v.Tt)
 	}
 
@@ -69,7 +69,7 @@ func TestNewState_Registry(t *testing.T) {
 	if !found {
 		t.Fatal("registry[MAINTHREAD] not found")
 	}
-	if v.Tt != objectapi.TagThread {
+	if v.Tt != object.TagThread {
 		t.Errorf("registry[MAINTHREAD] tag = %v, want TagThread", v.Tt)
 	}
 	if v.Val.(*LuaState) != L {
@@ -147,7 +147,7 @@ func TestGrowStack(t *testing.T) {
 
 	// Push some values
 	for i := 0; i < 10; i++ {
-		PushValue(L, objectapi.MakeInteger(int64(i+100)))
+		PushValue(L, object.MakeInteger(int64(i+100)))
 	}
 	if L.Top != 11 { // 1 (base) + 10 pushed
 		t.Errorf("Top = %d, want 11", L.Top)
@@ -210,7 +210,7 @@ func TestPushValue(t *testing.T) {
 	L := NewState()
 	initialTop := L.Top
 
-	PushValue(L, objectapi.MakeInteger(42))
+	PushValue(L, object.MakeInteger(42))
 	if L.Top != initialTop+1 {
 		t.Errorf("Top = %d, want %d", L.Top, initialTop+1)
 	}
@@ -218,7 +218,7 @@ func TestPushValue(t *testing.T) {
 		t.Errorf("Stack[%d] = %v, want 42", initialTop, v)
 	}
 
-	PushValue(L, objectapi.MakeFloat(3.14))
+	PushValue(L, object.MakeFloat(3.14))
 	if L.Top != initialTop+2 {
 		t.Errorf("Top = %d, want %d", L.Top, initialTop+2)
 	}

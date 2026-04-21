@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -116,8 +116,8 @@ func TestInternShortIsShort(t *testing.T) {
 	if !s.IsShort {
 		t.Error("Short string should have IsShort=true")
 	}
-	if s.Tag() != objectapi.TagShortStr {
-		t.Errorf("Short string tag = %d, want %d", s.Tag(), objectapi.TagShortStr)
+	if s.Tag() != object.TagShortStr {
+		t.Errorf("Short string tag = %d, want %d", s.Tag(), object.TagShortStr)
 	}
 }
 
@@ -141,8 +141,8 @@ func TestInternLongNotInterned(t *testing.T) {
 	if s1.IsShort {
 		t.Error("Long string should have IsShort=false")
 	}
-	if s1.Tag() != objectapi.TagLongStr {
-		t.Errorf("Long string tag = %d, want %d", s1.Tag(), objectapi.TagLongStr)
+	if s1.Tag() != object.TagLongStr {
+		t.Errorf("Long string tag = %d, want %d", s1.Tag(), object.TagLongStr)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestInternBytesLong(t *testing.T) {
 
 func TestResizeOnManyStrings(t *testing.T) {
 	st := NewStringTable(42)
-	strs := make([]*objectapi.LuaString, 0, 300)
+	strs := make([]*object.LuaString, 0, 300)
 
 	// Insert 300 unique short strings — will trigger multiple resizes
 	// (initial 128 buckets → 256 → 512 as count exceeds bucket count)
@@ -322,15 +322,15 @@ func TestEqualLongLongDifferentContent(t *testing.T) {
 func TestEqualShortLongSameContent(t *testing.T) {
 	// A short string and a long string with the same content (shouldn't happen
 	// in practice since length determines short/long, but test the logic)
-	short := &objectapi.LuaString{Data: "hello", Hash_: 0, IsShort: true}
-	long := &objectapi.LuaString{Data: "hello", Hash_: 0, IsShort: false}
+	short := &object.LuaString{Data: "hello", Hash_: 0, IsShort: true}
+	long := &object.LuaString{Data: "hello", Hash_: 0, IsShort: false}
 	if !Equal(short, long) {
 		t.Error("Equal should compare content when one is long")
 	}
 }
 
 func TestEqualSamePointer(t *testing.T) {
-	s := &objectapi.LuaString{Data: "test", Hash_: 0, IsShort: true}
+	s := &object.LuaString{Data: "test", Hash_: 0, IsShort: true}
 	if !Equal(s, s) {
 		t.Error("Equal should return true for same pointer")
 	}
@@ -371,7 +371,7 @@ func TestSweepStringsCollectsUnreferencedStrings(t *testing.T) {
 
 	// Phase 1: Intern 500 unique short strings, holding strong refs
 	const N = 500
-	refs := make([]*objectapi.LuaString, N)
+	refs := make([]*object.LuaString, N)
 	for i := 0; i < N; i++ {
 		refs[i] = st.Intern(fmt.Sprintf("sweep_%04d", i))
 	}
@@ -410,7 +410,7 @@ func TestSweepStringsKeepsReferencedStrings(t *testing.T) {
 
 	// Intern strings and keep strong references to half of them
 	const N = 200
-	kept := make([]*objectapi.LuaString, 0, N/2)
+	kept := make([]*object.LuaString, 0, N/2)
 	for i := 0; i < N; i++ {
 		s := st.Intern(fmt.Sprintf("keep_%04d", i))
 		if i%2 == 0 {

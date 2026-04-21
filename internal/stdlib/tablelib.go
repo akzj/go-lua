@@ -4,7 +4,7 @@ import (
 	"math"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -13,7 +13,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func auxGetN(L *luaapi.State, n int) int64 {
-	L.CheckType(n, objectapi.TypeTable)
+	L.CheckType(n, object.TypeTable)
 	return L.LenI(n)
 }
 
@@ -91,7 +91,7 @@ func tabMove(L *luaapi.State) int {
 // checkTab validates that arg is a table or has required metamethods.
 // Matches C Lua's checktab (ltablib.c).
 func checkTab(L *luaapi.State, arg int, needRead, needWrite bool) {
-	if L.Type(arg) == objectapi.TypeTable {
+	if L.Type(arg) == object.TypeTable {
 		return // tables are always OK
 	}
 	// Not a table — check for metatable with required metamethods
@@ -120,11 +120,11 @@ func checkTab(L *luaapi.State, arg int, needRead, needWrite bool) {
 		}
 	}
 	// No metatable or missing metamethods — force error
-	L.CheckType(arg, objectapi.TypeTable)
+	L.CheckType(arg, object.TypeTable)
 }
 
 func tabConcat(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeTable)
+	L.CheckType(1, object.TypeTable)
 	sep := L.OptString(2, "")
 	i := L.OptInteger(3, 1)
 	last := L.OptInteger(4, L.LenI(1))
@@ -226,7 +226,7 @@ func tabSort(L *luaapi.State) int {
 	L.ArgCheck(n < math.MaxInt32, 1, "array too big")
 	hasComp := !L.IsNoneOrNil(2)
 	if hasComp {
-		L.CheckType(2, objectapi.TypeFunction)
+		L.CheckType(2, object.TypeFunction)
 	}
 	L.SetTop(2) // ensure 2 slots (table + optional comparator)
 	auxSort(L, 1, n, hasComp)

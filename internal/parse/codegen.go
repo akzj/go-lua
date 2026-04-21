@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"math"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	lexapi "github.com/akzj/go-lua/internal/lex"
-	mmapi "github.com/akzj/go-lua/internal/metamethod"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/lex"
+	"github.com/akzj/go-lua/internal/metamethod"
+	"github.com/akzj/go-lua/internal/opcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -23,10 +23,10 @@ import (
 
 const (
 	// maxIndexRK is the maximum K index that fits in an R/K operand.
-	maxIndexRK = opcodeapi.MaxArgB // 255
+	maxIndexRK = opcode.MaxArgB // 255
 
 	// maxFStack is the maximum register index (= MaxArgA = 255).
-	maxFStack = opcodeapi.MaxArgA
+	maxFStack = opcode.MaxArgA
 
 	// limLineDiff is the limit for relative line info differences.
 	limLineDiff = 0x80
@@ -84,7 +84,7 @@ func throwSyntaxError(fs *FuncState, msg string) {
 	ls := fs.Lex
 	ls.Token.Type = 0 // remove "near <token>" from message
 	ls.Line = ls.LastLine
-	lexapi.LexError(ls, msg, 0)
+	lex.LexError(ls, msg, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -92,10 +92,10 @@ func throwSyntaxError(fs *FuncState, msg string) {
 // ---------------------------------------------------------------------------
 
 // SemError raises a semantic error.
-func SemError(ls *lexapi.LexState, msg string) {
+func SemError(ls *lex.LexState, msg string) {
 	ls.Token.Type = 0
 	ls.Line = ls.LastLine
-	lexapi.LexError(ls, msg, 0)
+	lex.LexError(ls, msg, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ func saveLineInfo(fs *FuncState, line int) {
 
 	if abs(linedif) >= limLineDiff || int(fs.IWthAbs) >= maxIWthAbs {
 		// Need absolute line info
-		f.AbsLineInfo = append(f.AbsLineInfo, objectapi.AbsLineInfo{PC: pc, Line: line})
+		f.AbsLineInfo = append(f.AbsLineInfo, object.AbsLineInfo{PC: pc, Line: line})
 		linedif = int(absLineInfo)
 		fs.IWthAbs = 1
 	} else {
@@ -201,46 +201,46 @@ func Code(fs *FuncState, i uint32) int {
 }
 
 // CodeABCk emits an iABC instruction. Mirrors: luaK_codeABCk
-func CodeABCk(fs *FuncState, op opcodeapi.OpCode, a, b, c, k int) int {
-	return Code(fs, opcodeapi.CreateABCK(op, a, b, c, k))
+func CodeABCk(fs *FuncState, op opcode.OpCode, a, b, c, k int) int {
+	return Code(fs, opcode.CreateABCK(op, a, b, c, k))
 }
 
 // CodeABC emits an iABC instruction with k=0.
-func CodeABC(fs *FuncState, op opcodeapi.OpCode, a, b, c int) int {
+func CodeABC(fs *FuncState, op opcode.OpCode, a, b, c int) int {
 	return CodeABCk(fs, op, a, b, c, 0)
 }
 
 // CodeVABCk emits an ivABC instruction. Mirrors: luaK_codevABCk
-func CodeVABCk(fs *FuncState, op opcodeapi.OpCode, a, vb, vc, k int) int {
-	return Code(fs, opcodeapi.CreateVABCK(op, a, vb, vc, k))
+func CodeVABCk(fs *FuncState, op opcode.OpCode, a, vb, vc, k int) int {
+	return Code(fs, opcode.CreateVABCK(op, a, vb, vc, k))
 }
 
 // CodeABx emits an iABx instruction. Mirrors: luaK_codeABx
-func CodeABx(fs *FuncState, op opcodeapi.OpCode, a, bx int) int {
-	return Code(fs, opcodeapi.CreateABx(op, a, bx))
+func CodeABx(fs *FuncState, op opcode.OpCode, a, bx int) int {
+	return Code(fs, opcode.CreateABx(op, a, bx))
 }
 
 // codeAsBx emits an iAsBx instruction.
-func codeAsBx(fs *FuncState, op opcodeapi.OpCode, a, sbx int) int {
-	return Code(fs, opcodeapi.CreateAsBx(op, a, sbx))
+func codeAsBx(fs *FuncState, op opcode.OpCode, a, sbx int) int {
+	return Code(fs, opcode.CreateAsBx(op, a, sbx))
 }
 
 // codesJ emits an isJ instruction with k bit. Mirrors: codesJ in lcode.c
-func codesJ(fs *FuncState, op opcodeapi.OpCode, sj, k int) int {
-	return Code(fs, opcodeapi.CreateSJK(op, sj, k))
+func codesJ(fs *FuncState, op opcode.OpCode, sj, k int) int {
+	return Code(fs, opcode.CreateSJK(op, sj, k))
 }
 
 // codeExtraArg emits an EXTRAARG instruction.
 func codeExtraArg(fs *FuncState, a int) int {
-	return Code(fs, opcodeapi.CreateAx(opcodeapi.OP_EXTRAARG, a))
+	return Code(fs, opcode.CreateAx(opcode.OP_EXTRAARG, a))
 }
 
 // Codek emits a LOADK or LOADKX instruction.
 func Codek(fs *FuncState, reg, k int) int {
-	if k <= opcodeapi.MaxArgBx {
-		return CodeABx(fs, opcodeapi.OP_LOADK, reg, k)
+	if k <= opcode.MaxArgBx {
+		return CodeABx(fs, opcode.OP_LOADK, reg, k)
 	}
-	p := CodeABx(fs, opcodeapi.OP_LOADKX, reg, 0)
+	p := CodeABx(fs, opcode.OP_LOADKX, reg, 0)
 	codeExtraArg(fs, k)
 	return p
 }
@@ -307,7 +307,7 @@ func freeExps(fs *FuncState, e1, e2 *ExpDesc) {
 // ---------------------------------------------------------------------------
 
 // addK adds a constant value to the Proto's constant list.
-func addK(fs *FuncState, v objectapi.TValue) int {
+func addK(fs *FuncState, v object.TValue) int {
 	f := fs.Proto
 	k := len(f.Constants)
 	f.Constants = append(f.Constants, v)
@@ -315,7 +315,7 @@ func addK(fs *FuncState, v objectapi.TValue) int {
 }
 
 // k2proto adds a constant with dedup via KCache.
-func k2proto(fs *FuncState, key any, v objectapi.TValue) int {
+func k2proto(fs *FuncState, key any, v object.TValue) int {
 	if idx, ok := fs.KCache[key]; ok {
 		return idx
 	}
@@ -329,15 +329,15 @@ func k2proto(fs *FuncState, key any, v objectapi.TValue) int {
 func stringK(fs *FuncState, s string) int {
 	ls := fs.StringCache[s]
 	if ls == nil {
-		ls = &objectapi.LuaString{Data: s, IsShort: len(s) <= 40}
+		ls = &object.LuaString{Data: s, IsShort: len(s) <= 40}
 		fs.StringCache[s] = ls
 	}
-	return k2proto(fs, s, objectapi.MakeString(ls))
+	return k2proto(fs, s, object.MakeString(ls))
 }
 
 // IntK adds an integer constant.
 func IntK(fs *FuncState, n int64) int {
-	return k2proto(fs, n, objectapi.MakeInteger(n))
+	return k2proto(fs, n, object.MakeInteger(n))
 }
 
 // NumberK adds a float constant.
@@ -345,7 +345,7 @@ func NumberK(fs *FuncState, r float64) int {
 	if r == 0 {
 		// Use a unique key for 0.0 to avoid collision with integer 0
 		type floatZeroKey struct{ fs *FuncState }
-		return k2proto(fs, floatZeroKey{fs}, objectapi.MakeFloat(r))
+		return k2proto(fs, floatZeroKey{fs}, object.MakeFloat(r))
 	}
 	// Use the float value with a perturbation as key to avoid integer collision
 	nbm := 52 // DBL_MANT_DIG for double
@@ -357,33 +357,33 @@ func NumberK(fs *FuncState, r float64) int {
 		idx, ok := fs.KCache[k]
 		if ok {
 			// Check for collision
-			if objectapi.RawEqual(fs.Proto.Constants[idx], objectapi.MakeFloat(r)) {
+			if object.RawEqual(fs.Proto.Constants[idx], object.MakeFloat(r)) {
 				return idx
 			}
 		}
 		if !ok {
-			return k2proto(fs, k, objectapi.MakeFloat(r))
+			return k2proto(fs, k, object.MakeFloat(r))
 		}
 	}
 	// Key is still an integer or collision — just add without reuse
-	return addK(fs, objectapi.MakeFloat(r))
+	return addK(fs, object.MakeFloat(r))
 }
 
 // boolFK adds a false constant.
 func boolFK(fs *FuncState) int {
-	return k2proto(fs, false, objectapi.False)
+	return k2proto(fs, false, object.False)
 }
 
 // boolTK adds a true constant.
 func boolTK(fs *FuncState) int {
-	return k2proto(fs, true, objectapi.True)
+	return k2proto(fs, true, object.True)
 }
 
 // nilK adds a nil constant.
 func nilK(fs *FuncState) int {
 	// Use a unique key for nil (nil can't be a map key in the normal sense)
 	type nilKey struct{}
-	return k2proto(fs, nilKey{}, objectapi.Nil)
+	return k2proto(fs, nilKey{}, object.Nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ func nilK(fs *FuncState) int {
 
 // getJump returns the destination of a jump instruction.
 func getJump(fs *FuncState, pc int) int {
-	offset := opcodeapi.GetArgSJ(fs.Proto.Code[pc])
+	offset := opcode.GetArgSJ(fs.Proto.Code[pc])
 	if offset == NoJump {
 		return NoJump
 	}
@@ -403,10 +403,10 @@ func getJump(fs *FuncState, pc int) int {
 func fixJump(fs *FuncState, pc, dest int) {
 	jmp := &fs.Proto.Code[pc]
 	offset := dest - (pc + 1)
-	if !(offset >= -opcodeapi.OffsetSJ && offset <= opcodeapi.MaxArgSJ-opcodeapi.OffsetSJ) {
+	if !(offset >= -opcode.OffsetSJ && offset <= opcode.MaxArgSJ-opcode.OffsetSJ) {
 		throwSyntaxError(fs, "control structure too long")
 	}
-	*jmp = opcodeapi.SetArgSJ(*jmp, offset)
+	*jmp = opcode.SetArgSJ(*jmp, offset)
 }
 
 // ConcatJumps concatenates jump-list l2 into jump-list *l1.
@@ -433,26 +433,26 @@ func ConcatJumps(fs *FuncState, l1 *int, l2 int) {
 
 // Jump emits a JMP instruction. Mirrors: luaK_jump
 func Jump(fs *FuncState) int {
-	return codesJ(fs, opcodeapi.OP_JMP, NoJump, 0)
+	return codesJ(fs, opcode.OP_JMP, NoJump, 0)
 }
 
 // Ret emits a return instruction. Mirrors: luaK_ret
 func Ret(fs *FuncState, first, nret int) {
-	var op opcodeapi.OpCode
+	var op opcode.OpCode
 	switch nret {
 	case 0:
-		op = opcodeapi.OP_RETURN0
+		op = opcode.OP_RETURN0
 	case 1:
-		op = opcodeapi.OP_RETURN1
+		op = opcode.OP_RETURN1
 	default:
-		op = opcodeapi.OP_RETURN
+		op = opcode.OP_RETURN
 	}
-	checkLimit(fs, nret+1, opcodeapi.MaxArgB, "returns")
+	checkLimit(fs, nret+1, opcode.MaxArgB, "returns")
 	CodeABC(fs, op, first, nret+1, 0)
 }
 
 // condJump emits a test/comparison opcode followed by a JMP. Returns jump position.
-func condJump(fs *FuncState, op opcodeapi.OpCode, a, b, c, k int) int {
+func condJump(fs *FuncState, op opcode.OpCode, a, b, c, k int) int {
 	CodeABCk(fs, op, a, b, c, k)
 	return Jump(fs)
 }
@@ -466,7 +466,7 @@ func GetLabel(fs *FuncState) int {
 // getJumpControl returns the instruction controlling a jump (its condition).
 func getJumpControl(fs *FuncState, pc int) *uint32 {
 	pi := &fs.Proto.Code[pc]
-	if pc >= 1 && opcodeapi.TestTMode(opcodeapi.GetOpCode(fs.Proto.Code[pc-1])) {
+	if pc >= 1 && opcode.TestTMode(opcode.GetOpCode(fs.Proto.Code[pc-1])) {
 		return &fs.Proto.Code[pc-1]
 	}
 	return pi
@@ -475,13 +475,13 @@ func getJumpControl(fs *FuncState, pc int) *uint32 {
 // patchTestReg patches a TESTSET instruction's destination register.
 func patchTestReg(fs *FuncState, node, reg int) bool {
 	i := getJumpControl(fs, node)
-	if opcodeapi.GetOpCode(*i) != opcodeapi.OP_TESTSET {
+	if opcode.GetOpCode(*i) != opcode.OP_TESTSET {
 		return false
 	}
-	if reg != opcodeapi.NoReg && reg != opcodeapi.GetArgB(*i) {
-		*i = opcodeapi.SetArgA(*i, reg)
+	if reg != opcode.NoReg && reg != opcode.GetArgB(*i) {
+		*i = opcode.SetArgA(*i, reg)
 	} else {
-		*i = opcodeapi.CreateABCK(opcodeapi.OP_TEST, opcodeapi.GetArgB(*i), 0, 0, opcodeapi.GetArgK(*i))
+		*i = opcode.CreateABCK(opcode.OP_TEST, opcode.GetArgB(*i), 0, 0, opcode.GetArgK(*i))
 	}
 	return true
 }
@@ -489,7 +489,7 @@ func patchTestReg(fs *FuncState, node, reg int) bool {
 // removeValues traverses a jump list ensuring no one produces a value.
 func removeValues(fs *FuncState, list int) {
 	for list != NoJump {
-		patchTestReg(fs, list, opcodeapi.NoReg)
+		patchTestReg(fs, list, opcode.NoReg)
 		list = getJump(fs, list)
 	}
 }
@@ -509,7 +509,7 @@ func patchListAux(fs *FuncState, list, vtarget, reg, dtarget int) {
 
 // PatchList patches all jumps in list to jump to target.
 func PatchList(fs *FuncState, list, target int) {
-	patchListAux(fs, list, target, opcodeapi.NoReg, target)
+	patchListAux(fs, list, target, opcode.NoReg, target)
 }
 
 // PatchToHere patches all jumps in list to jump to current position.
@@ -527,9 +527,9 @@ func PatchToHere(fs *FuncState, list int) {
 func Nil(fs *FuncState, from, n int) {
 	l := from + n - 1
 	prev := previousInstruction(fs)
-	if opcodeapi.GetOpCode(*prev) == opcodeapi.OP_LOADNIL {
-		pfrom := opcodeapi.GetArgA(*prev)
-		pl := pfrom + opcodeapi.GetArgB(*prev)
+	if opcode.GetOpCode(*prev) == opcode.OP_LOADNIL {
+		pfrom := opcode.GetArgA(*prev)
+		pl := pfrom + opcode.GetArgB(*prev)
 		if (pfrom <= from && from <= pl+1) || (from <= pfrom && pfrom <= l+1) {
 			if pfrom < from {
 				from = pfrom
@@ -537,12 +537,12 @@ func Nil(fs *FuncState, from, n int) {
 			if pl > l {
 				l = pl
 			}
-			*prev = opcodeapi.SetArgA(*prev, from)
-			*prev = opcodeapi.SetArgB(*prev, l-from)
+			*prev = opcode.SetArgA(*prev, from)
+			*prev = opcode.SetArgB(*prev, l-from)
 			return
 		}
 	}
-	CodeABC(fs, opcodeapi.OP_LOADNIL, from, n-1, 0)
+	CodeABC(fs, opcode.OP_LOADNIL, from, n-1, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -550,19 +550,19 @@ func Nil(fs *FuncState, from, n int) {
 // ---------------------------------------------------------------------------
 
 // tonumeral checks if an expression is a numeric constant.
-func tonumeral(e *ExpDesc, v *objectapi.TValue) bool {
+func tonumeral(e *ExpDesc, v *object.TValue) bool {
 	if e.HasJumps() {
 		return false
 	}
 	switch e.Kind {
 	case VKINT:
 		if v != nil {
-			*v = objectapi.MakeInteger(e.IVal)
+			*v = object.MakeInteger(e.IVal)
 		}
 		return true
 	case VKFLT:
 		if v != nil {
-			*v = objectapi.MakeFloat(e.NVal)
+			*v = object.MakeFloat(e.NVal)
 		}
 		return true
 	default:
@@ -571,34 +571,34 @@ func tonumeral(e *ExpDesc, v *objectapi.TValue) bool {
 }
 
 // const2val returns the compile-time constant value for a VCONST expression.
-func const2val(fs *FuncState, e *ExpDesc) *objectapi.TValue {
+func const2val(fs *FuncState, e *ExpDesc) *object.TValue {
 	dyd := getDyndata(fs)
 	return &dyd.ActVar[e.Info].K
 }
 
 // Exp2Const tries to convert an ExpDesc to a compile-time constant TValue.
-func Exp2Const(fs *FuncState, e *ExpDesc, v *objectapi.TValue) bool {
+func Exp2Const(fs *FuncState, e *ExpDesc, v *object.TValue) bool {
 	if e.HasJumps() {
 		return false
 	}
 	switch e.Kind {
 	case VFALSE:
-		*v = objectapi.False
+		*v = object.False
 		return true
 	case VTRUE:
-		*v = objectapi.True
+		*v = object.True
 		return true
 	case VNIL:
-		*v = objectapi.Nil
+		*v = object.Nil
 		return true
 	case VKSTR:
 		// Use StringCache for dedup if available (via FuncState)
 		ls := fs.StringCache[e.StrVal]
 		if ls == nil {
-			ls = &objectapi.LuaString{Data: e.StrVal, IsShort: len(e.StrVal) <= 40}
+			ls = &object.LuaString{Data: e.StrVal, IsShort: len(e.StrVal) <= 40}
 			fs.StringCache[e.StrVal] = ls
 		}
-		*v = objectapi.MakeString(ls)
+		*v = object.MakeString(ls)
 		return true
 	case VCONST:
 		cv := const2val(fs, e)
@@ -610,21 +610,21 @@ func Exp2Const(fs *FuncState, e *ExpDesc, v *objectapi.TValue) bool {
 }
 
 // const2exp converts a TValue constant into an ExpDesc.
-func const2exp(v *objectapi.TValue, e *ExpDesc) {
+func const2exp(v *object.TValue, e *ExpDesc) {
 	switch v.Tt {
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		e.Kind = VKINT
 		e.IVal = v.Integer()
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		e.Kind = VKFLT
 		e.NVal = v.Float()
-	case objectapi.TagFalse:
+	case object.TagFalse:
 		e.Kind = VFALSE
-	case objectapi.TagTrue:
+	case object.TagTrue:
 		e.Kind = VTRUE
-	case objectapi.TagNil:
+	case object.TagNil:
 		e.Kind = VNIL
-	case objectapi.TagShortStr, objectapi.TagLongStr:
+	case object.TagShortStr, object.TagLongStr:
 		e.Kind = VKSTR
 		e.StrVal = v.StringVal().Data
 	}
@@ -637,13 +637,13 @@ func const2exp(v *objectapi.TValue, e *ExpDesc) {
 // SetReturns fixes a multi-ret expression to return nresults.
 func SetReturns(fs *FuncState, e *ExpDesc, nresults int) {
 	pc := getInstruction(fs, e)
-	checkLimit(fs, nresults+1, opcodeapi.MaxArgC, "multiple results")
+	checkLimit(fs, nresults+1, opcode.MaxArgC, "multiple results")
 	if e.Kind == VCALL {
-		*pc = opcodeapi.SetArgC(*pc, nresults+1)
+		*pc = opcode.SetArgC(*pc, nresults+1)
 	} else {
 		// VVARARG
-		*pc = opcodeapi.SetArgC(*pc, nresults+1)
-		*pc = opcodeapi.SetArgA(*pc, int(fs.FreeReg))
+		*pc = opcode.SetArgC(*pc, nresults+1)
+		*pc = opcode.SetArgA(*pc, int(fs.FreeReg))
 		ReserveRegs(fs, 1)
 	}
 }
@@ -659,16 +659,16 @@ func str2K(fs *FuncState, e *ExpDesc) int {
 func SetOneRet(fs *FuncState, e *ExpDesc) {
 	if e.Kind == VCALL {
 		e.Kind = VNONRELOC
-		e.Info = opcodeapi.GetArgA(*getInstruction(fs, e))
+		e.Info = opcode.GetArgA(*getInstruction(fs, e))
 	} else if e.Kind == VVARARG {
-		*getInstruction(fs, e) = opcodeapi.SetArgC(*getInstruction(fs, e), 2)
+		*getInstruction(fs, e) = opcode.SetArgC(*getInstruction(fs, e), 2)
 		e.Kind = VRELOC
 	}
 }
 
 // VaPar2Local converts a vararg parameter to a regular local.
 func VaPar2Local(fs *FuncState, v *ExpDesc) {
-	fs.Proto.Flag |= objectapi.PF_VATAB
+	fs.Proto.Flag |= object.PF_VATAB
 	v.Kind = VLOCAL
 }
 
@@ -686,26 +686,26 @@ func DischargeVars(fs *FuncState, e *ExpDesc) {
 		e.Info = int(temp)
 		e.Kind = VNONRELOC
 	case VUPVAL:
-		e.Info = CodeABC(fs, opcodeapi.OP_GETUPVAL, 0, e.Info, 0)
+		e.Info = CodeABC(fs, opcode.OP_GETUPVAL, 0, e.Info, 0)
 		e.Kind = VRELOC
 	case VINDEXUP:
-		e.Info = CodeABC(fs, opcodeapi.OP_GETTABUP, 0, int(e.Ind.Table), e.Ind.Idx)
+		e.Info = CodeABC(fs, opcode.OP_GETTABUP, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
 	case VINDEXI:
 		freeReg(fs, int(e.Ind.Table))
-		e.Info = CodeABC(fs, opcodeapi.OP_GETI, 0, int(e.Ind.Table), e.Ind.Idx)
+		e.Info = CodeABC(fs, opcode.OP_GETI, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
 	case VINDEXSTR:
 		freeReg(fs, int(e.Ind.Table))
-		e.Info = CodeABC(fs, opcodeapi.OP_GETFIELD, 0, int(e.Ind.Table), e.Ind.Idx)
+		e.Info = CodeABC(fs, opcode.OP_GETFIELD, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
 	case VINDEXED:
 		freeRegs(fs, int(e.Ind.Table), e.Ind.Idx)
-		e.Info = CodeABC(fs, opcodeapi.OP_GETTABLE, 0, int(e.Ind.Table), e.Ind.Idx)
+		e.Info = CodeABC(fs, opcode.OP_GETTABLE, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
 	case VVARGIND:
 		freeRegs(fs, int(e.Ind.Table), e.Ind.Idx)
-		e.Info = CodeABC(fs, opcodeapi.OP_GETVARG, 0, int(e.Ind.Table), e.Ind.Idx)
+		e.Info = CodeABC(fs, opcode.OP_GETVARG, 0, int(e.Ind.Table), e.Ind.Idx)
 		e.Kind = VRELOC
 	case VVARARG, VCALL:
 		SetOneRet(fs, e)
@@ -719,9 +719,9 @@ func discharge2Reg(fs *FuncState, e *ExpDesc, reg int) {
 	case VNIL:
 		Nil(fs, reg, 1)
 	case VFALSE:
-		CodeABC(fs, opcodeapi.OP_LOADFALSE, reg, 0, 0)
+		CodeABC(fs, opcode.OP_LOADFALSE, reg, 0, 0)
 	case VTRUE:
-		CodeABC(fs, opcodeapi.OP_LOADTRUE, reg, 0, 0)
+		CodeABC(fs, opcode.OP_LOADTRUE, reg, 0, 0)
 	case VKSTR:
 		str2K(fs, e)
 		fallthrough
@@ -733,10 +733,10 @@ func discharge2Reg(fs *FuncState, e *ExpDesc, reg int) {
 		codeInt(fs, reg, e.IVal)
 	case VRELOC:
 		pc := getInstruction(fs, e)
-		*pc = opcodeapi.SetArgA(*pc, reg)
+		*pc = opcode.SetArgA(*pc, reg)
 	case VNONRELOC:
 		if reg != e.Info {
-			CodeABC(fs, opcodeapi.OP_MOVE, reg, e.Info, 0)
+			CodeABC(fs, opcode.OP_MOVE, reg, e.Info, 0)
 		}
 	default:
 		// VJMP — nothing to do
@@ -755,7 +755,7 @@ func discharge2AnyReg(fs *FuncState, e *ExpDesc) {
 }
 
 // codeLoadBool emits a load boolean instruction at a jump target.
-func codeLoadBool(fs *FuncState, a int, op opcodeapi.OpCode) int {
+func codeLoadBool(fs *FuncState, a int, op opcode.OpCode) int {
 	GetLabel(fs) // mark as jump target
 	return CodeABC(fs, op, a, 0, 0)
 }
@@ -764,7 +764,7 @@ func codeLoadBool(fs *FuncState, a int, op opcodeapi.OpCode) int {
 func needValue(fs *FuncState, list int) bool {
 	for list != NoJump {
 		i := *getJumpControl(fs, list)
-		if opcodeapi.GetOpCode(i) != opcodeapi.OP_TESTSET {
+		if opcode.GetOpCode(i) != opcode.OP_TESTSET {
 			return true
 		}
 		list = getJump(fs, list)
@@ -788,8 +788,8 @@ func exp2Reg(fs *FuncState, e *ExpDesc, reg int) {
 			if e.Kind != VJMP {
 				fj = Jump(fs)
 			}
-			pf = codeLoadBool(fs, reg, opcodeapi.OP_LFALSESKIP)
-			pt = codeLoadBool(fs, reg, opcodeapi.OP_LOADTRUE)
+			pf = codeLoadBool(fs, reg, opcode.OP_LFALSESKIP)
+			pt = codeLoadBool(fs, reg, opcode.OP_LOADTRUE)
 			PatchToHere(fs, fj)
 		}
 		final = GetLabel(fs)
@@ -884,7 +884,7 @@ func exp2RK(fs *FuncState, e *ExpDesc) bool {
 }
 
 // codeABRK emits an instruction with R/K operand.
-func codeABRK(fs *FuncState, op opcodeapi.OpCode, a, b int, ec *ExpDesc) {
+func codeABRK(fs *FuncState, op opcode.OpCode, a, b int, ec *ExpDesc) {
 	k := 0
 	if exp2RK(fs, ec) {
 		k = 1
@@ -898,23 +898,23 @@ func codeABRK(fs *FuncState, op opcodeapi.OpCode, a, b int, ec *ExpDesc) {
 
 // fitsC checks if an integer fits in a signed sC operand.
 func fitsC(i int64) bool {
-	return uint64(i)+uint64(opcodeapi.OffsetSC) <= uint64(opcodeapi.MaxArgC)
+	return uint64(i)+uint64(opcode.OffsetSC) <= uint64(opcode.MaxArgC)
 }
 
 // fitsBx checks if an integer fits in a signed sBx operand.
 func fitsBx(i int64) bool {
-	return -int64(opcodeapi.OffsetSBx) <= i && i <= int64(opcodeapi.MaxArgBx)-int64(opcodeapi.OffsetSBx)
+	return -int64(opcode.OffsetSBx) <= i && i <= int64(opcode.MaxArgBx)-int64(opcode.OffsetSBx)
 }
 
 // int2sC converts a signed integer to the unsigned sC encoding.
 func int2sC(i int) int {
-	return i + opcodeapi.OffsetSC
+	return i + opcode.OffsetSC
 }
 
 // codeInt emits a LOADI or LOADK instruction.
 func codeInt(fs *FuncState, reg int, i int64) {
 	if fitsBx(i) {
-		codeAsBx(fs, opcodeapi.OP_LOADI, reg, int(i))
+		codeAsBx(fs, opcode.OP_LOADI, reg, int(i))
 	} else {
 		Codek(fs, reg, IntK(fs, i))
 	}
@@ -924,7 +924,7 @@ func codeInt(fs *FuncState, reg int, i int64) {
 func codeFloat(fs *FuncState, reg int, f float64) {
 	fi := int64(f)
 	if float64(fi) == f && fitsBx(fi) {
-		codeAsBx(fs, opcodeapi.OP_LOADF, reg, int(fi))
+		codeAsBx(fs, opcode.OP_LOADF, reg, int(fi))
 	} else {
 		Codek(fs, reg, NumberK(fs, f))
 	}
@@ -944,18 +944,18 @@ func StoreVar(fs *FuncState, v *ExpDesc, ex *ExpDesc) {
 		return
 	case VUPVAL:
 		e := Exp2AnyReg(fs, ex)
-		CodeABC(fs, opcodeapi.OP_SETUPVAL, e, v.Info, 0)
+		CodeABC(fs, opcode.OP_SETUPVAL, e, v.Info, 0)
 	case VINDEXUP:
-		codeABRK(fs, opcodeapi.OP_SETTABUP, int(v.Ind.Table), v.Ind.Idx, ex)
+		codeABRK(fs, opcode.OP_SETTABUP, int(v.Ind.Table), v.Ind.Idx, ex)
 	case VINDEXI:
-		codeABRK(fs, opcodeapi.OP_SETI, int(v.Ind.Table), v.Ind.Idx, ex)
+		codeABRK(fs, opcode.OP_SETI, int(v.Ind.Table), v.Ind.Idx, ex)
 	case VINDEXSTR:
-		codeABRK(fs, opcodeapi.OP_SETFIELD, int(v.Ind.Table), v.Ind.Idx, ex)
+		codeABRK(fs, opcode.OP_SETFIELD, int(v.Ind.Table), v.Ind.Idx, ex)
 	case VVARGIND:
-		fs.Proto.Flag |= objectapi.PF_VATAB
+		fs.Proto.Flag |= object.PF_VATAB
 		fallthrough
 	case VINDEXED:
-		codeABRK(fs, opcodeapi.OP_SETTABLE, int(v.Ind.Table), v.Ind.Idx, ex)
+		codeABRK(fs, opcode.OP_SETTABLE, int(v.Ind.Table), v.Ind.Idx, ex)
 	}
 	freeExp(fs, ex)
 }
@@ -972,11 +972,11 @@ func Self(fs *FuncState, e *ExpDesc, key *ExpDesc) {
 	ReserveRegs(fs, 2)
 	// Is method name a short string in valid K index?
 	if len(key.StrVal) <= 40 && exp2K(fs, key) {
-		CodeABCk(fs, opcodeapi.OP_SELF, base, ereg, key.Info, 0)
+		CodeABCk(fs, opcode.OP_SELF, base, ereg, key.Info, 0)
 	} else {
 		Exp2AnyReg(fs, key)
-		CodeABC(fs, opcodeapi.OP_MOVE, base+1, ereg, 0)
-		CodeABC(fs, opcodeapi.OP_GETTABLE, base, ereg, key.Info)
+		CodeABC(fs, opcode.OP_MOVE, base+1, ereg, 0)
+		CodeABC(fs, opcode.OP_GETTABLE, base, ereg, key.Info)
 	}
 	freeExp(fs, key)
 }
@@ -1029,7 +1029,7 @@ func fillIdxK(t *ExpDesc, idx int, kind ExpKind) {
 func isKstr(fs *FuncState, e *ExpDesc) bool {
 	return e.Kind == VK && !e.HasJumps() && e.Info <= maxIndexRK &&
 		e.Info < len(fs.Proto.Constants) &&
-		fs.Proto.Constants[e.Info].Tt == objectapi.TagShortStr
+		fs.Proto.Constants[e.Info].Tt == object.TagShortStr
 }
 
 // isKint checks if expression is a literal integer.
@@ -1039,7 +1039,7 @@ func isKint(e *ExpDesc) bool {
 
 // isCint checks if expression is a literal integer in range for register C.
 func isCint(e *ExpDesc) bool {
-	return isKint(e) && uint64(e.IVal) <= uint64(opcodeapi.MaxArgC)
+	return isKint(e) && uint64(e.IVal) <= uint64(opcode.MaxArgC)
 }
 
 // isSCint checks if expression is a literal integer fitting in sC.
@@ -1077,21 +1077,21 @@ func isSCnumber(e *ExpDesc, pi *int, isfloat *int) bool {
 // negateCondition negates a comparison condition.
 func negateCondition(fs *FuncState, e *ExpDesc) {
 	pc := getJumpControl(fs, e.Info)
-	*pc = opcodeapi.SetArgK(*pc, opcodeapi.GetArgK(*pc)^1)
+	*pc = opcode.SetArgK(*pc, opcode.GetArgK(*pc)^1)
 }
 
 // jumpOnCond emits code to jump if e is cond. Returns jump position.
 func jumpOnCond(fs *FuncState, e *ExpDesc, cond int) int {
 	if e.Kind == VRELOC {
 		ie := *getInstruction(fs, e)
-		if opcodeapi.GetOpCode(ie) == opcodeapi.OP_NOT {
+		if opcode.GetOpCode(ie) == opcode.OP_NOT {
 			removeLastInstruction(fs)
-			return condJump(fs, opcodeapi.OP_TEST, opcodeapi.GetArgB(ie), 0, 0, boolToInt(cond == 0))
+			return condJump(fs, opcode.OP_TEST, opcode.GetArgB(ie), 0, 0, boolToInt(cond == 0))
 		}
 	}
 	discharge2AnyReg(fs, e)
 	freeExp(fs, e)
-	return condJump(fs, opcodeapi.OP_TESTSET, opcodeapi.NoReg, e.Info, 0, cond)
+	return condJump(fs, opcode.OP_TESTSET, opcode.NoReg, e.Info, 0, cond)
 }
 
 func boolToInt(b bool) int {
@@ -1148,7 +1148,7 @@ func codeNot(fs *FuncState, e *ExpDesc) {
 	case VRELOC, VNONRELOC:
 		discharge2AnyReg(fs, e)
 		freeExp(fs, e)
-		e.Info = CodeABC(fs, opcodeapi.OP_NOT, 0, e.Info, 0)
+		e.Info = CodeABC(fs, opcode.OP_NOT, 0, e.Info, 0)
 		e.Kind = VRELOC
 	}
 	// Interchange true and false lists
@@ -1161,12 +1161,12 @@ func codeNot(fs *FuncState, e *ExpDesc) {
 func CodeCheckGlobal(fs *FuncState, v *ExpDesc, k int, line int) {
 	Exp2AnyReg(fs, v)
 	FixLine(fs, line)
-	if k >= opcodeapi.MaxArgBx {
+	if k >= opcode.MaxArgBx {
 		k = 0
 	} else {
 		k = k + 1
 	}
-	CodeABx(fs, opcodeapi.OP_ERRNNIL, v.Info, k)
+	CodeABx(fs, opcode.OP_ERRNNIL, v.Info, k)
 	FixLine(fs, line)
 	freeExp(fs, v)
 }
@@ -1181,15 +1181,15 @@ func foldbinop(opr BinOpr) bool {
 }
 
 // validop checks if constant folding is safe for the given operation.
-func validop(op int, v1, v2 *objectapi.TValue) bool {
+func validop(op int, v1, v2 *object.TValue) bool {
 	switch op {
-	case objectapi.LuaOpBAnd, objectapi.LuaOpBOr, objectapi.LuaOpBXor,
-		objectapi.LuaOpShl, objectapi.LuaOpShr, objectapi.LuaOpBNot:
+	case object.LuaOpBAnd, object.LuaOpBOr, object.LuaOpBXor,
+		object.LuaOpShl, object.LuaOpShr, object.LuaOpBNot:
 		// Use floor-mode conversion (matches C's LUA_FLOORN2I)
-		_, ok1 := objectapi.ToIntegerNS(*v1)
-		_, ok2 := objectapi.ToIntegerNS(*v2)
+		_, ok1 := object.ToIntegerNS(*v1)
+		_, ok2 := object.ToIntegerNS(*v2)
 		return ok1 && ok2
-	case objectapi.LuaOpDiv, objectapi.LuaOpIDiv, objectapi.LuaOpMod:
+	case object.LuaOpDiv, object.LuaOpIDiv, object.LuaOpMod:
 		n2, ok := v2.ToNumber()
 		return ok && n2 != 0
 	default:
@@ -1199,11 +1199,11 @@ func validop(op int, v1, v2 *objectapi.TValue) bool {
 
 // constfolding tries to constant-fold an operation. Returns true on success.
 func constfolding(fs *FuncState, op int, e1 *ExpDesc, e2 *ExpDesc) bool {
-	var v1, v2 objectapi.TValue
+	var v1, v2 object.TValue
 	if !tonumeral(e1, &v1) || !tonumeral(e2, &v2) || !validop(op, &v1, &v2) {
 		return false
 	}
-	res, ok := objectapi.RawArith(op, v1, v2)
+	res, ok := object.RawArith(op, v1, v2)
 	if !ok {
 		return false
 	}
@@ -1226,18 +1226,18 @@ func constfolding(fs *FuncState, op int, e1 *ExpDesc, e2 *ExpDesc) bool {
 // ---------------------------------------------------------------------------
 
 // binopr2op converts a BinOpr to an OpCode.
-func binopr2op(opr BinOpr, baser BinOpr, base opcodeapi.OpCode) opcodeapi.OpCode {
-	return opcodeapi.OpCode(int(opr) - int(baser) + int(base))
+func binopr2op(opr BinOpr, baser BinOpr, base opcode.OpCode) opcode.OpCode {
+	return opcode.OpCode(int(opr) - int(baser) + int(base))
 }
 
 // unopr2op converts a UnOpr to an OpCode.
-func unopr2op(opr UnOpr) opcodeapi.OpCode {
-	return opcodeapi.OpCode(int(opr) - int(OPR_MINUS) + int(opcodeapi.OP_UNM))
+func unopr2op(opr UnOpr) opcode.OpCode {
+	return opcode.OpCode(int(opr) - int(OPR_MINUS) + int(opcode.OP_UNM))
 }
 
 // binopr2TM converts a BinOpr to a tag method.
 func binopr2TM(opr BinOpr) int {
-	return int(opr) - int(OPR_ADD) + int(mmapi.TM_ADD)
+	return int(opr) - int(OPR_ADD) + int(metamethod.TM_ADD)
 }
 
 // ---------------------------------------------------------------------------
@@ -1245,7 +1245,7 @@ func binopr2TM(opr BinOpr) int {
 // ---------------------------------------------------------------------------
 
 // codeUnExpVal emits code for unary expressions that produce values.
-func codeUnExpVal(fs *FuncState, op opcodeapi.OpCode, e *ExpDesc, line int) {
+func codeUnExpVal(fs *FuncState, op opcode.OpCode, e *ExpDesc, line int) {
 	r := Exp2AnyReg(fs, e)
 	freeExp(fs, e)
 	e.Info = CodeABC(fs, op, 0, r, 0)
@@ -1260,7 +1260,7 @@ func Prefix(fs *FuncState, opr UnOpr, e *ExpDesc, line int) {
 	DischargeVars(fs, e)
 	switch opr {
 	case OPR_MINUS, OPR_BNOT:
-		if constfolding(fs, int(opr)+objectapi.LuaOpUnm, e, &ef) {
+		if constfolding(fs, int(opr)+object.LuaOpUnm, e, &ef) {
 			break
 		}
 		fallthrough
@@ -1276,8 +1276,8 @@ func Prefix(fs *FuncState, opr UnOpr, e *ExpDesc, line int) {
 // ---------------------------------------------------------------------------
 
 // finishBinExpVal emits code for binary expressions that produce values.
-func finishBinExpVal(fs *FuncState, e1, e2 *ExpDesc, op opcodeapi.OpCode,
-	v2, flip, line int, mmop opcodeapi.OpCode, event int) {
+func finishBinExpVal(fs *FuncState, e1, e2 *ExpDesc, op opcode.OpCode,
+	v2, flip, line int, mmop opcode.OpCode, event int) {
 	v1 := Exp2AnyReg(fs, e1)
 	pc := CodeABCk(fs, op, 0, v1, v2, 0)
 	freeExps(fs, e1, e2)
@@ -1290,27 +1290,27 @@ func finishBinExpVal(fs *FuncState, e1, e2 *ExpDesc, op opcodeapi.OpCode,
 
 // codeBinExpVal emits code for binary expressions over two registers.
 func codeBinExpVal(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc, line int) {
-	op := binopr2op(opr, OPR_ADD, opcodeapi.OP_ADD)
+	op := binopr2op(opr, OPR_ADD, opcode.OP_ADD)
 	v2 := Exp2AnyReg(fs, e2)
-	finishBinExpVal(fs, e1, e2, op, v2, 0, line, opcodeapi.OP_MMBIN, binopr2TM(opr))
+	finishBinExpVal(fs, e1, e2, op, v2, 0, line, opcode.OP_MMBIN, binopr2TM(opr))
 }
 
 // codeBinI emits code for binary operators with immediate operands.
-func codeBinI(fs *FuncState, op opcodeapi.OpCode, e1, e2 *ExpDesc, flip, line int, event int) {
+func codeBinI(fs *FuncState, op opcode.OpCode, e1, e2 *ExpDesc, flip, line int, event int) {
 	v2 := int2sC(int(e2.IVal))
-	finishBinExpVal(fs, e1, e2, op, v2, flip, line, opcodeapi.OP_MMBINI, event)
+	finishBinExpVal(fs, e1, e2, op, v2, flip, line, opcode.OP_MMBINI, event)
 }
 
 // codeBinK emits code for binary operators with K operands.
 func codeBinK(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc, flip, line int) {
 	event := binopr2TM(opr)
 	v2 := e2.Info
-	op := binopr2op(opr, OPR_ADD, opcodeapi.OP_ADDK)
-	finishBinExpVal(fs, e1, e2, op, v2, flip, line, opcodeapi.OP_MMBINK, event)
+	op := binopr2op(opr, OPR_ADD, opcode.OP_ADDK)
+	finishBinExpVal(fs, e1, e2, op, v2, flip, line, opcode.OP_MMBINK, event)
 }
 
 // finishBinExpNeg tries to code a binary op negating its second operand.
-func finishBinExpNeg(fs *FuncState, e1, e2 *ExpDesc, op opcodeapi.OpCode, line, event int) bool {
+func finishBinExpNeg(fs *FuncState, e1, e2 *ExpDesc, op opcode.OpCode, line, event int) bool {
 	if !isKint(e2) {
 		return false
 	}
@@ -1319,9 +1319,9 @@ func finishBinExpNeg(fs *FuncState, e1, e2 *ExpDesc, op opcodeapi.OpCode, line, 
 		return false
 	}
 	v2 := int(i2)
-	finishBinExpVal(fs, e1, e2, op, int2sC(-v2), 0, line, opcodeapi.OP_MMBINI, event)
+	finishBinExpVal(fs, e1, e2, op, int2sC(-v2), 0, line, opcode.OP_MMBINI, event)
 	// Correct metamethod argument
-	fs.Proto.Code[fs.PC-1] = opcodeapi.SetArgB(fs.Proto.Code[fs.PC-1], int2sC(v2))
+	fs.Proto.Code[fs.PC-1] = opcode.SetArgB(fs.Proto.Code[fs.PC-1], int2sC(v2))
 	return true
 }
 
@@ -1355,7 +1355,7 @@ func codeCommutative(fs *FuncState, op BinOpr, e1, e2 *ExpDesc, line int) {
 		flip = 1
 	}
 	if op == OPR_ADD && isSCint(e2) {
-		codeBinI(fs, opcodeapi.OP_ADDI, e1, e2, flip, line, binopr2TM(OPR_ADD))
+		codeBinI(fs, opcode.OP_ADDI, e1, e2, flip, line, binopr2TM(OPR_ADD))
 	} else {
 		codeArith(fs, op, e1, e2, flip, line)
 	}
@@ -1380,20 +1380,20 @@ func codeOrder(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc) {
 	var r1, r2 int
 	var im int
 	isfloat := 0
-	var op opcodeapi.OpCode
+	var op opcode.OpCode
 
 	if isSCnumber(e2, &im, &isfloat) {
 		r1 = Exp2AnyReg(fs, e1)
 		r2 = im
-		op = binopr2op(opr, OPR_LT, opcodeapi.OP_LTI)
+		op = binopr2op(opr, OPR_LT, opcode.OP_LTI)
 	} else if isSCnumber(e1, &im, &isfloat) {
 		r1 = Exp2AnyReg(fs, e2)
 		r2 = im
-		op = binopr2op(opr, OPR_LT, opcodeapi.OP_GTI)
+		op = binopr2op(opr, OPR_LT, opcode.OP_GTI)
 	} else {
 		r1 = Exp2AnyReg(fs, e1)
 		r2 = Exp2AnyReg(fs, e2)
-		op = binopr2op(opr, OPR_LT, opcodeapi.OP_LT)
+		op = binopr2op(opr, OPR_LT, opcode.OP_LT)
 	}
 	freeExps(fs, e1, e2)
 	e1.Info = condJump(fs, op, r1, r2, isfloat, 1)
@@ -1405,20 +1405,20 @@ func codeEq(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc) {
 	var r1, r2 int
 	var im int
 	isfloat := 0
-	var op opcodeapi.OpCode
+	var op opcode.OpCode
 
 	if e1.Kind != VNONRELOC {
 		swapExps(e1, e2)
 	}
 	r1 = Exp2AnyReg(fs, e1)
 	if isSCnumber(e2, &im, &isfloat) {
-		op = opcodeapi.OP_EQI
+		op = opcode.OP_EQI
 		r2 = im
 	} else if exp2RK(fs, e2) {
-		op = opcodeapi.OP_EQK
+		op = opcode.OP_EQK
 		r2 = e2.Info
 	} else {
-		op = opcodeapi.OP_EQ
+		op = opcode.OP_EQ
 		r2 = Exp2AnyReg(fs, e2)
 	}
 	freeExps(fs, e1, e2)
@@ -1433,13 +1433,13 @@ func codeEq(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc) {
 // codeconcat emits code for concatenation.
 func codeconcat(fs *FuncState, e1, e2 *ExpDesc, line int) {
 	ie2 := previousInstruction(fs)
-	if opcodeapi.GetOpCode(*ie2) == opcodeapi.OP_CONCAT {
-		n := opcodeapi.GetArgB(*ie2)
+	if opcode.GetOpCode(*ie2) == opcode.OP_CONCAT {
+		n := opcode.GetArgB(*ie2)
 		freeExp(fs, e2)
-		*ie2 = opcodeapi.SetArgA(*ie2, e1.Info)
-		*ie2 = opcodeapi.SetArgB(*ie2, n+1)
+		*ie2 = opcode.SetArgA(*ie2, e1.Info)
+		*ie2 = opcode.SetArgB(*ie2, n+1)
 	} else {
-		CodeABC(fs, opcodeapi.OP_CONCAT, e1.Info, 2, 0)
+		CodeABC(fs, opcode.OP_CONCAT, e1.Info, 2, 0)
 		freeExp(fs, e2)
 		FixLine(fs, line)
 	}
@@ -1486,7 +1486,7 @@ func Infix(fs *FuncState, op BinOpr, v *ExpDesc) {
 // Mirrors: luaK_posfix
 func Posfix(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc, line int) {
 	DischargeVars(fs, e2)
-	if foldbinop(opr) && constfolding(fs, int(opr)+objectapi.LuaOpAdd, e1, e2) {
+	if foldbinop(opr) && constfolding(fs, int(opr)+object.LuaOpAdd, e1, e2) {
 		return
 	}
 	switch opr {
@@ -1502,7 +1502,7 @@ func Posfix(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc, line int) {
 	case OPR_ADD, OPR_MUL:
 		codeCommutative(fs, opr, e1, e2, line)
 	case OPR_SUB:
-		if finishBinExpNeg(fs, e1, e2, opcodeapi.OP_ADDI, line, binopr2TM(OPR_SUB)) {
+		if finishBinExpNeg(fs, e1, e2, opcode.OP_ADDI, line, binopr2TM(OPR_SUB)) {
 			break
 		}
 		fallthrough
@@ -1513,15 +1513,15 @@ func Posfix(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc, line int) {
 	case OPR_SHL:
 		if isSCint(e1) {
 			swapExps(e1, e2)
-			codeBinI(fs, opcodeapi.OP_SHLI, e1, e2, 1, line, binopr2TM(OPR_SHL))
-		} else if finishBinExpNeg(fs, e1, e2, opcodeapi.OP_SHRI, line, binopr2TM(OPR_SHL)) {
+			codeBinI(fs, opcode.OP_SHLI, e1, e2, 1, line, binopr2TM(OPR_SHL))
+		} else if finishBinExpNeg(fs, e1, e2, opcode.OP_SHRI, line, binopr2TM(OPR_SHL)) {
 			// coded as (r1 >> -I)
 		} else {
 			codeBinExpVal(fs, opr, e1, e2, line)
 		}
 	case OPR_SHR:
 		if isSCint(e2) {
-			codeBinI(fs, opcodeapi.OP_SHRI, e1, e2, 0, line, binopr2TM(OPR_SHR))
+			codeBinI(fs, opcode.OP_SHRI, e1, e2, 0, line, binopr2TM(OPR_SHR))
 		} else {
 			codeBinExpVal(fs, opr, e1, e2, line)
 		}
@@ -1543,18 +1543,18 @@ func Posfix(fs *FuncState, opr BinOpr, e1, e2 *ExpDesc, line int) {
 // SetTableSize sets the table size in a NEWTABLE instruction.
 func SetTableSize(fs *FuncState, pc, ra, asize, hsize int) {
 	inst := &fs.Proto.Code[pc]
-	extra := asize / (opcodeapi.MaxArgVC + 1)
-	rc := asize % (opcodeapi.MaxArgVC + 1)
+	extra := asize / (opcode.MaxArgVC + 1)
+	rc := asize % (opcode.MaxArgVC + 1)
 	k := 0
 	if extra > 0 {
 		k = 1
 	}
 	hsizeEnc := 0
 	if hsize != 0 {
-		hsizeEnc = int(objectapi.CeilLog2(uint(hsize))) + 1
+		hsizeEnc = int(object.CeilLog2(uint(hsize))) + 1
 	}
-	*inst = opcodeapi.CreateVABCK(opcodeapi.OP_NEWTABLE, ra, hsizeEnc, rc, k)
-	fs.Proto.Code[pc+1] = opcodeapi.CreateAx(opcodeapi.OP_EXTRAARG, extra)
+	*inst = opcode.CreateVABCK(opcode.OP_NEWTABLE, ra, hsizeEnc, rc, k)
+	fs.Proto.Code[pc+1] = opcode.CreateAx(opcode.OP_EXTRAARG, extra)
 }
 
 // SetList emits a SETLIST instruction.
@@ -1562,12 +1562,12 @@ func SetList(fs *FuncState, base, nelems, tostore int) {
 	if tostore == luaMultRet {
 		tostore = 0
 	}
-	if nelems <= opcodeapi.MaxArgVC {
-		CodeVABCk(fs, opcodeapi.OP_SETLIST, base, tostore, nelems, 0)
+	if nelems <= opcode.MaxArgVC {
+		CodeVABCk(fs, opcode.OP_SETLIST, base, tostore, nelems, 0)
 	} else {
-		extra := nelems / (opcodeapi.MaxArgVC + 1)
-		nelems %= (opcodeapi.MaxArgVC + 1)
-		CodeVABCk(fs, opcodeapi.OP_SETLIST, base, tostore, nelems, 1)
+		extra := nelems / (opcode.MaxArgVC + 1)
+		nelems %= (opcode.MaxArgVC + 1)
+		CodeVABCk(fs, opcode.OP_SETLIST, base, tostore, nelems, 1)
 		codeExtraArg(fs, extra)
 	}
 	fs.FreeReg = byte(base + 1)
@@ -1581,10 +1581,10 @@ func SetList(fs *FuncState, base, nelems, tostore int) {
 func finaltarget(code []uint32, i int) int {
 	for count := 0; count < 100; count++ {
 		pc := code[i]
-		if opcodeapi.GetOpCode(pc) != opcodeapi.OP_JMP {
+		if opcode.GetOpCode(pc) != opcode.OP_JMP {
 			break
 		}
-		i += opcodeapi.GetArgSJ(pc) + 1
+		i += opcode.GetArgSJ(pc) + 1
 	}
 	return i
 }
@@ -1593,34 +1593,34 @@ func finaltarget(code []uint32, i int) int {
 // Mirrors: luaK_finish
 func Finish(fs *FuncState) {
 	p := fs.Proto
-	if p.Flag&objectapi.PF_VATAB != 0 {
-		p.Flag &^= objectapi.PF_VAHID
+	if p.Flag&object.PF_VATAB != 0 {
+		p.Flag &^= object.PF_VAHID
 	}
 	for i := 0; i < fs.PC; i++ {
 		pc := &p.Code[i]
-		switch opcodeapi.GetOpCode(*pc) {
-		case opcodeapi.OP_RETURN0, opcodeapi.OP_RETURN1:
-			if !(fs.NeedClose || (p.Flag&objectapi.PF_VAHID != 0)) {
+		switch opcode.GetOpCode(*pc) {
+		case opcode.OP_RETURN0, opcode.OP_RETURN1:
+			if !(fs.NeedClose || (p.Flag&object.PF_VAHID != 0)) {
 				break
 			}
-			*pc = opcodeapi.SetOpCode(*pc, opcodeapi.OP_RETURN)
+			*pc = opcode.SetOpCode(*pc, opcode.OP_RETURN)
 			fallthrough
-		case opcodeapi.OP_RETURN, opcodeapi.OP_TAILCALL:
+		case opcode.OP_RETURN, opcode.OP_TAILCALL:
 			if fs.NeedClose {
-				*pc = opcodeapi.SetArgK(*pc, 1)
+				*pc = opcode.SetArgK(*pc, 1)
 			}
-			if p.Flag&objectapi.PF_VAHID != 0 {
-				*pc = opcodeapi.SetArgC(*pc, int(p.NumParams)+1)
+			if p.Flag&object.PF_VAHID != 0 {
+				*pc = opcode.SetArgC(*pc, int(p.NumParams)+1)
 			}
-		case opcodeapi.OP_GETVARG:
-			if p.Flag&objectapi.PF_VATAB != 0 {
-				*pc = opcodeapi.SetOpCode(*pc, opcodeapi.OP_GETTABLE)
+		case opcode.OP_GETVARG:
+			if p.Flag&object.PF_VATAB != 0 {
+				*pc = opcode.SetOpCode(*pc, opcode.OP_GETTABLE)
 			}
-		case opcodeapi.OP_VARARG:
-			if p.Flag&objectapi.PF_VATAB != 0 {
-				*pc = opcodeapi.SetArgK(*pc, 1)
+		case opcode.OP_VARARG:
+			if p.Flag&object.PF_VATAB != 0 {
+				*pc = opcode.SetArgK(*pc, 1)
 			}
-		case opcodeapi.OP_JMP:
+		case opcode.OP_JMP:
 			target := finaltarget(p.Code, i)
 			fixJump(fs, i, target)
 		}

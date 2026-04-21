@@ -3,8 +3,8 @@ package closure
 import (
 	"testing"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -12,7 +12,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestNewLClosure(t *testing.T) {
-	proto := &objectapi.Proto{
+	proto := &object.Proto{
 		NumParams:    2,
 		MaxStackSize: 10,
 	}
@@ -35,7 +35,7 @@ func TestNewLClosure(t *testing.T) {
 }
 
 func TestNewCClosure(t *testing.T) {
-	fn := func(L *stateapi.LuaState) int { return 0 }
+	fn := func(L *state.LuaState) int { return 0 }
 	cl := NewCClosure(fn, 2)
 	if cl == nil {
 		t.Fatal("NewCClosure returned nil")
@@ -55,7 +55,7 @@ func TestNewCClosure(t *testing.T) {
 }
 
 func TestNewCClosure_NumUpvals(t *testing.T) {
-	fn := func(L *stateapi.LuaState) int { return 0 }
+	fn := func(L *state.LuaState) int { return 0 }
 	cl := NewCClosure(fn, 5)
 	if cl.NumUpvals() != 5 {
 		t.Errorf("NumUpvals = %d, want 5", cl.NumUpvals())
@@ -69,7 +69,7 @@ func TestNewCClosure_NumUpvals(t *testing.T) {
 func TestUpVal_OpenClose(t *testing.T) {
 	uv := &UpVal{
 		StackIdx: 5,
-		Own:      objectapi.Nil,
+		Own:      object.Nil,
 	}
 
 	if !uv.IsOpen() {
@@ -77,8 +77,8 @@ func TestUpVal_OpenClose(t *testing.T) {
 	}
 
 	// Create a mock stack
-	stack := make([]objectapi.StackValue, 10)
-	stack[5].Val = objectapi.MakeInteger(42)
+	stack := make([]object.StackValue, 10)
+	stack[5].Val = object.MakeInteger(42)
 
 	// Get should return stack value
 	val := uv.Get(stack)
@@ -87,13 +87,13 @@ func TestUpVal_OpenClose(t *testing.T) {
 	}
 
 	// Set should modify stack
-	uv.Set(stack, objectapi.MakeInteger(99))
+	uv.Set(stack, object.MakeInteger(99))
 	if stack[5].Val.Integer() != 99 {
 		t.Errorf("After Set, stack[5] = %v, want 99", stack[5].Val)
 	}
 
 	// Close the upvalue
-	uv.Close(objectapi.MakeInteger(99))
+	uv.Close(object.MakeInteger(99))
 	if uv.IsOpen() {
 		t.Error("Should be closed after Close()")
 	}
@@ -108,7 +108,7 @@ func TestUpVal_OpenClose(t *testing.T) {
 	}
 
 	// Set should modify Own
-	uv.Set(nil, objectapi.MakeFloat(3.14))
+	uv.Set(nil, object.MakeFloat(3.14))
 	if uv.Own.Float() != 3.14 {
 		t.Errorf("After close Set, Own = %v, want 3.14", uv.Own)
 	}
@@ -118,16 +118,16 @@ func TestUpVal_OpenClose(t *testing.T) {
 // FindUpval tests
 // ---------------------------------------------------------------------------
 
-func newTestState() *stateapi.LuaState {
-	return stateapi.NewState()
+func newTestState() *state.LuaState {
+	return state.NewState()
 }
 
 func TestFindUpval_CreateNew(t *testing.T) {
 	L := newTestState()
 
 	// Set up some stack values
-	L.Stack[3].Val = objectapi.MakeInteger(30)
-	L.Stack[5].Val = objectapi.MakeInteger(50)
+	L.Stack[3].Val = object.MakeInteger(30)
+	L.Stack[5].Val = object.MakeInteger(50)
 
 	// Find upvalue at level 5 (no existing upvalues)
 	uv := FindUpval(L, 5)
@@ -150,7 +150,7 @@ func TestFindUpval_CreateNew(t *testing.T) {
 
 func TestFindUpval_Sharing(t *testing.T) {
 	L := newTestState()
-	L.Stack[5].Val = objectapi.MakeInteger(50)
+	L.Stack[5].Val = object.MakeInteger(50)
 
 	// Create first upvalue at level 5
 	uv1 := FindUpval(L, 5)
@@ -164,9 +164,9 @@ func TestFindUpval_Sharing(t *testing.T) {
 
 func TestFindUpval_SortedOrder(t *testing.T) {
 	L := newTestState()
-	L.Stack[3].Val = objectapi.MakeInteger(30)
-	L.Stack[5].Val = objectapi.MakeInteger(50)
-	L.Stack[7].Val = objectapi.MakeInteger(70)
+	L.Stack[3].Val = object.MakeInteger(30)
+	L.Stack[5].Val = object.MakeInteger(50)
+	L.Stack[7].Val = object.MakeInteger(70)
 
 	// Create upvalues in non-sorted order
 	uv5 := FindUpval(L, 5)
@@ -217,9 +217,9 @@ func TestFindUpval_InsertMiddle(t *testing.T) {
 
 func TestCloseUpvals_Basic(t *testing.T) {
 	L := newTestState()
-	L.Stack[3].Val = objectapi.MakeInteger(30)
-	L.Stack[5].Val = objectapi.MakeInteger(50)
-	L.Stack[7].Val = objectapi.MakeInteger(70)
+	L.Stack[3].Val = object.MakeInteger(30)
+	L.Stack[5].Val = object.MakeInteger(50)
+	L.Stack[7].Val = object.MakeInteger(70)
 
 	uv3 := FindUpval(L, 3)
 	FindUpval(L, 5)
@@ -253,8 +253,8 @@ func TestCloseUpvals_Basic(t *testing.T) {
 
 func TestCloseUpvals_All(t *testing.T) {
 	L := newTestState()
-	L.Stack[3].Val = objectapi.MakeInteger(30)
-	L.Stack[5].Val = objectapi.MakeInteger(50)
+	L.Stack[3].Val = object.MakeInteger(30)
+	L.Stack[5].Val = object.MakeInteger(50)
 
 	uv3 := FindUpval(L, 3)
 	uv5 := FindUpval(L, 5)
@@ -280,7 +280,7 @@ func TestCloseUpvals_All(t *testing.T) {
 
 func TestCloseUpvals_None(t *testing.T) {
 	L := newTestState()
-	L.Stack[3].Val = objectapi.MakeInteger(30)
+	L.Stack[3].Val = object.MakeInteger(30)
 
 	uv3 := FindUpval(L, 3)
 
@@ -294,12 +294,12 @@ func TestCloseUpvals_None(t *testing.T) {
 
 func TestCloseUpvals_CapturesCurrentValue(t *testing.T) {
 	L := newTestState()
-	L.Stack[5].Val = objectapi.MakeInteger(100)
+	L.Stack[5].Val = object.MakeInteger(100)
 
 	uv := FindUpval(L, 5)
 
 	// Modify the stack value before closing
-	L.Stack[5].Val = objectapi.MakeInteger(200)
+	L.Stack[5].Val = object.MakeInteger(200)
 
 	CloseUpvals(L, 5)
 
@@ -314,7 +314,7 @@ func TestCloseUpvals_CapturesCurrentValue(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInitUpvals(t *testing.T) {
-	proto := &objectapi.Proto{}
+	proto := &object.Proto{}
 	cl := NewLClosure(proto, 3)
 
 	// Before init, all nil
@@ -342,11 +342,11 @@ func TestInitUpvals(t *testing.T) {
 }
 
 func TestInitUpvals_PreservesExisting(t *testing.T) {
-	proto := &objectapi.Proto{}
+	proto := &object.Proto{}
 	cl := NewLClosure(proto, 3)
 
 	// Set one upvalue manually
-	existing := &UpVal{StackIdx: 5, Own: objectapi.MakeInteger(42)}
+	existing := &UpVal{StackIdx: 5, Own: object.MakeInteger(42)}
 	cl.UpVals[1] = existing
 
 	InitUpvals(cl)

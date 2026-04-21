@@ -1,3 +1,4 @@
+// coroutine_impl.go — Coroutine API implementation (NewThread, Resume, Yield, Status).
 package api
 
 import (
@@ -5,10 +6,10 @@ import (
 	"reflect"
 	"unsafe"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 
-	stateapi "github.com/akzj/go-lua/internal/state"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,9 +21,9 @@ import (
 // Mirrors: lua_newthread in lstate.c
 func (L *State) NewThread() *State {
 	ls := L.ls()
-	L1 := stateapi.NewThread(ls)
+	L1 := state.NewThread(ls)
 	// Push the new thread onto the parent's stack
-	L.push(objectapi.TValue{Tt: objectapi.TagThread, Val: L1})
+	L.push(object.TValue{Tt: object.TagThread, Val: L1})
 	return &State{Internal: L1}
 }
 
@@ -30,7 +31,7 @@ func (L *State) NewThread() *State {
 // Returns true if the thread is the main thread.
 func (L *State) PushThread() bool {
 	ls := L.ls()
-	L.push(objectapi.TValue{Tt: objectapi.TagThread, Val: ls})
+	L.push(object.TValue{Tt: object.TagThread, Val: ls})
 	return ls.Global.MainThread == ls || ls.Global.MainThread == nil
 }
 
@@ -40,11 +41,11 @@ func (L *State) PushThread() bool {
 // or an error status on failure.
 func (L *State) Resume(from *State, nArgs int) (int, int) {
 	ls := L.ls()
-	var fromLS *stateapi.LuaState
+	var fromLS *state.LuaState
 	if from != nil {
 		fromLS = from.ls()
 	}
-	status, nresults := vmapi.Resume(ls, fromLS, nArgs)
+	status, nresults := vm.Resume(ls, fromLS, nArgs)
 	return status, nresults
 }
 
@@ -54,13 +55,13 @@ func (L *State) YieldK(nResults int, ctx int, k CFunction) int {
 	ls := L.ls()
 	if k != nil {
 		ci := ls.CI
-		ci.K = func(innerL *stateapi.LuaState, status int, context int) int {
+		ci.K = func(innerL *state.LuaState, status int, context int) int {
 			wrapper := &State{Internal: innerL}
 			return k(wrapper)
 		}
 		ci.Ctx = ctx
 	}
-	vmapi.Yield(ls, nResults)
+	vm.Yield(ls, nResults)
 	return 0 // unreachable — Yield panics with LuaYield
 }
 
@@ -84,7 +85,7 @@ func (L *State) XMove(to *State, n int) {
 	toLS := to.ls()
 	fromLS.Top -= n
 	for i := 0; i < n; i++ {
-		stateapi.PushValue(toLS, fromLS.Stack[fromLS.Top+i].Val)
+		state.PushValue(toLS, fromLS.Stack[fromLS.Top+i].Val)
 	}
 }
 
@@ -92,10 +93,10 @@ func (L *State) XMove(to *State, n int) {
 // Returns nil if the value is not a thread.
 func (L *State) ToThread(idx int) *State {
 	v := L.index2val(idx)
-	if v.Tt != objectapi.TagThread {
+	if v.Tt != object.TagThread {
 		return nil
 	}
-	ls, ok := v.Val.(*stateapi.LuaState)
+	ls, ok := v.Val.(*state.LuaState)
 	if !ok {
 		return nil
 	}
@@ -117,13 +118,13 @@ func (L *State) ToUserdata(idx int) interface{} {
 		return nil
 	}
 	switch v.Tt {
-	case objectapi.TagUserdata:
-		ud, ok := v.Val.(*objectapi.Userdata)
+	case object.TagUserdata:
+		ud, ok := v.Val.(*object.Userdata)
 		if ok {
 			return ud.Data
 		}
 		return nil
-	case objectapi.TagLightUserdata:
+	case object.TagLightUserdata:
 		return v.Val
 	default:
 		return nil
@@ -131,12 +132,12 @@ func (L *State) ToUserdata(idx int) interface{} {
 }
 
 // GetUserdataObj returns the full Userdata struct at idx, or nil if not userdata.
-func (L *State) GetUserdataObj(idx int) *objectapi.Userdata {
+func (L *State) GetUserdataObj(idx int) *object.Userdata {
 	v := L.index2val(idx)
-	if v == nil || v.Tt != objectapi.TagUserdata {
+	if v == nil || v.Tt != object.TagUserdata {
 		return nil
 	}
-	ud, ok := v.Val.(*objectapi.Userdata)
+	ud, ok := v.Val.(*object.Userdata)
 	if !ok {
 		return nil
 	}
@@ -147,23 +148,23 @@ func (L *State) GetUserdataObj(idx int) *objectapi.Userdata {
 // Returns the type of the pushed value, or TypeNone if invalid.
 // For non-full-userdata or invalid n, pushes nil and returns TypeNone.
 // Mirrors: lua_getiuservalue in lapi.c
-func (L *State) GetIUserValue(idx int, n int) objectapi.Type {
+func (L *State) GetIUserValue(idx int, n int) object.Type {
 	ls := L.ls()
-	vmapi.CheckStack(ls, 1)
+	vm.CheckStack(ls, 1)
 	v := L.index2val(idx)
-	if v != nil && v.Tt == objectapi.TagUserdata {
-		ud, ok := v.Val.(*objectapi.Userdata)
+	if v != nil && v.Tt == object.TagUserdata {
+		ud, ok := v.Val.(*object.Userdata)
 		if ok && n >= 1 && n <= len(ud.UserVals) {
 			val := ud.UserVals[n-1]
 			ls.Stack[ls.Top].Val = val
 			ls.Top++
-			return objectapi.Type(val.Tt & 0x0F)
+			return object.Type(val.Tt & 0x0F)
 		}
 	}
 	// Push nil for failure
-	ls.Stack[ls.Top].Val = objectapi.Nil
+	ls.Stack[ls.Top].Val = object.Nil
 	ls.Top++
-	return objectapi.TypeNone
+	return object.TypeNone
 }
 
 // SetIUserValue sets the n-th user value of the userdata at idx to the value
@@ -172,8 +173,8 @@ func (L *State) GetIUserValue(idx int, n int) objectapi.Type {
 func (L *State) SetIUserValue(idx int, n int) bool {
 	ls := L.ls()
 	v := L.index2val(idx)
-	if v != nil && v.Tt == objectapi.TagUserdata {
-		ud, ok := v.Val.(*objectapi.Userdata)
+	if v != nil && v.Tt == object.TagUserdata {
+		ud, ok := v.Val.(*object.Userdata)
 		if ok && n >= 1 && n <= len(ud.UserVals) {
 			ls.Top--
 			ud.UserVals[n-1] = ls.Stack[ls.Top].Val

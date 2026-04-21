@@ -8,10 +8,10 @@
 package metamethod
 
 import (
-	objectapi "github.com/akzj/go-lua/internal/object"
-	luastringapi "github.com/akzj/go-lua/internal/luastring"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/luastring"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // InitTMNames interns all TM name strings into the global state.
-func InitTMNames(g *stateapi.GlobalState, strtab *luastringapi.StringTable) {
+func InitTMNames(g *state.GlobalState, strtab *luastring.StringTable) {
 	for i := TMS(0); i < TM_N; i++ {
 		g.TMNames[i] = strtab.Intern(TMNames[i])
 	}
@@ -42,16 +42,16 @@ func InitTMNames(g *stateapi.GlobalState, strtab *luastringapi.StringTable) {
 // GetTM looks up a metamethod in the given metatable.
 // Returns the metamethod TValue, or Nil if not found.
 // For events <= TM_EQ, uses the fasttm cache on the table's Flags.
-func GetTM(mt *tableapi.Table, event TMS, tmName *objectapi.LuaString) objectapi.TValue {
+func GetTM(mt *table.Table, event TMS, tmName *object.LuaString) object.TValue {
 	if mt == nil {
-		return objectapi.Nil
+		return object.Nil
 	}
 
 	// For fast events (0-5), check the cache first
 	if event <= TM_EQ {
 		if !mt.HasTagMethod(byte(event)) {
 			// Cache says absent — definitely not there
-			return objectapi.Nil
+			return object.Nil
 		}
 	}
 
@@ -62,7 +62,7 @@ func GetTM(mt *tableapi.Table, event TMS, tmName *objectapi.LuaString) objectapi
 		if event <= TM_EQ {
 			mt.SetNoTagMethod(byte(event))
 		}
-		return objectapi.Nil
+		return object.Nil
 	}
 
 	return val
@@ -80,40 +80,40 @@ func GetTM(mt *tableapi.Table, event TMS, tmName *objectapi.LuaString) objectapi
 
 // GetTMByObj looks up a metamethod for the given value.
 // Returns the metamethod TValue, or Nil if not found.
-func GetTMByObj(g *stateapi.GlobalState, obj objectapi.TValue, event TMS) objectapi.TValue {
-	var mt *tableapi.Table
+func GetTMByObj(g *state.GlobalState, obj object.TValue, event TMS) object.TValue {
+	var mt *table.Table
 
 	switch obj.Type() {
-	case objectapi.TypeTable:
+	case object.TypeTable:
 		// Table: use its own metatable
-		if tbl, ok := obj.Val.(*tableapi.Table); ok {
+		if tbl, ok := obj.Val.(*table.Table); ok {
 			mt = tbl.GetMetatable()
 		}
-	case objectapi.TypeUserdata:
+	case object.TypeUserdata:
 		// Userdata: use its metatable
-		if ud, ok := obj.Val.(*objectapi.Userdata); ok && ud.MetaTable != nil {
-			mt, _ = ud.MetaTable.(*tableapi.Table)
+		if ud, ok := obj.Val.(*object.Userdata); ok && ud.MetaTable != nil {
+			mt, _ = ud.MetaTable.(*table.Table)
 		}
 	default:
 		// Other types: use global per-type metatable
 		typeIdx := int(obj.Type())
 		if typeIdx >= 0 && typeIdx < len(g.MT) && g.MT[typeIdx] != nil {
-			mt, _ = g.MT[typeIdx].(*tableapi.Table)
+			mt, _ = g.MT[typeIdx].(*table.Table)
 		}
 	}
 
 	if mt == nil {
-		return objectapi.Nil
+		return object.Nil
 	}
 
 	// Look up the TM name in the metatable
 	tmName := g.TMNames[event]
 	if tmName == nil {
-		return objectapi.Nil
+		return object.Nil
 	}
 	val, found := mt.GetStr(tmName)
 	if !found {
-		return objectapi.Nil
+		return object.Nil
 	}
 	return val
 }
@@ -129,23 +129,23 @@ func GetTMByObj(g *stateapi.GlobalState, obj objectapi.TValue, event TMS) object
 
 // ObjTypeName returns the type name for a Lua value.
 // Checks __name metamethod for tables and userdata.
-func ObjTypeName(g *stateapi.GlobalState, obj objectapi.TValue) string {
-	var mt *tableapi.Table
+func ObjTypeName(g *state.GlobalState, obj object.TValue) string {
+	var mt *table.Table
 
 	switch obj.Type() {
-	case objectapi.TypeTable:
-		if tbl, ok := obj.Val.(*tableapi.Table); ok {
+	case object.TypeTable:
+		if tbl, ok := obj.Val.(*table.Table); ok {
 			mt = tbl.GetMetatable()
 		}
-	case objectapi.TypeUserdata:
-		if ud, ok := obj.Val.(*objectapi.Userdata); ok && ud.MetaTable != nil {
-			mt, _ = ud.MetaTable.(*tableapi.Table)
+	case object.TypeUserdata:
+		if ud, ok := obj.Val.(*object.Userdata); ok && ud.MetaTable != nil {
+			mt, _ = ud.MetaTable.(*table.Table)
 		}
 	}
 
 	if mt != nil {
 		// Check for __name field
-		strtab, _ := g.StringTable.(*luastringapi.StringTable)
+		strtab, _ := g.StringTable.(*luastring.StringTable)
 		if strtab != nil {
 			nameKey := strtab.Intern("__name")
 			if val, found := mt.GetStr(nameKey); found && val.IsString() {
@@ -156,8 +156,8 @@ func ObjTypeName(g *stateapi.GlobalState, obj objectapi.TValue) string {
 
 	// Standard type name
 	typeIdx := int(obj.Type())
-	if typeIdx >= 0 && typeIdx < len(objectapi.TypeNames) {
-		return objectapi.TypeNames[typeIdx]
+	if typeIdx >= 0 && typeIdx < len(object.TypeNames) {
+		return object.TypeNames[typeIdx]
 	}
 	return "no value"
 }

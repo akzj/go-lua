@@ -17,41 +17,41 @@ package vm
 // will be package-level functions in internal/vm/.
 //
 // Core execution:
-//   func Execute(L *stateapi.LuaState)
+//   func Execute(L *state.LuaState)
 //     Runs the VM main loop for the current CallInfo.
 //     Handles Lua→Lua calls internally via trampoline (no recursion).
 //     Returns only when hitting a CIST_Fresh boundary or error.
 //
 // Call/return:
-//   func Call(L *stateapi.LuaState, funcIdx int, nResults int)
+//   func Call(L *state.LuaState, funcIdx int, nResults int)
 //     Performs a function call. Equivalent to luaD_call.
 //
-//   func CallNoYield(L *stateapi.LuaState, funcIdx int, nResults int)
+//   func CallNoYield(L *state.LuaState, funcIdx int, nResults int)
 //     Performs a non-yieldable function call. Equivalent to luaD_callnoyield.
 //
-//   func PreCall(L *stateapi.LuaState, funcIdx int, nResults int) *stateapi.CallInfo
+//   func PreCall(L *state.LuaState, funcIdx int, nResults int) *state.CallInfo
 //     Prepares a function call. For C functions: executes and returns nil.
 //     For Lua functions: creates CallInfo and returns it.
 //
-//   func PosCall(L *stateapi.LuaState, ci *stateapi.CallInfo, nResults int)
+//   func PosCall(L *state.LuaState, ci *state.CallInfo, nResults int)
 //     Post-call cleanup: moves results, adjusts top, unwinds CI.
 //
 // Protected calls:
-//   func PCall(L *stateapi.LuaState, funcIdx int, nResults int, errFunc int) int
+//   func PCall(L *state.LuaState, funcIdx int, nResults int, errFunc int) int
 //     Protected function call. Returns status code.
 //
 // Error handling:
-//   func Throw(L *stateapi.LuaState, status int)
-//     Raises a Lua error via panic(stateapi.LuaError{...}).
+//   func Throw(L *state.LuaState, status int)
+//     Raises a Lua error via panic(state.LuaError{...}).
 //
 // Stack management:
-//   func GrowStack(L *stateapi.LuaState, n int)
+//   func GrowStack(L *state.LuaState, n int)
 //     Ensures n free stack slots.
 //
 // Coroutine support:
-//   func Resume(L *stateapi.LuaState, from *stateapi.LuaState, nArgs int) int
+//   func Resume(L *state.LuaState, from *state.LuaState, nArgs int) int
 //     Resumes a coroutine.
 //
-//   func Yield(L *stateapi.LuaState, nResults int) int
+//   func Yield(L *state.LuaState, nResults int) int
 //     Yields a coroutine.
 // ---------------------------------------------------------------------------

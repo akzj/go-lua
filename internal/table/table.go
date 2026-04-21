@@ -8,7 +8,7 @@ import (
 	"errors"
 	"math"
 
-	obj "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,9 +20,9 @@ import (
 func newTable(arraySize, hashSize int) *Table {
 	t := &Table{}
 	if arraySize > 0 {
-		t.Array = make([]obj.TValue, arraySize)
+		t.Array = make([]object.TValue, arraySize)
 		for i := range t.Array {
-			t.Array[i] = obj.Nil
+			t.Array[i] = object.Nil
 		}
 	}
 	initHashPart(t, hashSize)
@@ -35,51 +35,51 @@ func newTable(arraySize, hashSize int) *Table {
 // ---------------------------------------------------------------------------
 
 // get retrieves the value for a key. Handles all key types.
-func (t *Table) get(key obj.TValue) (obj.TValue, bool) {
+func (t *Table) get(key object.TValue) (object.TValue, bool) {
 	switch key.Tt {
-	case obj.TagInteger:
+	case object.TagInteger:
 		return t.getInt(key.Val.(int64))
-	case obj.TagFloat:
+	case object.TagFloat:
 		f := key.Val.(float64)
 		if i, ok := floatToInteger(f); ok {
 			return t.getInt(i)
 		}
 		if len(t.Nodes) == 0 {
-			return obj.Nil, false
+			return object.Nil, false
 		}
 		return getFromHashLoop(t, key, mainPosition(t, key))
-	case obj.TagShortStr:
-		return t.getStr(key.Val.(*obj.LuaString))
-	case obj.TagNil:
-		return obj.Nil, false
+	case object.TagShortStr:
+		return t.getStr(key.Val.(*object.LuaString))
+	case object.TagNil:
+		return object.Nil, false
 	default:
 		if len(t.Nodes) == 0 {
-			return obj.Nil, false
+			return object.Nil, false
 		}
 		return getFromHashLoop(t, key, mainPosition(t, key))
 	}
 }
 
 // getInt retrieves the value for an integer key.
-func (t *Table) getInt(key int64) (obj.TValue, bool) {
+func (t *Table) getInt(key int64) (object.TValue, bool) {
 	if key >= 1 && int(key) <= len(t.Array) {
 		v := t.Array[key-1]
 		if !v.Tt.IsNil() {
 			return v, true
 		}
-		return obj.Nil, false
+		return object.Nil, false
 	}
 	return getIntFromHash(t, key)
 }
 
 // getStr retrieves the value for a string key.
-func (t *Table) getStr(key *obj.LuaString) (obj.TValue, bool) {
+func (t *Table) getStr(key *object.LuaString) (object.TValue, bool) {
 	if key.IsShort {
 		return getStrFromHash(t, key)
 	}
-	k := obj.MakeString(key)
+	k := object.MakeString(key)
 	if len(t.Nodes) == 0 {
-		return obj.Nil, false
+		return object.Nil, false
 	}
 	return getFromHashLoop(t, k, mainPosition(t, k))
 }
@@ -89,11 +89,11 @@ func (t *Table) getStr(key *obj.LuaString) (obj.TValue, bool) {
 // ---------------------------------------------------------------------------
 
 // set sets the value for a key. Panics on nil/NaN keys.
-func (t *Table) set(key, value obj.TValue) {
+func (t *Table) set(key, value object.TValue) {
 	switch key.Tt {
-	case obj.TagNil:
+	case object.TagNil:
 		panic("table index is nil")
-	case obj.TagFloat:
+	case object.TagFloat:
 		f := key.Val.(float64)
 		if math.IsNaN(f) {
 			panic("table index is NaN")
@@ -103,34 +103,34 @@ func (t *Table) set(key, value obj.TValue) {
 			return
 		}
 		t.setHash(key, value)
-	case obj.TagInteger:
+	case object.TagInteger:
 		t.setInt(key.Val.(int64), value)
-	case obj.TagShortStr:
-		t.setStr(key.Val.(*obj.LuaString), value)
+	case object.TagShortStr:
+		t.setStr(key.Val.(*object.LuaString), value)
 	default:
 		t.setHash(key, value)
 	}
 }
 
 // setInt sets the value for an integer key.
-func (t *Table) setInt(key int64, value obj.TValue) {
+func (t *Table) setInt(key int64, value object.TValue) {
 	if key >= 1 && int(key) <= len(t.Array) {
 		t.Array[key-1] = value
 		return
 	}
-	intKey := obj.MakeInteger(key)
+	intKey := object.MakeInteger(key)
 	t.setHash(intKey, value)
 }
 
 // setStr sets the value for a string key.
-func (t *Table) setStr(key *obj.LuaString, value obj.TValue) {
-	k := obj.MakeString(key)
+func (t *Table) setStr(key *object.LuaString, value object.TValue) {
+	k := object.MakeString(key)
 	t.setHash(k, value)
 }
 
 // setHash sets a key-value in the hash part. Handles existing keys,
 // dead key reuse, new key insertion, and rehash.
-func (t *Table) setHash(key, value obj.TValue) {
+func (t *Table) setHash(key, value object.TValue) {
 	// Try to find existing key (including dead keys for reuse)
 	if len(t.Nodes) > 0 {
 		mp := mainPosition(t, key)
@@ -140,8 +140,8 @@ func (t *Table) setHash(key, value obj.TValue) {
 			if equalKey(key, nd, false) {
 				// Live key match — update or delete
 				if value.Tt.IsNil() {
-					nd.Val = obj.Nil
-					nd.KeyTT = obj.TagDeadKey
+					nd.Val = object.Nil
+					nd.KeyTT = object.TagDeadKey
 				} else {
 					nd.Val = value
 				}
@@ -173,7 +173,7 @@ func (t *Table) setHash(key, value obj.TValue) {
 	if !insertKey(t, key, value) {
 		rehash(t, key)
 		// After rehash, key might go to array part
-		if key.Tt == obj.TagInteger {
+		if key.Tt == object.TagInteger {
 			ik := key.Val.(int64)
 			if ik >= 1 && int(ik) <= len(t.Array) {
 				t.Array[ik-1] = value
@@ -219,7 +219,7 @@ func (t *Table) rawLen() int64 {
 // Invariant: t[lo] is present (or lo==0), t[hi+1] is absent (or hi==asize).
 // Actually: lo is a present index (0 means "before start"), hi is an absent index.
 // We find the largest i in [lo, hi) such that arr[i-1] is non-nil.
-func binsearch(arr []obj.TValue, lo, hi uint) uint {
+func binsearch(arr []object.TValue, lo, hi uint) uint {
 	// lo: 1-based index known present (or 0 = before array)
 	// hi: 1-based index known absent
 	for hi-lo > 1 {
@@ -278,27 +278,27 @@ var ErrInvalidKey = errors.New("invalid key to 'next'")
 
 // next advances the iterator. Pass Nil to start.
 // Returns ErrInvalidKey if the key is not found in the table.
-func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool, error) {
+func (t *Table) next(key object.TValue) (object.TValue, object.TValue, bool, error) {
 	asize := len(t.Array)
 
 	var startIdx int // 0-based unified index (array then hash)
 	if key.Tt.IsNil() {
 		startIdx = 0
-	} else if key.Tt == obj.TagInteger {
+	} else if key.Tt == object.TagInteger {
 		k := key.Val.(int64)
 		if k >= 1 && int(k) <= asize {
 			startIdx = int(k) // next position after array index k
 		} else {
 			ni, found := getFromHashDeadOk(t, key)
 			if !found {
-				return obj.Nil, obj.Nil, false, ErrInvalidKey
+				return object.Nil, object.Nil, false, ErrInvalidKey
 			}
 			startIdx = asize + ni + 1
 		}
 	} else {
 		ni, found := getFromHashDeadOk(t, key)
 		if !found {
-			return obj.Nil, obj.Nil, false, ErrInvalidKey
+			return object.Nil, object.Nil, false, ErrInvalidKey
 		}
 		startIdx = asize + ni + 1
 	}
@@ -306,7 +306,7 @@ func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool, error) {
 	// Scan array part
 	for i := startIdx; i < asize; i++ {
 		if !t.Array[i].Tt.IsNil() {
-			return obj.MakeInteger(int64(i + 1)), t.Array[i], true, nil
+			return object.MakeInteger(int64(i + 1)), t.Array[i], true, nil
 		}
 	}
 
@@ -322,7 +322,7 @@ func (t *Table) next(key obj.TValue) (obj.TValue, obj.TValue, bool, error) {
 		}
 	}
 
-	return obj.Nil, obj.Nil, false, nil
+	return object.Nil, object.Nil, false, nil
 }
 
 // ---------------------------------------------------------------------------

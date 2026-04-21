@@ -12,9 +12,9 @@
 package parse
 
 import (
-	objectapi "github.com/akzj/go-lua/internal/object"
-	lexapi "github.com/akzj/go-lua/internal/lex"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/lex"
+	"github.com/akzj/go-lua/internal/opcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -95,16 +95,16 @@ func (e *ExpDesc) HasJumps() bool {
 // Forms a linked list via Prev for nested functions.
 // ---------------------------------------------------------------------------
 type FuncState struct {
-	Proto      *objectapi.Proto // the Proto being built
+	Proto      *object.Proto // the Proto being built
 	Prev       *FuncState       // enclosing function (nil for main)
-	Lex        *lexapi.LexState // shared lexer state
+	Lex        *lex.LexState // shared lexer state
 	Block      *BlockCnt        // current block scope
 
 	// StringCache deduplicates *LuaString objects across all FuncStates
 	// in the same compilation unit. Shared via openFunc inheritance.
 	// This ensures identical string literals (even long strings) get the
 	// same *LuaString pointer, matching C Lua's behavior for %p identity.
-	StringCache map[string]*objectapi.LuaString
+	StringCache map[string]*object.LuaString
 
 	KCache     map[any]int // constant dedup cache (key → index in Proto.K)
 	PC         int         // next code position (= len(Proto.Code) effectively)
@@ -153,7 +153,7 @@ type VarDesc struct {
 	Kind   byte            // VDKREG, RDKCONST, etc.
 	RegIdx byte            // register index
 	PIdx   int             // index into Proto.LocVars (debug info)
-	K      objectapi.TValue // compile-time constant value (for RDKCTC)
+	K      object.TValue // compile-time constant value (for RDKCTC)
 }
 
 // Variable kinds (C6 FIX: matches C lparser.h:102-108 exactly)
@@ -223,7 +223,7 @@ const (
 const MaxVars = 200
 
 // MaxFStack is the maximum register index (= MaxArgA = 255).
-const MaxFStack = opcodeapi.MaxArgA
+const MaxFStack = opcode.MaxArgA
 
 // LuaMultRet is the multi-return sentinel (LUA_MULTRET = -1).
 const LuaMultRet = -1

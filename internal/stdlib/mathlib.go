@@ -6,7 +6,7 @@ import (
 	"time"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ func math_tointeger(L *luaapi.State) int {
 }
 
 func math_type(L *luaapi.State) int {
-	if L.Type(1) == objectapi.TypeNumber {
+	if L.Type(1) == object.TypeNumber {
 		if L.IsInteger(1) {
 			L.PushString("integer")
 		} else {

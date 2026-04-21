@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // chunkid formats a source name for error messages.
@@ -277,10 +277,10 @@ func readNumeral(ls *LexState) Token {
 	s := bufString(ls)
 
 	// Try integer first, then float (matches C's luaO_str2num)
-	if iv, ok := objectapi.StringToInteger(s); ok {
+	if iv, ok := object.StringToInteger(s); ok {
 		return Token{Type: TK_INT, IntVal: iv}
 	}
-	if fv, ok := objectapi.StringToFloat(s); ok {
+	if fv, ok := object.StringToFloat(s); ok {
 		return Token{Type: TK_FLT, FltVal: fv}
 	}
 	LexError(ls, "malformed number", TK_FLT)
@@ -744,10 +744,10 @@ func readNumeral2(ls *LexState) Token {
 	}
 
 	s := bufString(ls)
-	if iv, ok := objectapi.StringToInteger(s); ok {
+	if iv, ok := object.StringToInteger(s); ok {
 		return Token{Type: TK_INT, IntVal: iv}
 	}
-	if fv, ok := objectapi.StringToFloat(s); ok {
+	if fv, ok := object.StringToFloat(s); ok {
 		return Token{Type: TK_FLT, FltVal: fv}
 	}
 	LexError(ls, "malformed number", TK_FLT)

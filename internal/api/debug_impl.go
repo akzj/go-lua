@@ -1,14 +1,15 @@
+// debug_impl.go — Debug interface implementation (GetInfo, GetLocal, SetLocal, hooks).
 package api
 
 import (
 	"fmt"
 	"strings"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/object"
 
-	stateapi "github.com/akzj/go-lua/internal/state"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -34,8 +35,8 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 	ar.ThreadState = ls
 	fval := ls.Stack[ci.Func].Val
 	switch fval.Tt {
-	case objectapi.TagLuaClosure:
-		cl := fval.Val.(*closureapi.LClosure)
+	case object.TagLuaClosure:
+		cl := fval.Val.(*closure.LClosure)
 		p := cl.Proto
 		if p.Source != nil {
 			ar.Source = p.Source.Data
@@ -60,15 +61,15 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		if pc < 0 {
 			pc = 0
 		}
-		ar.CurrentLine = vmapi.GetFuncLine(p, pc)
-	case objectapi.TagCClosure, objectapi.TagLightCFunc:
+		ar.CurrentLine = vm.GetFuncLine(p, pc)
+	case object.TagCClosure, object.TagLightCFunc:
 		ar.Source = "=[C]"
 		ar.ShortSrc = "[C]"
 		ar.What = "C"
 		ar.IsVararg = true // All C functions are vararg
 		ar.NParams = 0
-		if fval.Tt == objectapi.TagCClosure {
-			cc := fval.Val.(*closureapi.CClosure)
+		if fval.Tt == object.TagCClosure {
+			cc := fval.Val.(*closure.CClosure)
 			ar.NUps = len(cc.UpVals)
 		}
 	}
@@ -83,7 +84,7 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 	}
 	// Use the thread state from the debug info if available (for coroutine inspection)
 	ls := L.ls()
-	if ts, ok := ar.ThreadState.(*stateapi.LuaState); ok {
+	if ts, ok := ar.ThreadState.(*state.LuaState); ok {
 		ls = ts
 	}
 	for i := 0; i < len(what); i++ {
@@ -92,7 +93,7 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			if ar.CI == nil {
 				break
 			}
-			queriedCI, ok := ar.CI.(*stateapi.CallInfo)
+			queriedCI, ok := ar.CI.(*state.CallInfo)
 			if !ok {
 				break
 			}
@@ -102,14 +103,14 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			}
 			// Check if caller is closing TBC vars (CISTClsRet flag)
 			// If so, this frame is a __close metamethod call
-			if caller.CallStatus&stateapi.CISTClsRet != 0 {
+			if caller.CallStatus&state.CISTClsRet != 0 {
 				ar.Name = "close"
 				ar.NameWhat = "metamethod"
 				break
 			}
 			// Check if caller is running a hook (CISTHooked flag)
 			// If so, this frame was called from a hook dispatch
-			if caller.CallStatus&stateapi.CISTHooked != 0 {
+			if caller.CallStatus&state.CISTHooked != 0 {
 				ar.Name = "?"
 				ar.NameWhat = "hook"
 				break
@@ -117,16 +118,16 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			// Check if caller is running a finalizer (CISTFin flag)
 			// If so, this frame is a __gc metamethod call.
 			// Mirrors C Lua's funcnamefromcall order: ClsRet → Hooked → Fin → isLua
-			if caller.CallStatus&stateapi.CISTFin != 0 {
+			if caller.CallStatus&state.CISTFin != 0 {
 				ar.Name = "__gc"
 				ar.NameWhat = "metamethod"
 				break
 			}
 			fval := ls.Stack[caller.Func].Val
-			if fval.Tt != objectapi.TagLuaClosure {
+			if fval.Tt != object.TagLuaClosure {
 				break
 			}
-			cl := fval.Val.(*closureapi.LClosure)
+			cl := fval.Val.(*closure.LClosure)
 			p := cl.Proto
 			if p == nil {
 				break
@@ -137,7 +138,7 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			}
 			// Use funcNameFromCode which handles all opcodes:
 			// OP_CALL, OP_TAILCALL, OP_TFORCALL, OP_MMBIN, OP_GETTABUP, etc.
-			kind, name := vmapi.FuncNameFromCode(ls, p, pc)
+			kind, name := vm.FuncNameFromCode(ls, p, pc)
 			if name != "" {
 				ar.Name = name
 				ar.NameWhat = kind
@@ -148,7 +149,7 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 			// Push the function value onto the stack.
 			// Mirrors: lua_getinfo 'f' flag in lapi.c.
 			if ar.CI != nil {
-				if ci, ok := ar.CI.(*stateapi.CallInfo); ok {
+				if ci, ok := ar.CI.(*state.CallInfo); ok {
 					fval := ls.Stack[ci.Func].Val
 					L.push(fval)
 				}
@@ -156,8 +157,8 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 		case 'r':
 			// Transfer info for call/return hooks
 			if ar.CI != nil {
-				if ci, ok := ar.CI.(*stateapi.CallInfo); ok {
-					if ci.CallStatus&stateapi.CISTHooked != 0 {
+				if ci, ok := ar.CI.(*state.CallInfo); ok {
+					if ci.CallStatus&state.CISTHooked != 0 {
 						ar.FTransfer = ls.FTransfer
 						ar.NTransfer = ls.NTransfer
 					}
@@ -166,8 +167,8 @@ func (L *State) GetInfo(what string, ar *DebugInfo) bool {
 		case 't':
 			// Tail call and extra args info
 			if ar.CI != nil {
-				if ci, ok := ar.CI.(*stateapi.CallInfo); ok {
-					ar.IsTailCall = ci.CallStatus&stateapi.CISTTail != 0
+				if ci, ok := ar.CI.(*state.CallInfo); ok {
+					ar.IsTailCall = ci.CallStatus&state.CISTTail != 0
 					ar.ExtraArgs = ci.NExtraArgs
 				}
 			}
@@ -274,8 +275,8 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSource, what string, lin
 	if v == nil {
 		return "=[C]", "[C]", "C", 0, 0, 0, 0, true, false
 	}
-	if v.Tt == objectapi.TagLuaClosure {
-		cl := v.Val.(*closureapi.LClosure)
+	if v.Tt == object.TagLuaClosure {
+		cl := v.Val.(*closure.LClosure)
 		p := cl.Proto
 		if p != nil {
 			src := "=?"
@@ -291,8 +292,8 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSource, what string, lin
 			return src, ssrc, w, p.LineDefined, p.LastLine, len(cl.UpVals), int(p.NumParams), p.IsVararg(), true
 		}
 	}
-	if v.Tt == objectapi.TagCClosure {
-		cc := v.Val.(*closureapi.CClosure)
+	if v.Tt == object.TagCClosure {
+		cc := v.Val.(*closure.CClosure)
 		return "=[C]", "[C]", "C", 0, 0, len(cc.UpVals), 0, true, false
 	}
 	// TagLightCFunc or other C function types
@@ -300,20 +301,20 @@ func (L *State) GetFuncProtoInfo(idx int) (source, shortSource, what string, lin
 }
 
 func (L *State) GetLocal(ar *DebugInfo, n int) string {
-	ls, ok := ar.ThreadState.(*stateapi.LuaState)
+	ls, ok := ar.ThreadState.(*state.LuaState)
 	if !ok {
 		ls = L.ls()
 	}
-	ci, ok := ar.CI.(*stateapi.CallInfo)
+	ci, ok := ar.CI.(*state.CallInfo)
 	if !ok || ci == nil {
 		return ""
 	}
 	clfn := ls.Stack[ci.Func].Val
-	isLua := clfn.Tt == objectapi.TagLuaClosure
+	isLua := clfn.Tt == object.TagLuaClosure
 
-	var proto *objectapi.Proto
+	var proto *object.Proto
 	if isLua {
-		cl, ok := clfn.Val.(*closureapi.LClosure)
+		cl, ok := clfn.Val.(*closure.LClosure)
 		if ok && cl != nil && cl.Proto != nil {
 			proto = cl.Proto
 		}
@@ -334,7 +335,7 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 		if slot < ci.Func-int(numExtra) || slot > ci.Func-1 {
 			return ""
 		}
-		vmapi.CheckStack(ls, 1)
+		vm.CheckStack(ls, 1)
 		ls.Stack[ls.Top].Val = ls.Stack[slot].Val
 		ls.Top++
 		return "(vararg)"
@@ -367,7 +368,7 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 		if slot < 0 || slot >= len(ls.Stack) {
 			return ""
 		}
-		vmapi.CheckStack(ls, 1)
+		vm.CheckStack(ls, 1)
 		ls.Stack[ls.Top] = ls.Stack[slot]
 		ls.Top++
 		return name
@@ -387,7 +388,7 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 	if n > 0 && limit-base >= n {
 		slot := base + n - 1
 		if slot >= 0 && slot < len(ls.Stack) {
-			vmapi.CheckStack(ls, 1)
+			vm.CheckStack(ls, 1)
 			ls.Stack[ls.Top] = ls.Stack[slot]
 			ls.Top++
 			if isLua {
@@ -400,20 +401,20 @@ func (L *State) GetLocal(ar *DebugInfo, n int) string {
 }
 
 func (L *State) SetLocal(ar *DebugInfo, n int) string {
-	ls, ok := ar.ThreadState.(*stateapi.LuaState)
+	ls, ok := ar.ThreadState.(*state.LuaState)
 	if !ok {
 		ls = L.ls()
 	}
-	ci, ok := ar.CI.(*stateapi.CallInfo)
+	ci, ok := ar.CI.(*state.CallInfo)
 	if !ok || ci == nil {
 		return ""
 	}
 	clfn := ls.Stack[ci.Func].Val
-	isLua := clfn.Tt == objectapi.TagLuaClosure
+	isLua := clfn.Tt == object.TagLuaClosure
 
-	var proto *objectapi.Proto
+	var proto *object.Proto
 	if isLua {
-		cl, ok := clfn.Val.(*closureapi.LClosure)
+		cl, ok := clfn.Val.(*closure.LClosure)
 		if ok && cl != nil && cl.Proto != nil {
 			proto = cl.Proto
 		}

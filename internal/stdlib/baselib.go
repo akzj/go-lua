@@ -7,8 +7,8 @@ import (
 	"unicode"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ func luaB_require(L *luaapi.State) int {
 	// Get package.searchers
 	L.GetGlobal("package")                       // stack: [name, _LOADED, package]
 	tp = L.GetField(-1, "searchers")             // stack: [name, _LOADED, package, searchers]
-	if tp != objectapi.TypeTable {
+	if tp != object.TypeTable {
 		L.Errorf("'package.searchers' must be a table")
 		return 0
 	}
@@ -65,7 +65,7 @@ func luaB_require(L *luaapi.State) int {
 
 	for i := int64(1); ; i++ {
 		tp = L.RawGetI(3, i) // stack: [name, _LOADED, searchers, searcher_i]
-		if tp == objectapi.TypeNil {
+		if tp == object.TypeNil {
 			// No more searchers — build error and fail
 			L.Pop(1) // pop nil
 			L.Errorf("module '%s' not found:%s", name, errMsgs.String())
@@ -93,7 +93,7 @@ func luaB_require(L *luaapi.State) int {
 			// Stack: [..., extra]
 
 			// Get _LOADED[name] — may have been set by the module itself
-			if L.GetField(2, name) == objectapi.TypeNil {
+			if L.GetField(2, name) == object.TypeNil {
 				// Module set no value — use true
 				L.Pop(1) // pop nil
 				L.PushBoolean(true)
@@ -139,7 +139,7 @@ func luaB_type(L *luaapi.State) int {
 
 func luaB_tonumber(L *luaapi.State) int {
 	if L.IsNoneOrNil(2) { // standard conversion
-		if L.Type(1) == objectapi.TypeNumber {
+		if L.Type(1) == object.TypeNumber {
 			L.SetTop(1)
 			return 1
 		}
@@ -150,7 +150,7 @@ func luaB_tonumber(L *luaapi.State) int {
 		L.CheckAny(1)
 	} else {
 		base := L.CheckInteger(2)
-		L.CheckType(1, objectapi.TypeString)
+		L.CheckType(1, object.TypeString)
 		s, _ := L.ToString(1)
 		L.ArgCheck(base >= 2 && base <= 36, 2, "base out of range")
 		n, ok := strToInt(s, int(base))
@@ -217,7 +217,7 @@ func strToInt(s string, base int) (int64, bool) {
 func luaB_error(L *luaapi.State) int {
 	level := L.OptInteger(2, 1)
 	L.SetTop(1)
-	if L.Type(1) == objectapi.TypeString && level > 0 {
+	if L.Type(1) == object.TypeString && level > 0 {
 		L.Where(int(level))
 		L.PushValue(1)
 		L.Concat(2)
@@ -243,8 +243,8 @@ func luaB_getmetatable(L *luaapi.State) int {
 
 func luaB_setmetatable(L *luaapi.State) int {
 	t := L.Type(2)
-	L.CheckType(1, objectapi.TypeTable)
-	L.ArgExpected(t == objectapi.TypeNil || t == objectapi.TypeTable, 2, "nil or table")
+	L.CheckType(1, object.TypeTable)
+	L.ArgExpected(t == object.TypeNil || t == object.TypeTable, 2, "nil or table")
 	if L.GetMetafield(1, "__metatable") {
 		L.Errorf("cannot change a protected metatable")
 	}
@@ -262,13 +262,13 @@ func luaB_rawequal(L *luaapi.State) int {
 
 func luaB_rawlen(L *luaapi.State) int {
 	t := L.Type(1)
-	L.ArgExpected(t == objectapi.TypeTable || t == objectapi.TypeString, 1, "table or string")
+	L.ArgExpected(t == object.TypeTable || t == object.TypeString, 1, "table or string")
 	L.PushInteger(L.RawLen(1))
 	return 1
 }
 
 func luaB_rawget(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeTable)
+	L.CheckType(1, object.TypeTable)
 	L.CheckAny(2)
 	L.SetTop(2)
 	L.RawGet(1)
@@ -276,7 +276,7 @@ func luaB_rawget(L *luaapi.State) int {
 }
 
 func luaB_rawset(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeTable)
+	L.CheckType(1, object.TypeTable)
 	L.CheckAny(2)
 	L.CheckAny(3)
 	L.SetTop(3)
@@ -303,7 +303,7 @@ func luaB_assert(L *luaapi.State) int {
 
 func luaB_select(L *luaapi.State) int {
 	n := L.GetTop()
-	if L.Type(1) == objectapi.TypeString {
+	if L.Type(1) == object.TypeString {
 		s, _ := L.ToString(1)
 		if len(s) > 0 && s[0] == '#' {
 			L.PushInteger(int64(n - 1))
@@ -321,7 +321,7 @@ func luaB_select(L *luaapi.State) int {
 }
 
 func luaB_next(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeTable)
+	L.CheckType(1, object.TypeTable)
 	L.SetTop(2) // create a 2nd argument if there isn't one
 	if L.Next(1) {
 		return 2
@@ -332,7 +332,7 @@ func luaB_next(L *luaapi.State) int {
 
 // pairsCont is the continuation for pairs() after yield from __pairs metamethod.
 // Mirrors: pairscont in lbaselib.c:280
-func pairsCont(L *stateapi.LuaState, status int, ctx int) int {
+func pairsCont(L *state.LuaState, status int, ctx int) int {
 	return 4 // __pairs did all the work, just return its 4 results
 }
 
@@ -354,7 +354,7 @@ func ipairsAux(L *luaapi.State) int {
 	i++
 	L.PushInteger(i)
 	tp := L.GetI(1, i)
-	if tp == objectapi.TypeNil {
+	if tp == object.TypeNil {
 		return 1
 	}
 	return 2
@@ -372,15 +372,15 @@ func luaB_ipairs(L *luaapi.State) int {
 
 // finishPcallCont is the continuation for pcall/xpcall after yield/error recovery.
 // Mirrors: finishpcall in lbaselib.c:471
-// KFunction signature: func(L *stateapi.LuaState, status int, ctx int) int
+// KFunction signature: func(L *state.LuaState, status int, ctx int) int
 // ctx (extra): number of extra stack items to skip when returning results.
 //   pcall: ctx=0 (no extra items to skip)
 //   xpcall: ctx=2 (skip original func + handler)
-func finishPcallCont(L *stateapi.LuaState, status int, ctx int) int {
-	if status != stateapi.StatusOK && status != stateapi.StatusYield {
+func finishPcallCont(L *state.LuaState, status int, ctx int) int {
+	if status != state.StatusOK && status != state.StatusYield {
 		// Error path: push false, then the error message
 		// The error object is already at L.Top-1 (placed by SetErrorObj in finishPCallK)
-		L.Stack[L.Top].Val = objectapi.False
+		L.Stack[L.Top].Val = object.False
 		L.Top++
 		// Swap: move false before error message
 		// Stack: ... errMsg false → ... false errMsg
@@ -398,7 +398,7 @@ func luaB_pcall(L *luaapi.State) int {
 	L.Insert(1)         // put it in place
 	// Set continuation BEFORE calling PCall — this enables PATH B (yieldable).
 	// Mirrors: luaB_pcall in lbaselib.c sets finishpcall as continuation.
-	ls := L.Internal.(*stateapi.LuaState)
+	ls := L.Internal.(*state.LuaState)
 	ls.CI.K = finishPcallCont
 	ls.CI.Ctx = 0
 	status := L.PCall(L.GetTop()-2, luaapi.MultiRet, 0)
@@ -407,7 +407,7 @@ func luaB_pcall(L *luaapi.State) int {
 
 func luaB_xpcall(L *luaapi.State) int {
 	n := L.GetTop()
-	L.CheckType(2, objectapi.TypeFunction) // check error function
+	L.CheckType(2, object.TypeFunction) // check error function
 	// Mirrors: luaB_xpcall in lbaselib.c
 	// Stack: [func(1), handler(2), arg1(3), ..., argN]
 	L.PushBoolean(true) // first result
@@ -416,7 +416,7 @@ func luaB_xpcall(L *luaapi.State) int {
 	// Stack: [func(1), handler(2), true(3), func_copy(4), arg1(5), ..., argN]
 	// Set continuation BEFORE calling PCall — enables PATH B (yieldable).
 	// Mirrors: lua_pcallk(L, n-2, MULTRET, 2, 2, finishpcall) in C Lua
-	ls := L.Internal.(*stateapi.LuaState)
+	ls := L.Internal.(*state.LuaState)
 	ls.CI.K = finishPcallCont
 	ls.CI.Ctx = 2 // skip 2 items (func + handler) when returning results
 	status := L.PCall(n-2, luaapi.MultiRet, 2)
@@ -509,7 +509,7 @@ func loadAux(L *luaapi.State, status, env int) int {
 
 // dofileCont is the continuation for dofile() after yield from the loaded chunk.
 // Mirrors: dofilecont in lbaselib.c:419
-func dofileCont(L *stateapi.LuaState, status int, ctx int) int {
+func dofileCont(L *state.LuaState, status int, ctx int) int {
 	return L.Top - (L.CI.Func + 1) - 1
 }
 
@@ -524,7 +524,7 @@ func luaB_dofile(L *luaapi.State) int {
 	// Call the loaded chunk, passing through all results.
 	// Use CallK so that yields inside the dofile'd chunk can be resumed.
 	L.CallK(0, luaapi.MultiRet, 0, dofileCont)
-	ls := L.Internal.(*stateapi.LuaState)
+	ls := L.Internal.(*state.LuaState)
 	return dofileCont(ls, 0, 0)
 }
 

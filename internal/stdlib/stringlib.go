@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -554,10 +554,10 @@ func str_format(L *luaapi.State) int {
 		case 'q':
 			// C Lua addliteral: handles string, number, nil, boolean
 			switch L.Type(arg) {
-			case objectapi.TypeString:
+			case object.TypeString:
 				s := L.CheckString(arg)
 				sb.WriteString(quoteString(s))
-			case objectapi.TypeNumber:
+			case object.TypeNumber:
 				if L.IsInteger(arg) {
 					n, _ := L.ToInteger(arg)
 					// Corner case: mininteger uses hex to avoid overflow
@@ -570,9 +570,9 @@ func str_format(L *luaapi.State) int {
 					n, _ := L.ToNumber(arg)
 					sb.WriteString(quoteFloat(n))
 				}
-			case objectapi.TypeNil:
+			case object.TypeNil:
 				sb.WriteString("nil")
-			case objectapi.TypeBoolean:
+			case object.TypeBoolean:
 				b := L.ToBoolean(arg)
 				if b {
 					sb.WriteString("true")
@@ -589,7 +589,7 @@ func str_format(L *luaapi.State) int {
 			v := L.Type(arg)
 			var pstr string
 			switch v {
-			case objectapi.TypeNil, objectapi.TypeBoolean, objectapi.TypeNumber:
+			case object.TypeNil, object.TypeBoolean, object.TypeNumber:
 				pstr = "(null)"
 			default:
 				ptr := L.ToPointer(arg)
@@ -1307,17 +1307,17 @@ func str_gsub(L *luaapi.State) int {
 		if res >= 0 && res != lastmatch { // match, not same end as last
 			n++
 			switch replType {
-			case objectapi.TypeString:
+			case object.TypeString:
 				repl := L.CheckString(3)
 				sb.WriteString(gsubReplace(L, repl, ms, si, res))
 				changed = true
-			case objectapi.TypeTable:
+			case object.TypeTable:
 				ms.pushOneCapture(L, 0, si, res) // first capture is the index
 				L.GetTable(3)
 				if addReplacementChanged(L, &sb, s, si, res) {
 					changed = true
 				}
-			case objectapi.TypeFunction:
+			case object.TypeFunction:
 				nCap := ms.pushCapture(L, si, res)
 				L.PushValue(3)
 				L.Insert(-(nCap + 1))
@@ -1683,13 +1683,13 @@ func readInt(data string, pos, size int, little, signed bool) int64 {
 // str_dump implements string.dump(function [, strip])
 // Mirrors: str_dump in lstrlib.c
 func str_dump(L *luaapi.State) int {
-	L.CheckType(1, objectapi.TypeFunction)
+	L.CheckType(1, object.TypeFunction)
 	cl := L.GetLClosure(1)
 	if cl == nil {
 		L.ArgError(1, "Lua function expected")
 	}
 	strip := L.ToBoolean(2)
-	data := vmapi.DumpProto(cl.Proto, strip)
+	data := vm.DumpProto(cl.Proto, strip)
 	L.PushString(string(data))
 	return 1
 }
@@ -1708,7 +1708,7 @@ func str_dump(L *luaapi.State) int {
 // If already a number, pushes a copy. Returns true if conversion succeeded.
 // Mirrors C Lua's tonum() in lstrlib.c.
 func strToNum(L *luaapi.State, idx int) bool {
-	if L.Type(idx) == objectapi.TypeNumber {
+	if L.Type(idx) == object.TypeNumber {
 		L.PushValue(idx)
 		return true
 	}
@@ -1726,7 +1726,7 @@ func strTryMT(L *luaapi.State, mtkey string, opname string) {
 	L.SetTop(2) // back to original arguments
 	// If second operand is a string, it shares our metatable — no point retrying.
 	// Otherwise, try the second operand's metamethod.
-	if L.Type(2) == objectapi.TypeString || !L.GetMetafield(2, mtkey) {
+	if L.Type(2) == object.TypeString || !L.GetMetafield(2, mtkey) {
 		L.Errorf("attempt to %s a '%s' with a '%s'", opname,
 			L.TypeName(L.Type(1)), L.TypeName(L.Type(2)))
 	}

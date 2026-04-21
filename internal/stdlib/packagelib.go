@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // searcher_preload — searcher #1: checks package.preload[modname]
@@ -29,13 +29,13 @@ func searcher_preload(L *luaapi.State) int {
 		return 1
 	}
 	tp := L.GetField(-1, "preload")
-	if tp != objectapi.TypeTable {
+	if tp != object.TypeTable {
 		L.Pop(2) // pop preload + package
 		L.PushString("no field package.preload['" + name + "']")
 		return 1
 	}
 	tp = L.GetField(-1, name)
-	if tp == objectapi.TypeNil {
+	if tp == object.TypeNil {
 		// Not found in preload
 		L.Pop(3) // pop nil + preload + package
 		L.PushString("no field package.preload['" + name + "']")
@@ -61,7 +61,7 @@ func searcher_Lua(L *luaapi.State) int {
 		return 1
 	}
 	tp := L.GetField(-1, "path")
-	if tp != objectapi.TypeString {
+	if tp != object.TypeString {
 		L.Pop(2) // pop path + package
 		L.Errorf("'package.path' must be a string")
 		return 0
@@ -135,7 +135,7 @@ func searcher_Clib(L *luaapi.State) int {
 		return 1
 	}
 	tp := L.GetField(-1, "cpath")
-	if tp != objectapi.TypeString {
+	if tp != object.TypeString {
 		L.Pop(2)
 		L.PushString("no field package.cpath")
 		return 1

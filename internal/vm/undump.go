@@ -5,21 +5,21 @@ import (
 	"fmt"
 	"math"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	luastringapi "github.com/akzj/go-lua/internal/luastring"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/luastring"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // UndumpProto deserializes a Lua 5.5 binary chunk into a Proto + LClosure.
 // Returns the LClosure ready to execute.
 // Mirrors: luaU_undump in lundump.c
-func UndumpProto(L *stateapi.LuaState, data []byte, name string) (*closureapi.LClosure, error) {
+func UndumpProto(L *state.LuaState, data []byte, name string) (*closure.LClosure, error) {
 	s := &loadState{
 		data:   data,
 		offset: 0,
 		name:   name,
-		strs:   make([]*objectapi.LuaString, 0, 16),
+		strs:   make([]*object.LuaString, 0, 16),
 		L:      L,
 	}
 
@@ -32,7 +32,7 @@ func UndumpProto(L *stateapi.LuaState, data []byte, name string) (*closureapi.LC
 		return nil, fmt.Errorf("%s: %s", name, s.err.Error())
 	}
 
-	p := &objectapi.Proto{}
+	p := &object.Proto{}
 	s.loadFunction(p)
 	if s.err != nil {
 		return nil, fmt.Errorf("%s: %s", name, s.err.Error())
@@ -43,9 +43,9 @@ func UndumpProto(L *stateapi.LuaState, data []byte, name string) (*closureapi.LC
 		return nil, fmt.Errorf("%s: bad binary format (corrupted chunk)", name)
 	}
 
-	cl := closureapi.NewLClosure(p, nupvals)
+	cl := closure.NewLClosure(p, nupvals)
 	L.Global.LinkGC(cl) // V5: register closure in allgc chain
-	closureapi.InitUpvals(cl)
+	closure.InitUpvals(cl)
 	// Link newly created upvalues to allgc for proper GC tracking
 	for _, uv := range cl.UpVals {
 		if uv != nil {
@@ -60,8 +60,8 @@ type loadState struct {
 	offset int
 	name   string
 	err    error
-	strs   []*objectapi.LuaString // 1-based string reuse list
-	L      *stateapi.LuaState
+	strs   []*object.LuaString // 1-based string reuse list
+	L      *state.LuaState
 }
 
 func (s *loadState) error(msg string) {
@@ -142,7 +142,7 @@ func (s *loadState) loadNumber() float64 {
 	return math.Float64frombits(binary.LittleEndian.Uint64(b))
 }
 
-func (s *loadState) loadString() *objectapi.LuaString {
+func (s *loadState) loadString() *object.LuaString {
 	if s.err != nil {
 		return nil
 	}
@@ -169,7 +169,7 @@ func (s *loadState) loadString() *objectapi.LuaString {
 	str := string(b[:realLen]) // exclude trailing \0
 
 	// Intern the string
-	st := s.L.Global.StringTable.(*luastringapi.StringTable)
+	st := s.L.Global.StringTable.(*luastring.StringTable)
 	ls := st.Intern(str)
 
 	// Save for reuse
@@ -177,7 +177,7 @@ func (s *loadState) loadString() *objectapi.LuaString {
 	return ls
 }
 
-func (s *loadState) loadCode(p *objectapi.Proto) {
+func (s *loadState) loadCode(p *object.Proto) {
 	n := s.loadInt()
 	s.loadAlign(4) // align to sizeof(Instruction)
 	p.Code = make([]uint32, n)
@@ -190,32 +190,32 @@ func (s *loadState) loadCode(p *objectapi.Proto) {
 	}
 }
 
-func (s *loadState) loadConstants(p *objectapi.Proto) {
+func (s *loadState) loadConstants(p *object.Proto) {
 	n := s.loadInt()
-	p.Constants = make([]objectapi.TValue, n)
+	p.Constants = make([]object.TValue, n)
 	for i := 0; i < n; i++ {
 		t := s.loadByte()
 		if s.err != nil {
 			return
 		}
-		switch objectapi.Tag(t) {
-		case objectapi.TagNil:
-			p.Constants[i] = objectapi.Nil
-		case objectapi.TagFalse:
-			p.Constants[i] = objectapi.False
-		case objectapi.TagTrue:
-			p.Constants[i] = objectapi.True
-		case objectapi.TagFloat:
-			p.Constants[i] = objectapi.MakeFloat(s.loadNumber())
-		case objectapi.TagInteger:
-			p.Constants[i] = objectapi.MakeInteger(s.loadInteger())
-		case objectapi.TagShortStr, objectapi.TagLongStr:
+		switch object.Tag(t) {
+		case object.TagNil:
+			p.Constants[i] = object.Nil
+		case object.TagFalse:
+			p.Constants[i] = object.False
+		case object.TagTrue:
+			p.Constants[i] = object.True
+		case object.TagFloat:
+			p.Constants[i] = object.MakeFloat(s.loadNumber())
+		case object.TagInteger:
+			p.Constants[i] = object.MakeInteger(s.loadInteger())
+		case object.TagShortStr, object.TagLongStr:
 			ls := s.loadString()
 			if ls == nil {
 				s.error("bad format for constant string")
 				return
 			}
-			p.Constants[i] = objectapi.MakeString(ls)
+			p.Constants[i] = object.MakeString(ls)
 		default:
 			s.error("invalid constant")
 			return
@@ -223,9 +223,9 @@ func (s *loadState) loadConstants(p *objectapi.Proto) {
 	}
 }
 
-func (s *loadState) loadUpvalues(p *objectapi.Proto) {
+func (s *loadState) loadUpvalues(p *object.Proto) {
 	n := s.loadInt()
-	p.Upvalues = make([]objectapi.UpvalDesc, n)
+	p.Upvalues = make([]object.UpvalDesc, n)
 	for i := 0; i < n; i++ {
 		p.Upvalues[i].InStack = s.loadByte() != 0
 		p.Upvalues[i].Idx = s.loadByte()
@@ -233,17 +233,17 @@ func (s *loadState) loadUpvalues(p *objectapi.Proto) {
 	}
 }
 
-func (s *loadState) loadProtos(p *objectapi.Proto) {
+func (s *loadState) loadProtos(p *object.Proto) {
 	n := s.loadInt()
-	p.Protos = make([]*objectapi.Proto, n)
+	p.Protos = make([]*object.Proto, n)
 	for i := 0; i < n; i++ {
-		p.Protos[i] = &objectapi.Proto{}
+		p.Protos[i] = &object.Proto{}
 		s.loadFunction(p.Protos[i])
 		s.L.Global.LinkGC(p.Protos[i]) // V5: register nested proto in allgc chain
 	}
 }
 
-func (s *loadState) loadDebug(p *objectapi.Proto) {
+func (s *loadState) loadDebug(p *object.Proto) {
 	// lineinfo
 	n := s.loadInt()
 	if n > 0 {
@@ -261,7 +261,7 @@ func (s *loadState) loadDebug(p *objectapi.Proto) {
 	n = s.loadInt()
 	if n > 0 {
 		s.loadAlign(4) // align to sizeof(int)
-		p.AbsLineInfo = make([]objectapi.AbsLineInfo, n)
+		p.AbsLineInfo = make([]object.AbsLineInfo, n)
 		for i := 0; i < n; i++ {
 			b := s.loadBlock(8) // 2 x int32
 			if b == nil {
@@ -275,7 +275,7 @@ func (s *loadState) loadDebug(p *objectapi.Proto) {
 	// locvars
 	n = s.loadInt()
 	if n > 0 {
-		p.LocVars = make([]objectapi.LocVar, n)
+		p.LocVars = make([]object.LocVar, n)
 		for i := 0; i < n; i++ {
 			p.LocVars[i].Name = s.loadString()
 			p.LocVars[i].StartPC = s.loadInt()
@@ -292,7 +292,7 @@ func (s *loadState) loadDebug(p *objectapi.Proto) {
 	}
 }
 
-func (s *loadState) loadFunction(p *objectapi.Proto) {
+func (s *loadState) loadFunction(p *object.Proto) {
 	p.LineDefined = s.loadInt()
 	p.LastLine = s.loadInt()
 	p.NumParams = s.loadByte()

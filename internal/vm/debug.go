@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"strings"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	opcodeapi "github.com/akzj/go-lua/internal/opcode"
-	stateapi "github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/opcode"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 // getBaseLine returns the baseline (line number and PC) for computing the
 // line of instruction at 'pc'. It searches the AbsLineInfo table.
 // Mirrors: getbaseline in ldebug.c
-func getBaseLine(f *objectapi.Proto, pc int) (baseline int, basepc int) {
+func getBaseLine(f *object.Proto, pc int) (baseline int, basepc int) {
 	if len(f.AbsLineInfo) == 0 || pc < f.AbsLineInfo[0].PC {
 		return f.LineDefined, -1
 	}
@@ -44,7 +44,7 @@ func getBaseLine(f *objectapi.Proto, pc int) (baseline int, basepc int) {
 // GetFuncLine returns the source line corresponding to instruction 'pc'
 // in proto 'f'. Returns -1 if no debug info is available.
 // Mirrors: luaG_getfuncline in ldebug.c
-func GetFuncLine(f *objectapi.Proto, pc int) int {
+func GetFuncLine(f *object.Proto, pc int) int {
 	if len(f.LineInfo) == 0 {
 		return -1
 	}
@@ -60,11 +60,11 @@ func GetFuncLine(f *objectapi.Proto, pc int) int {
 
 // getCurrentLine returns the current source line for a Lua call frame.
 // Mirrors: getcurrentline in ldebug.c
-func getCurrentLine(ci *stateapi.CallInfo, L *stateapi.LuaState) int {
+func getCurrentLine(ci *state.CallInfo, L *state.LuaState) int {
 	if !ci.IsLua() {
 		return -1
 	}
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return -1
 	}
@@ -116,12 +116,12 @@ func ShortSrc(source string) string {
 
 // addInfo prepends "source:line: " to a message for the current Lua frame.
 // Mirrors: luaG_addinfo in ldebug.c
-func addInfo(L *stateapi.LuaState, msg string) string {
+func addInfo(L *state.LuaState, msg string) string {
 	ci := L.CI
 	if ci == nil || !ci.IsLua() {
 		return msg
 	}
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return msg
 	}
@@ -143,13 +143,13 @@ func addInfo(L *stateapi.LuaState, msg string) string {
 
 // kname returns ("constant", name) if K[index] is a string constant.
 // Mirrors: kname in ldebug.c
-func kname(p *objectapi.Proto, index int) (kind string, name string) {
+func kname(p *object.Proto, index int) (kind string, name string) {
 	if index < 0 || index >= len(p.Constants) {
 		return "", "?"
 	}
 	kv := p.Constants[index]
 	if kv.IsString() {
-		return "constant", kv.Val.(*objectapi.LuaString).Data
+		return "constant", kv.Val.(*object.LuaString).Data
 	}
 	if kv.IsInteger() {
 		return "constant", fmt.Sprintf("%d", kv.Val.(int64))
@@ -161,13 +161,13 @@ func kname(p *objectapi.Proto, index int) (kind string, name string) {
 }
 
 // kname2 returns just the string value of constant at index (for field names).
-func kname2(p *objectapi.Proto, index int) string {
+func kname2(p *object.Proto, index int) string {
 	if index < 0 || index >= len(p.Constants) {
 		return "?"
 	}
 	kv := p.Constants[index]
 	if kv.IsString() {
-		return kv.Val.(*objectapi.LuaString).Data
+		return kv.Val.(*object.LuaString).Data
 	}
 	return "?"
 }
@@ -177,35 +177,35 @@ func kname2(p *objectapi.Proto, index int) string {
 // Mirrors: backward scan of findsetreg in ldebug.c.
 // Note: for conditional short-circuit (OP_TEST/JMP), use findSetRegForward
 // which is aware of jmptarget.
-func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
+func findSetReg(p *object.Proto, lastpc int, reg int) int {
 	if lastpc <= 0 || lastpc > len(p.Code) {
 		return -1
 	}
 	// Backward scan: start from lastpc-1, go back to 0
 	for pc := lastpc - 1; pc >= 0; pc-- {
 		inst := p.Code[pc]
-		op := opcodeapi.GetOpCode(inst)
-		a := opcodeapi.GetArgA(inst)
+		op := opcode.GetOpCode(inst)
+		a := opcode.GetArgA(inst)
 		switch op {
-		case opcodeapi.OP_LOADNIL:
+		case opcode.OP_LOADNIL:
 			// Sets registers a to a+b
-			b := opcodeapi.GetArgB(inst)
+			b := opcode.GetArgB(inst)
 			if a <= reg && reg <= a+b {
 				return pc
 			}
-		case opcodeapi.OP_LOADK, opcodeapi.OP_LOADKX, opcodeapi.OP_LOADFALSE,
-			opcodeapi.OP_LOADTRUE, opcodeapi.OP_LOADI, opcodeapi.OP_LOADF,
-			opcodeapi.OP_MOVE, opcodeapi.OP_GETUPVAL, opcodeapi.OP_CLOSURE,
-			opcodeapi.OP_GETTABUP, opcodeapi.OP_GETTABLE, opcodeapi.OP_GETI,
-			opcodeapi.OP_GETFIELD, opcodeapi.OP_SELF:
+		case opcode.OP_LOADK, opcode.OP_LOADKX, opcode.OP_LOADFALSE,
+			opcode.OP_LOADTRUE, opcode.OP_LOADI, opcode.OP_LOADF,
+			opcode.OP_MOVE, opcode.OP_GETUPVAL, opcode.OP_CLOSURE,
+			opcode.OP_GETTABUP, opcode.OP_GETTABLE, opcode.OP_GETI,
+			opcode.OP_GETFIELD, opcode.OP_SELF:
 			if a == reg {
 				return pc
 			}
-		case opcodeapi.OP_TFORCALL:
+		case opcode.OP_TFORCALL:
 			if reg >= a+2 {
 				return pc
 			}
-		case opcodeapi.OP_CALL, opcodeapi.OP_TAILCALL:
+		case opcode.OP_CALL, opcode.OP_TAILCALL:
 			if reg >= a {
 				return pc
 			}
@@ -219,7 +219,7 @@ func findSetReg(p *objectapi.Proto, lastpc int, reg int) int {
 // or -1 if 'reg' was only set inside conditional jumps.
 // Used for luaG_typeerror to detect short-circuit expression results.
 // Mirrors: findsetreg + filterpc in ldebug.c.
-func findSetRegForward(p *objectapi.Proto, lastpc int, reg int) int {
+func findSetRegForward(p *object.Proto, lastpc int, reg int) int {
 	setreg := -1
 	jmptarget := 0
 
@@ -230,34 +230,34 @@ func findSetRegForward(p *objectapi.Proto, lastpc int, reg int) int {
 	// For metamethod-mode ops, the previous instruction wasn't executed
 	// p.Code[lastpc] is the instruction that triggered the error
 	if lastpc > 0 && lastpc < len(p.Code) {
-		op := opcodeapi.GetOpCode(p.Code[lastpc])
-		if opcodeapi.TestMMMode(op) {
+		op := opcode.GetOpCode(p.Code[lastpc])
+		if opcode.TestMMMode(op) {
 			lastpc--
 		}
 	}
 
 	for pc := 0; pc < lastpc; pc++ {
 		inst := p.Code[pc]
-		op := opcodeapi.GetOpCode(inst)
-		a := opcodeapi.GetArgA(inst)
+		op := opcode.GetOpCode(inst)
+		a := opcode.GetArgA(inst)
 		change := false
 
 		switch op {
-		case opcodeapi.OP_LOADNIL:
-			b := opcodeapi.GetArgB(inst)
+		case opcode.OP_LOADNIL:
+			b := opcode.GetArgB(inst)
 			change = (reg >= a && reg <= a+b)
-		case opcodeapi.OP_TFORCALL:
+		case opcode.OP_TFORCALL:
 			change = (reg >= a+2)
-		case opcodeapi.OP_CALL, opcodeapi.OP_TAILCALL:
+		case opcode.OP_CALL, opcode.OP_TAILCALL:
 			change = (reg >= a)
-		case opcodeapi.OP_JMP:
-			sj := opcodeapi.GetArgSJ(inst)
+		case opcode.OP_JMP:
+			sj := opcode.GetArgSJ(inst)
 			dest := pc + 1 + sj
 			if dest <= lastpc && dest > jmptarget {
 				jmptarget = dest
 			}
 		default:
-			change = opcodeapi.TestAMode(op) && reg == a
+			change = opcode.TestAMode(op) && reg == a
 		}
 
 		if change {
@@ -274,7 +274,7 @@ func findSetRegForward(p *objectapi.Proto, lastpc int, reg int) int {
 // basicGetObjName traces the origin of register 'reg' at 'pc' in proto 'p'.
 // Returns (kind, name) where kind is "constant", "local", "upvalue", or "".
 // Simplified version of basicgetobjname in ldebug.c.
-func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name string) {
+func BasicGetObjName(p *object.Proto, pc int, reg int) (kind string, name string) {
 	setpc := findSetRegForward(p, pc, reg)
 	if setpc < 0 {
 		// No instruction found that sets this register — try local variable name
@@ -284,48 +284,48 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 		return "", ""
 	}
 	inst := p.Code[setpc]
-	op := opcodeapi.GetOpCode(inst)
+	op := opcode.GetOpCode(inst)
 	switch op {
-	case opcodeapi.OP_LOADK:
-		return kname(p, opcodeapi.GetArgBx(inst))
-	case opcodeapi.OP_LOADKX:
+	case opcode.OP_LOADK:
+		return kname(p, opcode.GetArgBx(inst))
+	case opcode.OP_LOADKX:
 		if setpc+1 < len(p.Code) {
-			return kname(p, opcodeapi.GetArgAx(p.Code[setpc+1]))
+			return kname(p, opcode.GetArgAx(p.Code[setpc+1]))
 		}
-	case opcodeapi.OP_MOVE:
-		b := opcodeapi.GetArgB(inst)
-		if b < opcodeapi.GetArgA(inst) {
+	case opcode.OP_MOVE:
+		b := opcode.GetArgB(inst)
+		if b < opcode.GetArgA(inst) {
 			return BasicGetObjName(p, setpc, b)
 		}
-	case opcodeapi.OP_GETUPVAL:
-		b := opcodeapi.GetArgB(inst)
+	case opcode.OP_GETUPVAL:
+		b := opcode.GetArgB(inst)
 		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil {
 			return "upvalue", p.Upvalues[b].Name.Data
 		}
-	case opcodeapi.OP_GETTABUP:
+	case opcode.OP_GETTABUP:
 		// Table access from upvalue: upvalues[B][K[C]]
 		// If upvalue is _ENV, this is a "global" access
-		b := opcodeapi.GetArgB(inst)
-		k := opcodeapi.GetArgC(inst)
+		b := opcode.GetArgB(inst)
+		k := opcode.GetArgC(inst)
 		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil && p.Upvalues[b].Name.Data == "_ENV" {
 			return "global", kname2(p, k)
 		}
 		if k < len(p.Constants) {
 			return "field", kname2(p, k)
 		}
-	case opcodeapi.OP_GETFIELD:
+	case opcode.OP_GETFIELD:
 		// Table field access: reg[A] = reg[B][K[C]]
-		k := opcodeapi.GetArgC(inst)
-		b := opcodeapi.GetArgB(inst)
+		k := opcode.GetArgC(inst)
+		b := opcode.GetArgB(inst)
 		name := kname2(p, k)
 		if isEnvReg(p, setpc, b) {
 			return "global", name
 		}
 		return "field", name
-	case opcodeapi.OP_GETTABLE:
+	case opcode.OP_GETTABLE:
 		// Table access: reg[A] = reg[B][reg[C]]
-		b := opcodeapi.GetArgB(inst)
-		c := opcodeapi.GetArgC(inst)
+		b := opcode.GetArgB(inst)
+		c := opcode.GetArgC(inst)
 		// Use rname logic: only use key name if it's a constant
 		rkind, rn := BasicGetObjName(p, setpc, c)
 		keyName := "?"
@@ -336,9 +336,9 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 			return "global", keyName
 		}
 		return "field", keyName
-	case opcodeapi.OP_SELF:
+	case opcode.OP_SELF:
 		// Method call: reg[A+1] = reg[B]; reg[A] = reg[B][K[C]]
-		k := opcodeapi.GetArgC(inst)
+		k := opcode.GetArgC(inst)
 		if k < len(p.Constants) {
 			return "method", kname2(p, k)
 		}
@@ -355,7 +355,7 @@ func BasicGetObjName(p *objectapi.Proto, pc int, reg int) (kind string, name str
 // isEnvReg checks whether register 'reg' at instruction 'pc' holds the _ENV table.
 // Mirrors: isEnv in ldebug.c (for the register case).
 // Only checks local variables and upvalues — does NOT recurse into table accesses.
-func isEnvReg(p *objectapi.Proto, pc int, reg int) bool {
+func isEnvReg(p *object.Proto, pc int, reg int) bool {
 	// First try local variable name
 	if name := locVarName(p, pc, reg); name == "_ENV" {
 		return true
@@ -366,16 +366,16 @@ func isEnvReg(p *objectapi.Proto, pc int, reg int) bool {
 		return false
 	}
 	inst := p.Code[setpc]
-	op := opcodeapi.GetOpCode(inst)
+	op := opcode.GetOpCode(inst)
 	switch op {
-	case opcodeapi.OP_GETUPVAL:
-		b := opcodeapi.GetArgB(inst)
+	case opcode.OP_GETUPVAL:
+		b := opcode.GetArgB(inst)
 		if b < len(p.Upvalues) && p.Upvalues[b].Name != nil {
 			return p.Upvalues[b].Name.Data == "_ENV"
 		}
-	case opcodeapi.OP_MOVE:
-		b := opcodeapi.GetArgB(inst)
-		if b < opcodeapi.GetArgA(inst) {
+	case opcode.OP_MOVE:
+		b := opcode.GetArgB(inst)
+		if b < opcode.GetArgA(inst) {
 			return isEnvReg(p, setpc, b)
 		}
 	}
@@ -384,7 +384,7 @@ func isEnvReg(p *objectapi.Proto, pc int, reg int) bool {
 
 // locVarName returns the local variable name for register 'reg' at instruction 'pc',
 // or "" if not found. Mirrors: locvarname in ldebug.c.
-func locVarName(p *objectapi.Proto, pc int, reg int) string {
+func locVarName(p *object.Proto, pc int, reg int) string {
 	idx := 0
 	for i := range p.LocVars {
 		if p.LocVars[i].StartPC <= pc && pc < p.LocVars[i].EndPC {
@@ -403,12 +403,12 @@ func locVarName(p *objectapi.Proto, pc int, reg int) string {
 // VarInfo returns a formatted variable description for a register value,
 // e.g. " (constant '15')" or " (local 'x')". Returns "" if unknown.
 // Mirrors: varinfo + formatvarinfo in ldebug.c
-func VarInfo(L *stateapi.LuaState, reg int) string {
+func VarInfo(L *state.LuaState, reg int) string {
 	ci := L.CI
 	if ci == nil || !ci.IsLua() {
 		return ""
 	}
-	cl, ok := L.Stack[ci.Func].Val.Val.(*closureapi.LClosure)
+	cl, ok := L.Stack[ci.Func].Val.Val.(*closure.LClosure)
 	if !ok || cl.Proto == nil {
 		return ""
 	}

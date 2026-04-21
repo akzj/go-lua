@@ -1,12 +1,13 @@
+// auxiliary.go — Auxiliary library functions (luaL_* equivalents).
 package api
 
 import (
 	"fmt"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/object"
 
-	vmapi "github.com/akzj/go-lua/internal/vm"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -14,7 +15,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // tagError raises a type error for argument arg.
-func (L *State) tagError(arg int, tag objectapi.Type) {
+func (L *State) tagError(arg int, tag object.Type) {
 	L.TypeError(arg, L.TypeName(tag))
 }
 
@@ -22,7 +23,7 @@ func (L *State) tagError(arg int, tag objectapi.Type) {
 func (L *State) CheckString(idx int) string {
 	s, ok := L.ToString(idx)
 	if !ok {
-		L.tagError(idx, objectapi.TypeString)
+		L.tagError(idx, object.TypeString)
 	}
 	return s
 }
@@ -35,21 +36,21 @@ func (L *State) CheckString(idx int) string {
 func (L *State) CheckInteger(idx int) int64 {
 	v := L.index2val(idx)
 	switch v.Tt {
-	case objectapi.TagInteger:
+	case object.TagInteger:
 		return v.Val.(int64)
-	case objectapi.TagFloat:
+	case object.TagFloat:
 		f := v.Val.(float64)
-		if i, ok := objectapi.FloatToInteger(f); ok {
+		if i, ok := object.FloatToInteger(f); ok {
 			return i
 		}
 		L.ArgError(idx, fmt.Sprintf("number (%.10g) has no integer representation", f))
-	case objectapi.TagShortStr, objectapi.TagLongStr:
-		if i, ok := objectapi.StringToInteger(v.Val.(*objectapi.LuaString).Data); ok {
+	case object.TagShortStr, object.TagLongStr:
+		if i, ok := object.StringToInteger(v.Val.(*object.LuaString).Data); ok {
 			return i
 		}
 		L.ArgError(idx, "malformed number")
 	default:
-		L.tagError(idx, objectapi.TypeNumber)
+		L.tagError(idx, object.TypeNumber)
 	}
 	return 0 // unreachable
 }
@@ -58,13 +59,13 @@ func (L *State) CheckInteger(idx int) int64 {
 func (L *State) CheckNumber(idx int) float64 {
 	n, ok := L.ToNumber(idx)
 	if !ok {
-		L.tagError(idx, objectapi.TypeNumber)
+		L.tagError(idx, object.TypeNumber)
 	}
 	return n
 }
 
 // CheckType checks that argument at idx has the given type.
-func (L *State) CheckType(idx int, tp objectapi.Type) {
+func (L *State) CheckType(idx int, tp object.Type) {
 	if L.Type(idx) != tp {
 		L.tagError(idx, tp)
 	}
@@ -181,7 +182,7 @@ func (L *State) findField(objIdx int, level int) string {
 	// Stack: ..., table, nil(key)
 	for L.Next(-2) {
 		// Stack: ..., table, key, value
-		if L.Type(-2) == objectapi.TypeString { // ignore non-string keys
+		if L.Type(-2) == object.TypeString { // ignore non-string keys
 			if L.RawEqual(objIdx, -1) {
 				// Found! Key is at -2, value at -1
 				name, _ := L.ToString(-2)
@@ -211,7 +212,7 @@ func (L *State) TypeError(arg int, tname string) int {
 	if L.GetMetafield(arg, "__name") {
 		typearg, _ = L.ToString(-1)
 		L.Pop(1)
-	} else if L.Type(arg) == objectapi.TypeLightUserdata {
+	} else if L.Type(arg) == object.TypeLightUserdata {
 		typearg = "light userdata"
 	} else {
 		typearg = L.TypeName(L.Type(arg))
@@ -231,16 +232,16 @@ func (L *State) Where(level int) {
 	}
 	if ci.IsLua() {
 		fval := ls.Stack[ci.Func].Val
-		if fval.Tt == objectapi.TagLuaClosure {
-			cl := fval.Val.(*closureapi.LClosure)
+		if fval.Tt == object.TagLuaClosure {
+			cl := fval.Val.(*closure.LClosure)
 			pc := ci.SavedPC - 1
 			if pc < 0 {
 				pc = 0
 			}
-			line := vmapi.GetFuncLine(cl.Proto, pc)
+			line := vm.GetFuncLine(cl.Proto, pc)
 			srcName := "?"
 			if cl.Proto.Source != nil {
-				srcName = vmapi.ShortSrc(cl.Proto.Source.Data)
+				srcName = vm.ShortSrc(cl.Proto.Source.Data)
 			}
 			if line <= 0 {
 				L.PushString(fmt.Sprintf("%s:?: ", srcName))
@@ -301,7 +302,7 @@ func (L *State) Require(modname string, openf CFunction, global bool) {
 	// Get package.loaded table (or create it)
 	L.GetSubTable(RegistryIndex, "_LOADED")
 	tp := L.GetField(-1, modname)
-	if tp != objectapi.TypeNil {
+	if tp != object.TypeNil {
 		// Already loaded — remove _LOADED table, keep the module
 		L.Remove(-2)
 		return

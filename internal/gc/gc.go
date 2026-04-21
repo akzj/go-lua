@@ -13,10 +13,10 @@ package gc
 import (
 	"sync/atomic"
 
-	closureapi "github.com/akzj/go-lua/internal/closure"
-	objectapi "github.com/akzj/go-lua/internal/object"
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ import (
 
 // markObject marks an object as gray (to be traversed) if it is currently white.
 // Strings and closed upvalues are marked black immediately (no children to traverse).
-func markObject(g *stateapi.GlobalState, obj objectapi.GCObject) {
+func markObject(g *state.GlobalState, obj object.GCObject) {
 	if obj == nil {
 		return
 	}
@@ -35,27 +35,27 @@ func markObject(g *stateapi.GlobalState, obj objectapi.GCObject) {
 	}
 
 	switch v := obj.(type) {
-	case *objectapi.LuaString:
+	case *object.LuaString:
 		// Strings have no children — mark black immediately
-		h.Marked = (h.Marked &^ objectapi.WhiteBits) | objectapi.BlackBit
+		h.Marked = (h.Marked &^ object.WhiteBits) | object.BlackBit
 		_ = v
-	case *closureapi.UpVal:
+	case *closure.UpVal:
 		if v.IsOpen() {
 			// Open upvalues: the stack value is marked via traverseThread.
 			// Keep gray — value may change before atomic phase.
-			h.Marked &^= (objectapi.WhiteBits | objectapi.BlackBit) // gray
+			h.Marked &^= (object.WhiteBits | object.BlackBit) // gray
 		} else {
 			// Closed upvalues: mark the owned value, then go black.
 			markValue(g, v.Own)
-			h.Marked = (h.Marked &^ objectapi.WhiteBits) | objectapi.BlackBit
+			h.Marked = (h.Marked &^ object.WhiteBits) | object.BlackBit
 		}
-	case *objectapi.Userdata:
+	case *object.Userdata:
 		if len(v.UserVals) == 0 {
 			// No user values — mark metatable and go black
-			if mt, ok := v.MetaTable.(*tableapi.Table); ok && mt != nil {
+			if mt, ok := v.MetaTable.(*table.Table); ok && mt != nil {
 				markObject(g, mt)
 			}
-			h.Marked = (h.Marked &^ objectapi.WhiteBits) | objectapi.BlackBit
+			h.Marked = (h.Marked &^ object.WhiteBits) | object.BlackBit
 		} else {
 			// Has user values — add to gray list for traversal
 			linkGray(g, obj)
@@ -67,24 +67,24 @@ func markObject(g *stateapi.GlobalState, obj objectapi.GCObject) {
 }
 
 // linkGray adds an object to the gray list for later traversal.
-func linkGray(g *stateapi.GlobalState, obj objectapi.GCObject) {
+func linkGray(g *state.GlobalState, obj object.GCObject) {
 	h := obj.GC()
 	// Clear white bits (now gray — neither white nor black)
-	h.Marked &^= (objectapi.WhiteBits | objectapi.BlackBit)
+	h.Marked &^= (object.WhiteBits | object.BlackBit)
 	h.GCList = g.Gray
 	g.Gray = obj
 }
 
 // markValue marks the value inside a TValue if it's a collectable object.
-func markValue(g *stateapi.GlobalState, tv objectapi.TValue) {
-	if obj, ok := tv.Val.(objectapi.GCObject); ok {
+func markValue(g *state.GlobalState, tv object.TValue) {
+	if obj, ok := tv.Val.(object.GCObject); ok {
 		markObject(g, obj)
 	}
 }
 
 // markBlack marks an object as black (fully traversed).
-func markBlack(h *objectapi.GCHeader) {
-	h.Marked = (h.Marked &^ objectapi.WhiteBits) | objectapi.BlackBit
+func markBlack(h *object.GCHeader) {
+	h.Marked = (h.Marked &^ object.WhiteBits) | object.BlackBit
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ func markBlack(h *objectapi.GCHeader) {
 // ---------------------------------------------------------------------------
 
 // propagateAll drains the gray list, traversing each gray object.
-func propagateAll(g *stateapi.GlobalState) {
+func propagateAll(g *state.GlobalState) {
 	for g.Gray != nil {
 		propagateMark(g)
 	}
@@ -100,7 +100,7 @@ func propagateAll(g *stateapi.GlobalState) {
 
 // propagateMark takes one object from the gray list, marks it black,
 // and traverses its children.
-func propagateMark(g *stateapi.GlobalState) {
+func propagateMark(g *state.GlobalState) {
 	obj := g.Gray
 	h := obj.GC()
 	// Remove from gray list
@@ -108,23 +108,23 @@ func propagateMark(g *stateapi.GlobalState) {
 	h.GCList = nil
 
 	switch v := obj.(type) {
-	case *tableapi.Table:
+	case *table.Table:
 		// Tables may NOT be marked black — weak tables link to special lists.
 		// traverseTable handles marking black for strong tables.
 		traverseTable(g, v)
-	case *objectapi.Userdata:
+	case *object.Userdata:
 		markBlack(h)
 		traverseUserdata(g, v)
-	case *closureapi.LClosure:
+	case *closure.LClosure:
 		markBlack(h)
 		traverseLClosure(g, v)
-	case *closureapi.CClosure:
+	case *closure.CClosure:
 		markBlack(h)
 		traverseCClosure(g, v)
-	case *objectapi.Proto:
+	case *object.Proto:
 		markBlack(h)
 		traverseProto(g, v)
-	case *stateapi.LuaState:
+	case *state.LuaState:
 		markBlack(h)
 		traverseThread(g, v)
 	default:
@@ -134,36 +134,36 @@ func propagateMark(g *stateapi.GlobalState) {
 
 // getWeakMode returns the weak mode of a table (0=strong, 1=weak values,
 // 2=weak keys, 3=both). Mirrors C Lua's getmode().
-func getWeakMode(t *tableapi.Table) byte {
+func getWeakMode(t *table.Table) byte {
 	return t.WeakMode
 }
 
 // isCleared checks if a GCObject value is "cleared" (dead — has the old white).
 // Used to determine if weak table entries should be removed.
 // Only objects with the "other" white (dead white) are considered cleared.
-func isCleared(g *stateapi.GlobalState, obj objectapi.GCObject) bool {
+func isCleared(g *state.GlobalState, obj object.GCObject) bool {
 	if obj == nil {
 		return false // nil is never "cleared"
 	}
 	// Strings are never collected by weak table logic (they're values)
-	if _, ok := obj.(*objectapi.LuaString); ok {
+	if _, ok := obj.(*object.LuaString); ok {
 		return false
 	}
 	h := obj.GC()
-	otherwhite := g.CurrentWhite ^ objectapi.WhiteBits
-	return h.Marked&objectapi.WhiteBits == otherwhite && h.Marked&objectapi.BlackBit == 0
+	otherwhite := g.CurrentWhite ^ object.WhiteBits
+	return h.Marked&object.WhiteBits == otherwhite && h.Marked&object.BlackBit == 0
 }
 
 // linkGCList links a table into a GC list (weak, ephemeron, allweak, grayagain)
 // using the GCList field of its GCHeader.
-func linkGCList(t *tableapi.Table, list *objectapi.GCObject) {
+func linkGCList(t *table.Table, list *object.GCObject) {
 	t.GCHeader.GCList = *list
 	*list = t
 }
 
 // traverseTable marks references in a table, handling weak modes.
 // Mirrors C Lua's traversetable → traversestrongtable/traverseweakvalue/traverseephemeron.
-func traverseTable(g *stateapi.GlobalState, t *tableapi.Table) {
+func traverseTable(g *state.GlobalState, t *table.Table) {
 	h := &t.GCHeader
 	// Always mark metatable
 	if t.Metatable != nil {
@@ -175,16 +175,16 @@ func traverseTable(g *stateapi.GlobalState, t *tableapi.Table) {
 	case 0: // not weak — strong table
 		traverseStrongTable(g, t)
 		markBlack(h)
-	case tableapi.WeakValue: // weak values only
+	case table.WeakValue: // weak values only
 		traverseWeakValue(g, t)
 		// Do NOT mark black — stays in weak/grayagain list
-	case tableapi.WeakKey: // weak keys only (ephemeron)
+	case table.WeakKey: // weak keys only (ephemeron)
 		traverseEphemeron(g, t, false)
 		// Do NOT mark black — stays in ephemeron/allweak list
 	default: // both weak keys and weak values (mode == 3)
 		// Don't mark any entries. Link to grayagain (propagate phase)
 		// or allweak (atomic phase) for later clearing.
-		if g.GCState == objectapi.GCSpropagate {
+		if g.GCState == object.GCSpropagate {
 			linkGCList(t, &g.GrayAgain) // revisit in atomic phase
 		} else {
 			linkGCList(t, &g.AllWeak) // clear in atomic phase
@@ -194,7 +194,7 @@ func traverseTable(g *stateapi.GlobalState, t *tableapi.Table) {
 }
 
 // traverseStrongTable marks all keys and values in a strong table.
-func traverseStrongTable(g *stateapi.GlobalState, t *tableapi.Table) {
+func traverseStrongTable(g *state.GlobalState, t *table.Table) {
 	// Mark array part
 	for i := range t.Array {
 		markValue(g, t.Array[i])
@@ -203,9 +203,9 @@ func traverseStrongTable(g *stateapi.GlobalState, t *tableapi.Table) {
 	nodes := t.Nodes
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Val.Tt != objectapi.TagEmpty && n.Val.Tt != objectapi.TagNil {
+		if n.Val.Tt != object.TagEmpty && n.Val.Tt != object.TagNil {
 			markValue(g, n.Val)
-			if obj, ok := n.KeyVal.(objectapi.GCObject); ok {
+			if obj, ok := n.KeyVal.(object.GCObject); ok {
 				markObject(g, obj)
 			}
 		}
@@ -214,29 +214,29 @@ func traverseStrongTable(g *stateapi.GlobalState, t *tableapi.Table) {
 
 // traverseWeakValue marks keys but NOT values of a weak-value table.
 // Links the table to g.Weak (atomic phase) or g.GrayAgain (propagate phase).
-func traverseWeakValue(g *stateapi.GlobalState, t *tableapi.Table) {
+func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 	hasClears := len(t.Array) > 0 // array part may have white values
 	// Mark keys in hash part (keys are strong in weak-value tables)
 	nodes := t.Nodes
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
+		if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 			continue // empty slot
 		}
 		// Mark key (strong)
-		if obj, ok := n.KeyVal.(objectapi.GCObject); ok {
+		if obj, ok := n.KeyVal.(object.GCObject); ok {
 			markObject(g, obj)
 		}
 		// Check if value is white (don't mark it — it's weak)
 		if !hasClears {
-			if vObj, ok := n.Val.Val.(objectapi.GCObject); ok {
+			if vObj, ok := n.Val.Val.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					hasClears = true
 				}
 			}
 		}
 	}
-	if g.GCState == objectapi.GCSpropagate {
+	if g.GCState == object.GCSpropagate {
 		linkGCList(t, &g.GrayAgain) // must retraverse in atomic phase
 	} else if hasClears {
 		linkGCList(t, &g.Weak) // has dead values to clear
@@ -248,14 +248,14 @@ func traverseWeakValue(g *stateapi.GlobalState, t *tableapi.Table) {
 // traverseEphemeron traverses a weak-key (ephemeron) table.
 // If a key is marked, its value is marked. If a key is white, the value is NOT marked.
 // Returns true if any new value was marked during this traversal.
-func traverseEphemeron(g *stateapi.GlobalState, t *tableapi.Table, inv bool) bool {
+func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 	hasClears := false // has white keys
 	hasWW := false     // has white-key → white-value entries
 	marked := false    // marked some new value
 
 	// Traverse array part (always mark — array indices are integers, always alive)
 	for i := range t.Array {
-		if vObj, ok := t.Array[i].Val.(objectapi.GCObject); ok {
+		if vObj, ok := t.Array[i].Val.(object.GCObject); ok {
 			if isCleared(g, vObj) {
 				// Array values in ephemeron tables: mark them (keys are integers = strong)
 				markObject(g, vObj)
@@ -273,23 +273,23 @@ func traverseEphemeron(g *stateapi.GlobalState, t *tableapi.Table, inv bool) boo
 			i = nsize - 1 - idx
 		}
 		n := &nodes[i]
-		if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
+		if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 			continue // empty slot
 		}
 		// Check if key is marked
-		keyObj, keyIsGC := n.KeyVal.(objectapi.GCObject)
+		keyObj, keyIsGC := n.KeyVal.(object.GCObject)
 		keyIsWhite := keyIsGC && isCleared(g, keyObj)
 		if keyIsWhite {
 			hasClears = true
 			// Key is white — check if value is also white
-			if vObj, ok := n.Val.Val.(objectapi.GCObject); ok {
+			if vObj, ok := n.Val.Val.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					hasWW = true // white→white entry
 				}
 			}
 		} else {
 			// Key is marked (or not a GC object) — mark value
-			if vObj, ok := n.Val.Val.(objectapi.GCObject); ok {
+			if vObj, ok := n.Val.Val.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					markObject(g, vObj)
 					marked = true
@@ -299,7 +299,7 @@ func traverseEphemeron(g *stateapi.GlobalState, t *tableapi.Table, inv bool) boo
 	}
 
 	// Link table into proper list
-	if g.GCState == objectapi.GCSpropagate {
+	if g.GCState == object.GCSpropagate {
 		linkGCList(t, &g.GrayAgain) // must retraverse in atomic phase
 	} else if hasWW {
 		linkGCList(t, &g.Ephemeron) // has white→white, need convergence
@@ -312,8 +312,8 @@ func traverseEphemeron(g *stateapi.GlobalState, t *tableapi.Table, inv bool) boo
 }
 
 // traverseUserdata marks metatable and user values.
-func traverseUserdata(g *stateapi.GlobalState, u *objectapi.Userdata) {
-	if mt, ok := u.MetaTable.(*tableapi.Table); ok && mt != nil {
+func traverseUserdata(g *state.GlobalState, u *object.Userdata) {
+	if mt, ok := u.MetaTable.(*table.Table); ok && mt != nil {
 		markObject(g, mt)
 	}
 	for i := range u.UserVals {
@@ -322,7 +322,7 @@ func traverseUserdata(g *stateapi.GlobalState, u *objectapi.Userdata) {
 }
 
 // traverseLClosure marks the proto and all upvalues.
-func traverseLClosure(g *stateapi.GlobalState, cl *closureapi.LClosure) {
+func traverseLClosure(g *state.GlobalState, cl *closure.LClosure) {
 	if cl.Proto != nil {
 		markObject(g, cl.Proto)
 	}
@@ -334,7 +334,7 @@ func traverseLClosure(g *stateapi.GlobalState, cl *closureapi.LClosure) {
 }
 
 // traverseCClosure marks all upvalues (stored as TValues).
-func traverseCClosure(g *stateapi.GlobalState, cl *closureapi.CClosure) {
+func traverseCClosure(g *state.GlobalState, cl *closure.CClosure) {
 	for i := range cl.UpVals {
 		markValue(g, cl.UpVals[i])
 	}
@@ -342,7 +342,7 @@ func traverseCClosure(g *stateapi.GlobalState, cl *closureapi.CClosure) {
 
 // traverseProto marks source string, constants, nested protos,
 // upvalue names, and local variable names.
-func traverseProto(g *stateapi.GlobalState, p *objectapi.Proto) {
+func traverseProto(g *state.GlobalState, p *object.Proto) {
 	if p.Source != nil {
 		markObject(g, p.Source)
 	}
@@ -371,7 +371,7 @@ func traverseProto(g *stateapi.GlobalState, p *objectapi.Proto) {
 // This is conservative enough for periodic GC (live registers are within
 // active frames) while not marking the entire allocated stack (which would
 // prevent weak tables from collecting dead locals above all active frames).
-func traverseThread(g *stateapi.GlobalState, th *stateapi.LuaState) {
+func traverseThread(g *state.GlobalState, th *state.LuaState) {
 	var top int
 	if g.GCExplicit {
 		// Explicit GC (collectgarbage()): precise — only up to th.Top.
@@ -398,7 +398,7 @@ func traverseThread(g *stateapi.GlobalState, th *stateapi.LuaState) {
 
 	// Mark open upvalues
 	if th.OpenUpval != nil {
-		if uv, ok := th.OpenUpval.(*closureapi.UpVal); ok {
+		if uv, ok := th.OpenUpval.(*closure.UpVal); ok {
 			for uv != nil {
 				markObject(g, uv)
 				uv = uv.Next
@@ -412,7 +412,7 @@ func traverseThread(g *stateapi.GlobalState, th *stateapi.LuaState) {
 // ---------------------------------------------------------------------------
 
 // markRoots marks all GC root objects.
-func markRoots(g *stateapi.GlobalState) {
+func markRoots(g *state.GlobalState) {
 	// Clear gray lists
 	g.Gray = nil
 	g.GrayAgain = nil
@@ -430,7 +430,7 @@ func markRoots(g *stateapi.GlobalState) {
 
 	// Mark global metatables
 	for i := 0; i < len(g.MT); i++ {
-		if t, ok := g.MT[i].(*tableapi.Table); ok && t != nil {
+		if t, ok := g.MT[i].(*table.Table); ok && t != nil {
 			markObject(g, t)
 		}
 	}
@@ -463,7 +463,7 @@ func markRoots(g *stateapi.GlobalState) {
 //
 // In Go, "freeing" means unlinking from the chain. Go's tracing GC
 // will collect the memory once no more Go references exist.
-func sweepList(g *stateapi.GlobalState, p *objectapi.GCObject) int {
+func sweepList(g *state.GlobalState, p *object.GCObject) int {
 	otherwhite := otherWhite(g)
 	currentWhite := g.CurrentWhite
 	freed := 0
@@ -478,13 +478,13 @@ func sweepList(g *stateapi.GlobalState, p *objectapi.GCObject) int {
 			*p = h.Next
 			h.Next = nil // help Go GC
 			// Decrement byte counter for known object types
-			if t, ok := obj.(*tableapi.Table); ok {
+			if t, ok := obj.(*table.Table); ok {
 				atomic.AddInt64(&g.GCTotalBytes, -t.EstimateBytes())
 			}
 			freed++
 		} else {
 			// Alive — reset to current white for next cycle
-			h.Marked = (marked &^ (objectapi.WhiteBits | objectapi.BlackBit)) | currentWhite
+			h.Marked = (marked &^ (object.WhiteBits | object.BlackBit)) | currentWhite
 			p = &h.Next
 		}
 	}
@@ -492,15 +492,15 @@ func sweepList(g *stateapi.GlobalState, p *objectapi.GCObject) int {
 }
 
 // otherWhite returns the "other" white bit (the one NOT current).
-func otherWhite(g *stateapi.GlobalState) byte {
-	return g.CurrentWhite ^ objectapi.WhiteBits
+func otherWhite(g *state.GlobalState) byte {
+	return g.CurrentWhite ^ object.WhiteBits
 }
 
 // isDeadMark checks if a mark byte indicates a dead object.
 func isDeadMark(otherwhite byte, marked byte) bool {
 	// An object is dead if it has the "other" white color
 	// (i.e., it was white at the start of the cycle and never marked)
-	return marked&objectapi.WhiteBits == otherwhite && marked&objectapi.BlackBit == 0
+	return marked&object.WhiteBits == otherwhite && marked&object.BlackBit == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +509,7 @@ func isDeadMark(otherwhite byte, marked byte) bool {
 
 // separateTobeFnz moves dead objects from finobj to tobefnz.
 // These objects have __gc metamethods and need finalization.
-func separateTobeFnz(g *stateapi.GlobalState) {
+func separateTobeFnz(g *state.GlobalState) {
 	otherwhite := otherWhite(g)
 	p := &g.FinObj
 	for *p != nil {
@@ -532,10 +532,10 @@ func separateTobeFnz(g *stateapi.GlobalState) {
 //
 // The hasFinalizer parameter indicates whether the object has __gc;
 // the caller (API layer) is responsible for checking the metatable.
-func CheckFinalizer(g *stateapi.GlobalState, obj objectapi.GCObject) {
+func CheckFinalizer(g *state.GlobalState, obj object.GCObject) {
 	h := obj.GC()
 	// Already marked as having a finalizer? Skip.
-	if h.Marked&objectapi.FinalizedBit != 0 {
+	if h.Marked&object.FinalizedBit != 0 {
 		return
 	}
 	// Remove from allgc list
@@ -554,7 +554,7 @@ func CheckFinalizer(g *stateapi.GlobalState, obj objectapi.GCObject) {
 	// This is critical: separateTobeFnz identifies dead objects by checking
 	// for the "other" white. Without current white, the object can't be
 	// detected as dead in the next cycle.
-	h.Marked = g.CurrentWhite | objectapi.FinalizedBit
+	h.Marked = g.CurrentWhite | object.FinalizedBit
 }
 
 // Udata2Finalize removes the first object from the tobefnz list and
@@ -562,7 +562,7 @@ func CheckFinalizer(g *stateapi.GlobalState, obj objectapi.GCObject) {
 // "normal" again (can be re-finalized if it gets a new __gc).
 // Returns nil if tobefnz is empty.
 // Mirrors C Lua's udata2finalize.
-func Udata2Finalize(g *stateapi.GlobalState) objectapi.GCObject {
+func Udata2Finalize(g *state.GlobalState) object.GCObject {
 	o := g.TobeFnz
 	if o == nil {
 		return nil
@@ -574,9 +574,9 @@ func Udata2Finalize(g *stateapi.GlobalState) objectapi.GCObject {
 	h.Next = g.Allgc
 	g.Allgc = o
 	// Clear finalized bit — object is "normal" again
-	h.Marked &^= objectapi.FinalizedBit
+	h.Marked &^= object.FinalizedBit
 	// Make it white (current white) so it survives this cycle
-	h.Marked = (h.Marked &^ (objectapi.WhiteBits | objectapi.BlackBit)) | g.CurrentWhite
+	h.Marked = (h.Marked &^ (object.WhiteBits | object.BlackBit)) | g.CurrentWhite
 	return o
 }
 
@@ -595,53 +595,53 @@ func Udata2Finalize(g *stateapi.GlobalState) objectapi.GCObject {
 // with WeakKey mode and clears their dead key entries. This is needed because
 // convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
 // so clearByKeys(g, g.Ephemeron) would operate on an empty list.
-func clearDeadKeysAllEphemerons(g *stateapi.GlobalState) {
+func clearDeadKeysAllEphemerons(g *state.GlobalState) {
 	clearDeadKeysInList(g, g.Allgc)
 	clearDeadKeysInList(g, g.FinObj)
 }
 
 // clearDeadKeysInList walks a GC object list and clears dead keys from any
 // table with WeakKey mode set.
-func clearDeadKeysInList(g *stateapi.GlobalState, list objectapi.GCObject) {
+func clearDeadKeysInList(g *state.GlobalState, list object.GCObject) {
 	for obj := list; obj != nil; obj = obj.GC().Next {
-		t, ok := obj.(*tableapi.Table)
-		if !ok || t.WeakMode&tableapi.WeakKey == 0 {
+		t, ok := obj.(*table.Table)
+		if !ok || t.WeakMode&table.WeakKey == 0 {
 			continue
 		}
 		nodes := t.Nodes
 		for i := range nodes {
 			n := &nodes[i]
-			if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
+			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if keyObj, ok := n.KeyVal.(objectapi.GCObject); ok {
+			if keyObj, ok := n.KeyVal.(object.GCObject); ok {
 				if isCleared(g, keyObj) {
-					n.KeyTT = objectapi.TagDeadKey
-					n.Val = objectapi.Nil
+					n.KeyTT = object.TagDeadKey
+					n.Val = object.Nil
 				}
 			}
 		}
 	}
 }
 
-func clearByKeys(g *stateapi.GlobalState, l objectapi.GCObject) {
+func clearByKeys(g *state.GlobalState, l object.GCObject) {
 	for l != nil {
-		t := l.(*tableapi.Table)
+		t := l.(*table.Table)
 		l = t.GCHeader.GCList // next in list
 
 		nodes := t.Nodes
 		for i := range nodes {
 			n := &nodes[i]
-			if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
+			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
 			// Check if key is a dead GC object
-			if keyObj, ok := n.KeyVal.(objectapi.GCObject); ok {
+			if keyObj, ok := n.KeyVal.(object.GCObject); ok {
 				if isCleared(g, keyObj) {
 					// Dead key — mark as dead and clear value
 					// Mirrors C Lua's setdeadkey(n)
-					n.KeyTT = objectapi.TagDeadKey
-					n.Val = objectapi.Nil
+					n.KeyTT = object.TagDeadKey
+					n.Val = object.Nil
 				}
 			}
 		}
@@ -651,16 +651,16 @@ func clearByKeys(g *stateapi.GlobalState, l objectapi.GCObject) {
 // clearByValues clears entries with unmarked values from weak-value tables.
 // Walks the GC list from l up to (but not including) f.
 // Mirrors C Lua's clearbyvalues.
-func clearByValues(g *stateapi.GlobalState, l objectapi.GCObject, f objectapi.GCObject) {
+func clearByValues(g *state.GlobalState, l object.GCObject, f object.GCObject) {
 	for l != nil && l != f {
-		t := l.(*tableapi.Table)
+		t := l.(*table.Table)
 		l = t.GCHeader.GCList // next in list
 
 		// Clear array part
 		for i := range t.Array {
-			if vObj, ok := t.Array[i].Val.(objectapi.GCObject); ok {
+			if vObj, ok := t.Array[i].Val.(object.GCObject); ok {
 				if isCleared(g, vObj) {
-					t.Array[i] = objectapi.Nil
+					t.Array[i] = object.Nil
 				}
 			}
 		}
@@ -668,15 +668,15 @@ func clearByValues(g *stateapi.GlobalState, l objectapi.GCObject, f objectapi.GC
 		nodes := t.Nodes
 		for i := range nodes {
 			n := &nodes[i]
-			if n.Val.Tt == objectapi.TagEmpty || n.Val.Tt == objectapi.TagNil {
+			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if vObj, ok := n.Val.Val.(objectapi.GCObject); ok {
+			if vObj, ok := n.Val.Val.(object.GCObject); ok {
 				if isCleared(g, vObj) {
 					// Dead value — mark key as dead and clear value.
 					// Must NOT nil KeyVal — hash chain probing depends on it.
-					n.KeyTT = objectapi.TagDeadKey
-					n.Val = objectapi.Nil
+					n.KeyTT = object.TagDeadKey
+					n.Val = object.Nil
 				}
 			}
 		}
@@ -688,14 +688,14 @@ func clearByValues(g *stateapi.GlobalState, l objectapi.GCObject, f objectapi.GC
 // This process may need multiple passes because marking a value may mark
 // keys in other ephemeron tables.
 // Mirrors C Lua's convergeephemerons.
-func convergeEphemerons(g *stateapi.GlobalState) {
+func convergeEphemerons(g *state.GlobalState) {
 	dir := false
 	for {
 		next := g.Ephemeron
 		g.Ephemeron = nil
 		changed := false
 		for next != nil {
-			t := next.(*tableapi.Table)
+			t := next.(*table.Table)
 			next = t.GCHeader.GCList
 			// Mark black temporarily (out of list)
 			markBlack(&t.GCHeader)
@@ -715,7 +715,7 @@ func convergeEphemerons(g *stateapi.GlobalState) {
 // These objects are about to be finalized — they and their references
 // must survive this GC cycle (resurrection).
 // Mirrors C Lua's markbeingfnz.
-func markBeingFnz(g *stateapi.GlobalState) {
+func markBeingFnz(g *state.GlobalState) {
 	for obj := g.TobeFnz; obj != nil; obj = obj.GC().Next {
 		markObject(g, obj)
 	}
@@ -735,23 +735,23 @@ func markBeingFnz(g *stateapi.GlobalState) {
 //  4. Sweep — remove dead objects from allgc chain
 //  5. Finalize — move dead finobj to tobefnz
 //  6. Reset
-func FullGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
+func FullGC(g *state.GlobalState, L *state.LuaState) {
 	// Flip current white BEFORE marking. This is critical for correctness
 	// when FullGC runs during VM execution (periodic GC):
 	// - Existing objects have the OLD white → must be marked to survive
 	// - New objects created during the cycle get the NEW white → survive sweep
 	// - Sweep kills objects with OLD white that weren't marked
-	g.CurrentWhite ^= objectapi.WhiteBits
+	g.CurrentWhite ^= object.WhiteBits
 
 	// Phase 1: Mark roots
-	g.GCState = objectapi.GCSpropagate
+	g.GCState = object.GCSpropagate
 	markRoots(g)
 
 	// Phase 2: Propagate — drain gray list
 	propagateAll(g)
 
 	// Phase 3: Atomic — mirrors C Lua's atomic()
-	g.GCState = objectapi.GCSatomic
+	g.GCState = object.GCSatomic
 	if L != nil {
 		markObject(g, L) // mark running thread (may differ from main)
 	}
@@ -793,15 +793,15 @@ func FullGC(g *stateapi.GlobalState, L *stateapi.LuaState) {
 	clearByValues(g, g.AllWeak, origAll)
 
 	// Phase 4: Sweep — dead objects have the old white (now "otherwhite")
-	g.GCState = objectapi.GCSswpallgc
+	g.GCState = object.GCSswpallgc
 	sweepList(g, &g.Allgc)
 
 	// Phase 5: Sweep finalizable objects
-	g.GCState = objectapi.GCSswpfinobj
+	g.GCState = object.GCSswpfinobj
 	sweepList(g, &g.FinObj)
 
 	// Phase 6: Reset
-	g.GCState = objectapi.GCSpause
+	g.GCState = object.GCSpause
 	// Clear weak table lists for next cycle
 	g.Weak = nil
 	g.AllWeak = nil

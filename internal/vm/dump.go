@@ -4,13 +4,13 @@ import (
 	"encoding/binary"
 	"math"
 
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // DumpProto serializes a Proto to Lua 5.5 binary chunk format.
 // If strip is true, debug information is omitted.
 // Mirrors: luaU_dump in ldump.c
-func DumpProto(p *objectapi.Proto, strip bool) []byte {
+func DumpProto(p *object.Proto, strip bool) []byte {
 	d := &dumpState{
 		strip: strip,
 		strs:  make(map[string]uint64),
@@ -87,7 +87,7 @@ func (d *dumpState) dumpNumber(x float64) {
 // NULL → size=0, index=0
 // Previously saved → size=0, index=saved_index
 // New string → size=len+1, content including trailing \0
-func (d *dumpState) dumpString(s *objectapi.LuaString) {
+func (d *dumpState) dumpString(s *object.LuaString) {
 	if s == nil {
 		d.dumpVarint(0) // size = 0
 		d.dumpVarint(0) // index = 0 (NULL)
@@ -108,7 +108,7 @@ func (d *dumpState) dumpString(s *objectapi.LuaString) {
 	d.strs[data] = d.nstr
 }
 
-func (d *dumpState) dumpCode(p *objectapi.Proto) {
+func (d *dumpState) dumpCode(p *object.Proto) {
 	d.dumpInt(len(p.Code))
 	d.dumpAlign(4) // align to sizeof(Instruction)
 	for _, inst := range p.Code {
@@ -118,24 +118,24 @@ func (d *dumpState) dumpCode(p *objectapi.Proto) {
 	}
 }
 
-func (d *dumpState) dumpConstants(p *objectapi.Proto) {
+func (d *dumpState) dumpConstants(p *object.Proto) {
 	d.dumpInt(len(p.Constants))
 	for _, k := range p.Constants {
 		tt := byte(k.Tt)
 		d.dumpByte(tt)
 		switch k.Tt {
-		case objectapi.TagFloat:
+		case object.TagFloat:
 			d.dumpNumber(k.Float())
-		case objectapi.TagInteger:
+		case object.TagInteger:
 			d.dumpInteger(k.Integer())
-		case objectapi.TagShortStr, objectapi.TagLongStr:
+		case object.TagShortStr, object.TagLongStr:
 			d.dumpString(k.StringVal())
 		// TagNil, TagFalse, TagTrue: no payload
 		}
 	}
 }
 
-func (d *dumpState) dumpUpvalues(p *objectapi.Proto) {
+func (d *dumpState) dumpUpvalues(p *object.Proto) {
 	d.dumpInt(len(p.Upvalues))
 	for _, uv := range p.Upvalues {
 		if uv.InStack {
@@ -148,14 +148,14 @@ func (d *dumpState) dumpUpvalues(p *objectapi.Proto) {
 	}
 }
 
-func (d *dumpState) dumpProtos(p *objectapi.Proto) {
+func (d *dumpState) dumpProtos(p *object.Proto) {
 	d.dumpInt(len(p.Protos))
 	for _, child := range p.Protos {
 		d.dumpFunction(child)
 	}
 }
 
-func (d *dumpState) dumpDebug(p *objectapi.Proto) {
+func (d *dumpState) dumpDebug(p *object.Proto) {
 	// lineinfo
 	n := 0
 	if !d.strip {
@@ -208,7 +208,7 @@ func (d *dumpState) dumpDebug(p *objectapi.Proto) {
 	}
 }
 
-func (d *dumpState) dumpFunction(p *objectapi.Proto) {
+func (d *dumpState) dumpFunction(p *object.Proto) {
 	d.dumpInt(p.LineDefined)
 	d.dumpInt(p.LastLine)
 	d.dumpByte(p.NumParams)

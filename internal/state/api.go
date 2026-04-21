@@ -8,7 +8,7 @@
 package state
 
 import (
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // ---------------------------------------------------------------------------
@@ -146,10 +146,10 @@ func (ci *CallInfo) SetRecst(status int) {
 // Each coroutine has its own LuaState with its own stack.
 // ---------------------------------------------------------------------------
 type LuaState struct {
-	objectapi.GCHeader                // GC metadata
+	object.GCHeader                // GC metadata
 	// C3 FIX: Stack uses []StackValue (not []TValue) for TBC support.
 	// Each slot has a TBCDelta field for the to-be-closed linked list.
-	Stack   []objectapi.StackValue // the value stack
+	Stack   []object.StackValue // the value stack
 	Top     int                    // index of first free slot
 	CI      *CallInfo              // current call info
 	BaseCI  CallInfo               // embedded base CallInfo (C host level)
@@ -175,7 +175,7 @@ type LuaState struct {
 	NTransfer     int  // hook value transfer: number of values
 }
 // GC returns the GC header for this thread.
-func (L *LuaState) GC() *objectapi.GCHeader { return &L.GCHeader }
+func (L *LuaState) GC() *object.GCHeader { return &L.GCHeader }
 
 
 // Yieldable returns true if the current coroutine can yield.
@@ -197,16 +197,16 @@ func (L *LuaState) StackLast() int {
 // GlobalState is shared across all threads in a Lua instance.
 // ---------------------------------------------------------------------------
 type GlobalState struct {
-	Registry objectapi.TValue // the registry table
+	Registry object.TValue // the registry table
 	Seed     uint32           // randomized hash seed
 
 	// I1 FIX: Concrete types where no circular dependency exists
-	TMNames [25]*objectapi.LuaString // metamethod name strings
+	TMNames [25]*object.LuaString // metamethod name strings
 	MT      [9]any                   // metatables for basic types (9 = NumTypes, any to avoid Table import cycle)
 
 	MainThread *LuaState           // the main thread
 	Panic      CFunction           // unprotected error handler
-	MemErrMsg  *objectapi.LuaString // pre-allocated "not enough memory" string
+	MemErrMsg  *object.LuaString // pre-allocated "not enough memory" string
 
 	// String interning table (typed in luastring module)
 	StringTable any
@@ -263,21 +263,21 @@ type GlobalState struct {
 	// =================================================================
 
 	// Object chains
-	Allgc    objectapi.GCObject // head of all collectable objects
-	FinObj   objectapi.GCObject // objects with __gc (separated at setmetatable time)
-	TobeFnz  objectapi.GCObject // objects whose __gc should run this cycle
-	FixedGC  objectapi.GCObject // permanent objects (never collected)
+	Allgc    object.GCObject // head of all collectable objects
+	FinObj   object.GCObject // objects with __gc (separated at setmetatable time)
+	TobeFnz  object.GCObject // objects whose __gc should run this cycle
+	FixedGC  object.GCObject // permanent objects (never collected)
 
 	// GC phase
 	GCState      byte // current phase (GCSpause, GCSpropagate, etc.)
 	CurrentWhite byte // current white bit (flips each cycle)
 
 	// Gray lists (for mark propagation)
-	Gray      objectapi.GCObject // objects to be traversed
-	GrayAgain objectapi.GCObject // barrier-back objects (re-traverse)
-	Weak      objectapi.GCObject // weak tables to clear after mark
-	AllWeak   objectapi.GCObject // all-weak (kv) tables
-	Ephemeron objectapi.GCObject // ephemeron tables
+	Gray      object.GCObject // objects to be traversed
+	GrayAgain object.GCObject // barrier-back objects (re-traverse)
+	Weak      object.GCObject // weak tables to clear after mark
+	AllWeak   object.GCObject // all-weak (kv) tables
+	Ephemeron object.GCObject // ephemeron tables
 
 }
 
@@ -288,7 +288,7 @@ type GlobalState struct {
 // ---------------------------------------------------------------------------
 type LuaError struct {
 	Status  int              // error code (StatusErrRun, etc.)
-	Message objectapi.TValue // error object (usually a string)
+	Message object.TValue // error object (usually a string)
 }
 
 func (e LuaError) Error() string {

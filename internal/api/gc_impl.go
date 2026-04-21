@@ -1,14 +1,15 @@
+// gc_impl.go — GC integration (gcMarkSweep, GCCollect, clearStaleStack, finalizers).
 package api
 
 import (
 	"sync/atomic"
 
-	gcapi "github.com/akzj/go-lua/internal/gc"
-	metamethodapi "github.com/akzj/go-lua/internal/metamethod"
-	objectapi "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/gc"
+	"github.com/akzj/go-lua/internal/metamethod"
+	"github.com/akzj/go-lua/internal/object"
 
-	stateapi "github.com/akzj/go-lua/internal/state"
-	tableapi "github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/state"
+	"github.com/akzj/go-lua/internal/table"
 )
 
 // ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ func (L *State) gcMarkSweep() {
 	defer func() { g.GCRunning = false }()
 	// Clear stale stack slots so traverseThread doesn't mark dead references
 	clearStaleStack(ls)
-	gcapi.FullGC(g, ls)
+	gc.FullGC(g, ls)
 }
 
 // GCCollect runs a full Lua mark-and-sweep GC cycle, then calls all
@@ -103,7 +104,7 @@ func (L *State) GCCollect() {
 // This ensures the Lua GC doesn't mark stale references left behind when
 // Lua locals go out of scope.
 // We find the maximum of all CI.Top values and ls.Top, then nil everything above.
-func clearStaleStack(ls *stateapi.LuaState) {
+func clearStaleStack(ls *state.LuaState) {
 	if len(ls.Stack) == 0 {
 		return
 	}
@@ -116,7 +117,7 @@ func clearStaleStack(ls *stateapi.LuaState) {
 	}
 	// Clear everything above the highest active frame boundary
 	for i := maxTop; i < len(ls.Stack); i++ {
-		ls.Stack[i].Val = objectapi.Nil
+		ls.Stack[i].Val = object.Nil
 	}
 }
 
@@ -139,33 +140,33 @@ func (L *State) callAllPendingFinalizers() {
 // callOneGCTM removes one object from tobefnz, links it back to allgc
 // (resurrection), and calls its __gc metamethod via PCall.
 // Mirrors C Lua's GCTM.
-func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
+func (L *State) callOneGCTM(ls *state.LuaState, g *state.GlobalState) {
 	// Pop object from tobefnz and link back to allgc
-	obj := gcapi.Udata2Finalize(g)
+	obj := gc.Udata2Finalize(g)
 	if obj == nil {
 		return
 	}
 
 	// Find the __gc metamethod
-	var mt *tableapi.Table
-	var objVal objectapi.TValue
+	var mt *table.Table
+	var objVal object.TValue
 	switch v := obj.(type) {
-	case *tableapi.Table:
+	case *table.Table:
 		mt = v.GetMetatable()
-		objVal = objectapi.TValue{Val: v, Tt: objectapi.TagTable}
-	case *objectapi.Userdata:
+		objVal = object.TValue{Val: v, Tt: object.TagTable}
+	case *object.Userdata:
 		if v.MetaTable != nil {
-			mt, _ = v.MetaTable.(*tableapi.Table)
+			mt, _ = v.MetaTable.(*table.Table)
 		}
-		objVal = objectapi.TValue{Val: v, Tt: objectapi.TagUserdata}
+		objVal = object.TValue{Val: v, Tt: object.TagUserdata}
 	default:
 		return
 	}
 	if mt == nil {
 		return
 	}
-	tmName := g.TMNames[metamethodapi.TM_GC]
-	gcTM := metamethodapi.GetTM(mt, metamethodapi.TM_GC, tmName)
+	tmName := g.TMNames[metamethod.TM_GC]
+	gcTM := metamethod.GetTM(mt, metamethod.TM_GC, tmName)
 	if gcTM.IsNil() {
 		return
 	}
@@ -182,7 +183,7 @@ func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
 	// push(gcTM) writes to Stack[savedTop], push(objVal) to Stack[savedTop+1].
 	// PCall may use additional slots for error handling.
 	const saveSlots = 4 // function + arg + potential error + margin
-	var savedVals [saveSlots]objectapi.TValue
+	var savedVals [saveSlots]object.TValue
 	for i := 0; i < saveSlots && savedTop+i < len(ls.Stack); i++ {
 		savedVals[i] = ls.Stack[savedTop+i].Val
 	}
@@ -195,12 +196,12 @@ func (L *State) callOneGCTM(ls *stateapi.LuaState, g *stateapi.GlobalState) {
 	L.push(objVal)
 
 	// Mark CI as running a finalizer for debug.getinfo
-	ls.CI.CallStatus |= stateapi.CISTFin
+	ls.CI.CallStatus |= state.CISTFin
 
 	// Protected call: 1 arg, 0 results, no error handler
 	L.PCall(1, 0, 0)
 
-	ls.CI.CallStatus &^= stateapi.CISTFin
+	ls.CI.CallStatus &^= state.CISTFin
 	ls.AllowHook = oldAllowHook
 
 	// Restore absolute Top, CI, and the original slot values that were

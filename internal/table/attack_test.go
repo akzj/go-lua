@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	obj "github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/object"
 )
 
 // TestAttackTableLength is a regression test for the "attack on table length"
@@ -14,7 +14,7 @@ func TestAttackTableLength(t *testing.T) {
 	lim := int(math.Floor(math.Log2(float64(math.MaxInt64)))) - 1
 	tbl := New(0, lim+1)
 	for i := lim; i >= 0; i-- {
-		tbl.SetInt(int64(1)<<i, obj.TValue{Tt: obj.TagTrue})
+		tbl.SetInt(int64(1)<<i, object.TValue{Tt: object.TagTrue})
 	}
 	n := tbl.RawLen()
 	// Valid boundaries: 2 (t[1]=true, t[2]=true, t[3]=nil).
