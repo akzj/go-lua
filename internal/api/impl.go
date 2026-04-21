@@ -139,6 +139,9 @@ func NewState() *State {
 		// clearStaleStack is only needed for explicit GC (collectgarbage()).
 		gc.FullGC(g, thread)
 		g.GCRunning = false
+		// Recalculate debt based on live data so GC doesn't re-trigger
+		// immediately on the next checkGC call.
+		gc.SetPause(g)
 		// Drain pending finalizers — objects moved to tobefnz by
 		// separateTobeFnz in FullGC need their __gc called.
 		wrapper := &State{Internal: thread}
