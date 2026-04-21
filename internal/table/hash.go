@@ -515,6 +515,9 @@ func resizeTable(t *Table, newASize, newHSize int) {
 		}
 		insertKey(t, k, nd.Val)
 	}
+
+	// Update pre-computed size for GC accounting
+	t.GCHeader.ObjSize = t.EstimateBytes()
 }
 
 func initHashPart(t *Table, size int) {

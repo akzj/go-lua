@@ -24,6 +24,11 @@ type GCHeader struct {
 	Next   GCObject // next in allgc/finobj/tobefnz chain
 	GCList GCObject // gray list link (for mark propagation)
 	Marked byte     // GC mark bits: color (white0/white1/black) + age
+
+	// ObjSize is the pre-computed byte size of this object for GC accounting.
+	// Set at allocation time. Updated on table resize (rehash).
+	// Used by sweepList to decrement GCTotalBytes without type assertions.
+	ObjSize int64
 }
 
 // GC color/mark bit constants.
