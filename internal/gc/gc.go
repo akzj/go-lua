@@ -715,17 +715,26 @@ func isDeadMark(otherwhite byte, marked byte) bool {
 
 // separateTobeFnz moves dead objects from finobj to tobefnz.
 // These objects have __gc metamethods and need finalization.
+// Objects are appended to the END of tobefnz to preserve finobj order
+// (most recently created first = LIFO finalization order).
+// Mirrors C Lua's separatetobefnz which uses findlast + append.
 func separateTobeFnz(g *state.GlobalState) {
 	otherwhite := otherWhite(g)
+	// Find the tail of tobefnz list (to append, not prepend)
+	lastnext := &g.TobeFnz
+	for *lastnext != nil {
+		lastnext = &(*lastnext).GC().Next
+	}
 	p := &g.FinObj
 	for *p != nil {
 		obj := *p
 		h := obj.GC()
 		if isDeadMark(otherwhite, h.Marked) {
-			// Dead — move to tobefnz
+			// Dead — move to end of tobefnz
 			*p = h.Next
-			h.Next = g.TobeFnz
-			g.TobeFnz = obj
+			h.Next = nil
+			*lastnext = obj
+			lastnext = &h.Next
 		} else {
 			p = &h.Next
 		}

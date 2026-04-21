@@ -71,10 +71,10 @@ func TestTestesWide(t *testing.T) {
 			//   errors.lua    — T.totalmem memory-limit feature not supported in Go
 			//   calls.lua     — T.listk string pointer identity differs (Go interning)
 			//   cstack.lua    — T blocks use T.sethook (not implemented); hangs
-			//   gc.lua        — T blocks test warning system (warn @store not implemented)
+			//   gc.lua        — T enabled; skip T.totalmem + T.alloccount blocks (Go memory control)
 			//   coroutine.lua — T.sethook yields-inside-hooks not implemented
 			switch f {
-			case "api.lua", "events.lua", "closure.lua", "gengc.lua":
+			case "api.lua", "events.lua", "closure.lua", "gengc.lua", "gc.lua", "nextvar.lua":
 				OpenTestLib(L)
 			}
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)
@@ -140,13 +140,20 @@ func TestTestesWide(t *testing.T) {
 					return
 				}
 				src := string(data)
-				// All gc.lua patches REMOVED — V5 GC handles weak tables natively:
-				// - clearByValues/clearByKeys in atomic phase
-				// - convergeEphemerons for ephemeron tables
-				// - clearDeadKeysAllEphemerons walks allgc for dead-key clearing
-				// - SweepWeakTables() disabled in GCCollect()
-				// Previously: Patch 0 (weak count), 0b (bug in 5.1), 1 (ephemeron),
-				// 2 (__gc x weak tables + string keys), 3 (coroutine __gc)
+				// gc.lua T-enablement patches:
+				// V5 GC handles weak tables, finalization, and warn system natively.
+				// Skip only sections that need unfixable C-specific features.
+
+				// Patch 1: Skip T.totalmem block (Go can't control memory limits)
+				src = strings.Replace(src,
+					"if T then\n  print(\"emergency collections\")\n  collectgarbage()\n  collectgarbage()\n  T.totalmem(T.totalmem() + 200)",
+					"if false then  -- SKIP: T.totalmem not available in Go\n  print(\"emergency collections\")\n  collectgarbage()\n  collectgarbage()\n  T.totalmem(T.totalmem() + 200)",
+					1)
+				// Patch 2: Skip T.alloccount/resetCI/reallocstack block (Go can't control allocations)
+				src = strings.Replace(src,
+					"if T then\n  print(\"testing stack issues when calling finalizers\")",
+					"if false then  -- SKIP: T.alloccount/resetCI/reallocstack not available in Go\n  print(\"testing stack issues when calling finalizers\")",
+					1)
 
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {

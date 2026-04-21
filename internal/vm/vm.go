@@ -1125,11 +1125,19 @@ startfunc:
 			h := L.Stack[ra].Val.Obj.(*table.Table)
 			if n == 0 {
 				n = L.Top - ra - 1
+			} else {
+				L.Top = ci.Top // correct top in case of emergency GC
 			}
 			last += n
 			if opcode.GetArgK(inst) != 0 {
 				last += opcode.GetArgAx(code[ci.SavedPC]) * (opcode.MaxArgVC + 1)
 				ci.SavedPC++
+			}
+			// Match C Lua: when 'last' exceeds current array size,
+			// pre-allocate the array to exactly 'last' (not power-of-2).
+			// This avoids rehash rounding up to the next power of 2.
+			if last > h.ArrayLen() {
+				h.ResizeArray(last)
 			}
 			for i := n; i > 0; i-- {
 				h.SetInt(int64(last), L.Stack[ra+i].Val)
