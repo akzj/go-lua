@@ -188,3 +188,11 @@ func (t *Table) EstimateBytes() int64 {
 	const nodeSize = 56
 	return int64(tableOverhead) + int64(len(t.Array))*tvalueSize + int64(t.HashLen())*nodeSize
 }
+
+// ResizeArray grows or shrinks the array part to exactly newSize.
+// Matches C Lua's luaH_resizearray: keeps the hash part unchanged,
+// migrates elements between array and hash as needed.
+// Used by OP_SETLIST to pre-allocate the exact array size.
+func (t *Table) ResizeArray(newSize int) {
+	resizeTable(t, newSize, t.HashLen())
+}
