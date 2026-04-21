@@ -1,12 +1,16 @@
 package lua
 
+import (
+	"github.com/akzj/go-lua/internal/api"
+)
+
 // ---------------------------------------------------------------------------
 // Garbage collection operations
 // ---------------------------------------------------------------------------
 
 // GC performs a garbage collection operation specified by what.
 func (L *State) GC(what GCWhat, args ...int) int {
-	return L.s.GC(what, args...)
+	return L.s.GC(api.GCWhat(what), args...)
 }
 
 // GCCollect runs a full garbage collection cycle.

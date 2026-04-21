@@ -9,7 +9,13 @@ package lua
 // called the current one, etc.
 // Returns (info, true) on success, (nil, false) if the level is invalid.
 func (L *State) GetStack(level int) (*DebugInfo, bool) {
-	return L.s.GetStack(level)
+	ar, ok := L.s.GetStack(level)
+	if !ok {
+		return nil, false
+	}
+	d := &DebugInfo{internal: ar}
+	d.copyFromInternal()
+	return d, true
 }
 
 // GetInfo fills debug info fields specified by the what string.
@@ -22,19 +28,30 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 //   - 'r': FTransfer, NTransfer
 //   - 't': IsTailCall, ExtraArgs
 func (L *State) GetInfo(what string, ar *DebugInfo) bool {
-	return L.s.GetInfo(what, ar)
+	if ar == nil || ar.internal == nil {
+		return false
+	}
+	ok := L.s.GetInfo(what, ar.internal)
+	ar.copyFromInternal()
+	return ok
 }
 
 // GetLocal pushes the value of local variable n of the function at the
 // given debug level. Returns the variable name, or "" if not found.
 func (L *State) GetLocal(ar *DebugInfo, n int) string {
-	return L.s.GetLocal(ar, n)
+	if ar == nil || ar.internal == nil {
+		return ""
+	}
+	return L.s.GetLocal(ar.internal, n)
 }
 
 // SetLocal sets the value of local variable n from the top of the stack.
 // Returns the variable name, or "" if not found.
 func (L *State) SetLocal(ar *DebugInfo, n int) string {
-	return L.s.SetLocal(ar, n)
+	if ar == nil || ar.internal == nil {
+		return ""
+	}
+	return L.s.SetLocal(ar.internal, n)
 }
 
 // SetHookFields sets the hook mask and count on the state.
