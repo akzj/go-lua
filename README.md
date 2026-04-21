@@ -20,17 +20,40 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 - **Coroutine yield across metamethods** — full support for yielding inside `__index`, `__newindex`, `__call`, etc.
 - **Mark-and-sweep GC** with generational mode, integrated with Go's garbage collector
 - **String interning** via `weak.Pointer` for memory-efficient string handling
-- **25,359 lines of source** across 13 internal packages, with **8,570 lines of tests**
+- **~26,000 lines of source** across 13 internal packages, with **8,570 lines of tests**
 
 ## Performance
 
-Benchmarked against C Lua 5.5.1 on the same hardware:
+### Computation — At Parity with C Lua 5.5.1
+
+Benchmarked against C Lua 5.5.1 on the same hardware (Intel i7-14700KF):
 
 | Benchmark | Go-Lua | C Lua 5.5.1 | Ratio |
 |---|---|---|---|
-| ForLoop (1M iterations) | ~5ms | ~5ms | **1:1** |
-| Fibonacci(20) | ~0.53ms | ~1ms | **Go faster** |
-| Method call (100K) | ~8ms | ~7ms | ~1.1:1 |
+| Numeric for-loop (1M iterations) | ~5ms | ~5ms | **1:1** |
+| Fibonacci(20) recursive | ~0.54ms | ~1ms | **Go faster** |
+| Method call (100K OOP dispatch) | ~7.8ms | ~7ms | **~1.1:1** |
+| Table ops (10K read/write) | ~1.6ms | — | — |
+| Closure creation (10K) | ~3.7ms | — | — |
+
+### GC Performance
+
+| Metric | Go-Lua | C Lua 5.5.1 | Notes |
+|---|---|---|---|
+| GC collect (50K live objects) | 780µs | 500µs | **1.6x** — close |
+| GC weak table clearing | 1.1ms | 1.2ms | **~1:1** — parity |
+| Object creation (100K tables) | ~97ms | ~15ms | 6.5x — Go allocator overhead |
+| Memory usage | 7042 KB | 5289 KB | 1.33x — TValue 32B vs C's 16B |
+
+### Optimization Highlights
+
+- **Zero-alloc numeric operations** — TValue uses dual-field struct (`int64` + `any`) instead of `interface{}` boxing. Numeric for-loops dropped from 3M allocations to ~1K (3000× reduction).
+- **Table object pool** — `sync.Pool` reuses dead Table structs, cutting GC benchmark allocations by 48%.
+- **Slim GC headers** — GCHeader reduced from 48 to 32 bytes by replacing intrusive linked lists with slice-based gray lists.
+- **Ephemeron fast-path** — Skips O(N) allgc chain walk when no ephemeron tables exist.
+- **Pre-computed object sizes** — Eliminates type assertions during GC sweep.
+- **Capacity-based stack growth** — Stack grows within existing capacity without reallocation.
+- **CallInfo slab allocation** — Batch-allocates 32 CallInfo structs at a time.
 
 ## Quick Start
 
