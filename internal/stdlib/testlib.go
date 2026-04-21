@@ -824,24 +824,24 @@ func testStacklevel(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 
 func testRef(L *luaapi.State) int {
-	// luaL_ref with a given table (default: registry)
-	level := int(L.OptInteger(1, 0))
-	if level == 0 {
-		level = luaapi.RegistryIndex
-	}
-	ref := L.Ref(level)
+	// T.ref(obj) — creates a reference to obj in the registry
+	// luaL_ref pops the top value, stores it, returns ref int
+	L.CheckAny(1)
+	L.PushValue(1) // push value to top (luaL_ref pops it)
+	ref := L.Ref(luaapi.RegistryIndex)
 	L.PushInteger(int64(ref))
 	return 1
 }
 
 func testUnref(L *luaapi.State) int {
-	ref := int(L.CheckInteger(2))
-	level := int(L.OptInteger(1, int64(luaapi.RegistryIndex)))
-	L.Unref(level, ref)
+	// T.unref(ref) — unreference
+	ref := int(L.CheckInteger(1))
+	L.Unref(luaapi.RegistryIndex, ref)
 	return 0
 }
 
 func testGetref(L *luaapi.State) int {
+	// T.getref(ref) — get referenced value
 	ref := int(L.CheckInteger(1))
 	L.RawGetI(luaapi.RegistryIndex, int64(ref))
 	return 1
