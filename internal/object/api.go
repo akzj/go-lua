@@ -19,11 +19,13 @@ type GCObject interface {
 }
 
 // GCHeader is embedded in every collectable Lua object.
-// It provides the linked-list pointers for the Lua GC.
+// It provides the linked-list pointer for the Lua GC allgc chain.
+//
+// Gray/weak/ephemeron lists use external slices in GlobalState instead of
+// an intrusive GCList pointer, saving 16 bytes per object (interface = 16B).
 type GCHeader struct {
-	Next   GCObject // next in allgc/finobj/tobefnz chain
-	GCList GCObject // gray list link (for mark propagation)
-	Marked byte     // GC mark bits: color (white0/white1/black) + age
+	Next    GCObject // next in allgc/finobj/tobefnz chain
+	Marked  byte     // GC mark bits: color (white0/white1/black) + age
 
 	// ObjSize is the pre-computed byte size of this object for GC accounting.
 	// Set at allocation time. Updated on table resize (rehash).

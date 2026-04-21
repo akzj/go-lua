@@ -279,12 +279,12 @@ type GlobalState struct {
 	GCState      byte // current phase (GCSpause, GCSpropagate, etc.)
 	CurrentWhite byte // current white bit (flips each cycle)
 
-	// Gray lists (for mark propagation)
-	Gray      object.GCObject // objects to be traversed
-	GrayAgain object.GCObject // barrier-back objects (re-traverse)
-	Weak      object.GCObject // weak tables to clear after mark
-	AllWeak   object.GCObject // all-weak (kv) tables
-	Ephemeron object.GCObject // ephemeron tables
+	// Gray lists (slice-based for cache locality; replaces intrusive GCList)
+	Gray      []object.GCObject // objects to be traversed (stack: pop from end)
+	GrayAgain []object.GCObject // barrier-back objects (re-traverse in atomic)
+	Weak      []object.GCObject // weak-value tables to clear after mark
+	AllWeak   []object.GCObject // all-weak (kv) tables
+	Ephemeron []object.GCObject // ephemeron tables (weak-key)
 
 	// EphemeronCount tracks how many weak-key (ephemeron) tables were
 	// encountered during the current GC mark phase. When zero, the
