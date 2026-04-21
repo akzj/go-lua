@@ -146,16 +146,15 @@ func (L *State) GCStepAPI() bool {
 		return false // minor collections don't "complete" a cycle
 	}
 
-	// Incremental mode: bounded SingleSteps
-	// GCStep runs FullGC which always completes a full cycle (pause→...→pause).
-	// We detect completion by checking if we end at pause after running steps.
+	// Incremental mode: bounded SingleSteps.
+	// GCStep does incremental work and calls SetPause internally if a
+	// full cycle completes. We detect completion by checking pause state.
 	gc.GCStep(g, ls)
 	g.GCRunning = false
 	completed := g.GCState == object.GCSpause
-	// If cycle completed, drain finalizers and recalculate debt
+	// If cycle completed, drain finalizers
 	if completed {
 		L.callAllPendingFinalizers()
-		gc.SetPause(g)
 	}
 	return completed
 }
