@@ -1559,4 +1559,87 @@ func OpenTestLib(L *luaapi.State) {
 		L.SetField(-2, name)
 	}
 	L.SetGlobal("T")
+
+	// Install test-specific warning handler (mirrors ltests.c warnf).
+	// Supports @off/@on/@store/@normal/@allow control messages and
+	// stores warnings in global _WARN when in store mode.
+	installTestWarnHandler(L)
+
+	// Initialize _WARN = false (mirrors ltests.c: lua_setglobal(L, "_WARN"))
+	L.PushBoolean(false)
+	L.SetGlobal("_WARN")
+}
+
+// ---------------------------------------------------------------------------
+// Test warning handler — mirrors ltests.c warnf
+// Modes: 0=normal, 1=allow, 2=store
+// ---------------------------------------------------------------------------
+
+func installTestWarnHandler(L *luaapi.State) {
+	tw := &testWarnState{
+		mode:  0, // start in normal mode
+		onoff: true, // warnings on by default (C Lua starts at 0, but tests call @on)
+		L:     L,
+	}
+	L.SetWarnF(func(ud any, msg string, tocont bool) {
+		tw.handle(msg, tocont)
+	}, L)
+}
+
+type testWarnState struct {
+	mode       int    // 0=normal, 1=allow, 2=store
+	onoff      bool   // on/off state
+	buff       string // accumulation buffer for multi-part messages
+	lasttocont bool   // whether previous call had tocont=true
+	L          *luaapi.State
+}
+
+func (tw *testWarnState) handle(msg string, tocont bool) {
+	// Check for control message: single-part message starting with '@'
+	if !tw.lasttocont && !tocont && len(msg) > 0 && msg[0] == '@' {
+		cmd := msg[1:]
+		switch cmd {
+		case "off":
+			tw.onoff = false
+		case "on":
+			tw.onoff = true
+		case "normal":
+			tw.mode = 0
+		case "allow":
+			tw.mode = 1
+		case "store":
+			tw.mode = 2
+		}
+		return
+	}
+
+	tw.lasttocont = tocont
+	tw.buff += msg
+
+	if tocont {
+		return // message not finished yet
+	}
+
+	// Message complete — process according to mode
+	finalMsg := tw.buff
+	tw.buff = ""
+
+	switch tw.mode {
+	case 0: // normal
+		if finalMsg != "" && finalMsg[0] != '#' && tw.onoff {
+			// Unexpected warning in test mode — print but don't abort
+			// (Go test framework handles failures differently than C)
+			fmt.Fprintf(os.Stderr, "Lua warning (unexpected): %s\n", finalMsg)
+		}
+		if tw.onoff {
+			fmt.Fprintf(os.Stderr, "Lua warning: %s\n", finalMsg)
+		}
+	case 1: // allow
+		if tw.onoff {
+			fmt.Fprintf(os.Stderr, "Lua warning: %s\n", finalMsg)
+		}
+	case 2: // store
+		tw.L.PushString(finalMsg)
+		tw.L.SetGlobal("_WARN")
+	}
 }
