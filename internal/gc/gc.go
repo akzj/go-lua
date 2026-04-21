@@ -413,12 +413,12 @@ func traverseThread(g *state.GlobalState, th *state.LuaState) {
 
 // markRoots marks all GC root objects.
 func markRoots(g *state.GlobalState) {
-	// Clear gray lists
-	g.Gray = nil
-	g.GrayAgain = nil
-	g.Weak = nil
-	g.AllWeak = nil
-	g.Ephemeron = nil
+	// Clear gray lists (reuse backing arrays to avoid reallocation)
+	g.Gray = g.Gray[:0]
+	g.GrayAgain = g.GrayAgain[:0]
+	g.Weak = g.Weak[:0]
+	g.AllWeak = g.AllWeak[:0]
+	g.Ephemeron = g.Ephemeron[:0]
 
 	// Mark main thread
 	if g.MainThread != nil {
@@ -696,13 +696,18 @@ func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
 // Mirrors C Lua's convergeephemerons.
 func convergeEphemerons(g *state.GlobalState) {
 	dir := false
+	// Scratch buffer reused across iterations to avoid allocation.
+	// We swap g.Ephemeron into scratch, then let traverseEphemeron
+	// append new entries into g.Ephemeron (which reuses scratch's old capacity).
+	var scratch []object.GCObject
 	for {
-		// Take the current ephemeron list and reset it.
-		// traverseEphemeron may re-add tables to g.Ephemeron.
-		current := g.Ephemeron
-		g.Ephemeron = nil
+		// Swap: take current list into scratch, give scratch's (empty) backing to g.Ephemeron.
+		scratch, g.Ephemeron = g.Ephemeron, scratch[:0]
+		if len(scratch) == 0 {
+			break
+		}
 		changed := false
-		for _, obj := range current {
+		for _, obj := range scratch {
 			t := obj.(*table.Table)
 			// Mark black temporarily (out of list)
 			markBlack(&t.GCHeader)
