@@ -5,6 +5,7 @@ package state
 
 import (
 	"math/rand"
+	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/luastring"
@@ -359,6 +360,13 @@ func (g *GlobalState) LinkGC(obj object.GCObject) {
 	h.Marked = g.CurrentWhite
 	h.Next = g.Allgc
 	g.Allgc = obj
+}
+
+// TrackAllocation increments GCTotalBytes and decrements GCDebt by n bytes.
+// Used for debt-based GC pacing: when GCDebt reaches 0, a GC step triggers.
+func (g *GlobalState) TrackAllocation(n int64) {
+	atomic.AddInt64(&g.GCTotalBytes, n)
+	atomic.AddInt64(&g.GCDebt, -n)
 }
 
 // ---------------------------------------------------------------------------

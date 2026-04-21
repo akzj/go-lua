@@ -610,10 +610,10 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		L.PushNumber(kb)
 		return 1
 	case 4: // step
-		// V5: Run Lua mark-and-sweep GC step
-		L.GCCollect()
+		// V5: Run bounded incremental GC step
+		completed := L.GCStepAPI()
 		L.SweepStrings()
-		L.PushBoolean(true)
+		L.PushBoolean(completed)
 		return 1
 	case 5: // isrunning
 		L.PushBoolean(L.IsGCRunning())
