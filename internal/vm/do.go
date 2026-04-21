@@ -596,6 +596,11 @@ func callHook(L *state.LuaState, ci *state.CallInfo) {
 		ci.SavedPC++ // hooks assume 'pc' is already incremented
 		hookDispatch(L, event, -1, 1, numparams)
 		ci.SavedPC-- // correct 'pc'
+		// Check if hook yielded
+		if L.Status == state.StatusYield {
+			ci.CallStatus |= state.CISTHookYield
+			panic(state.LuaYield{})
+		}
 	} else {
 		// For C functions: ftransfer=1, ntransfer=narg (top - func - 1)
 		narg := L.Top - ci.Func - 1
@@ -621,7 +626,7 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	}
 	p := cl.Proto
 
-	// Count hook
+	// Count hook — decrement first, then check for HOOKYIELD
 	countHook := false
 	if mask&state.MaskCount != 0 {
 		L.HookCount--
@@ -632,6 +637,15 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	}
 	if !countHook && mask&state.MaskLine == 0 {
 		return true // no line hook and count != 0
+	}
+
+	// If hook yielded last time, clear the mark and skip this hook.
+	// The instruction hasn't executed yet — VM will re-enter traceExec
+	// after the instruction runs.
+	// Mirrors: luaG_traceexec CIST_HOOKYIELD check in ldebug.c
+	if ci.CallStatus&state.CISTHookYield != 0 {
+		ci.CallStatus &^= state.CISTHookYield
+		return true // keep trap active but skip hook this time
 	}
 
 	if countHook {
@@ -662,6 +676,16 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 			hookDispatch(L, "line", newline, 0, 0)
 		}
 		L.OldPC = npci
+	}
+
+	// Check if hook yielded (after all hooks have been called).
+	// Mirrors: luaG_traceexec yield check at end of function.
+	if L.Status == state.StatusYield {
+		if countHook {
+			L.HookCount = 1 // undo decrement to zero
+		}
+		ci.CallStatus |= state.CISTHookYield
+		panic(state.LuaYield{})
 	}
 
 	return true // keep trap active
@@ -1103,7 +1127,17 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 				// Resuming from yield
 				L.Status = state.StatusOK
 				ci := L.CI
-				if !ci.IsLua() {
+				if ci.IsLua() {
+					// Yielded inside a hook — ci is the Lua frame.
+					// Mirrors: resume() in ldo.c — isLua(ci) branch.
+					// Undo the savedpc increment from traceExec/callHook
+					// (instruction was not executed yet).
+					ci.SavedPC--
+					// Discard yield arguments — restore top to firstArg
+					L.Top = L.Top - nArgs
+					// Re-enter the VM to continue executing
+					execute(L, ci)
+				} else {
 					// C function with continuation
 					if ci.K != nil {
 						n := ci.K(L, state.StatusYield, ci.Ctx)
