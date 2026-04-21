@@ -977,3 +977,51 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 	// Clear SweepGC for safety (cycle is complete)
 	g.SweepGC = nil
 }
+
+// ---------------------------------------------------------------------------
+// GC Step + Debt-Based Pacing
+// ---------------------------------------------------------------------------
+
+// GCStep performs one GC step triggered by the debt-based pacer.
+// For now (no write barriers), this runs a full collection cycle.
+// Later with barriers, this will run bounded SingleSteps.
+// After the cycle, SetPause recalculates debt for the next trigger.
+func GCStep(g *state.GlobalState, L *state.LuaState) {
+	if g.GCStopped {
+		return
+	}
+	// Run a full collection cycle
+	FullGC(g, L)
+	// Recalculate debt based on live data estimate
+	SetPause(g)
+}
+
+// SetPause calculates the GC debt (allocation credit) after a collection.
+// The debt determines how many bytes can be allocated before the next
+// GC cycle triggers. Based on C Lua's setpause():
+//   threshold = estimate * pause / 100
+//   debt = threshold - current_total_bytes
+// With default pause=200, GC triggers when memory reaches 2x live data.
+func SetPause(g *state.GlobalState) {
+	estimate := atomic.LoadInt64(&g.GCTotalBytes)
+	if estimate < 1 {
+		estimate = 1
+	}
+	g.GCEstimate = estimate
+
+	pause := g.GCPause
+	if pause < 2 {
+		pause = 2 // minimum pause to avoid constant collection
+	}
+
+	// threshold = estimate * pause / 100
+	// debt = threshold - estimate (right after GC, total ≈ estimate)
+	threshold := estimate * int64(pause) / 100
+	debt := threshold - estimate
+	// Minimum debt to avoid thrashing on small heaps
+	const minDebt int64 = 64 * 1024
+	if debt < minDebt {
+		debt = minDebt
+	}
+	g.GCDebt = debt
+}

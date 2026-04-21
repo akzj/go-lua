@@ -29,6 +29,10 @@ func NewState() *LuaState {
 	// Initialize V5 GC state (before any objects are created)
 	g.CurrentWhite = object.WhiteBit0
 	g.GCState = object.GCSpause
+	// GC tuning defaults (C Lua 5.5.1: LUAI_GCPAUSE=200, LUAI_GCMUL=200, LUAI_GCSTEPSIZE=13)
+	g.GCPause = 200
+	g.GCStepMul = 200
+	g.GCStepSize = 13
 
 	// String table
 	strtab := luastring.NewStringTable(g.Seed)

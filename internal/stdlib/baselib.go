@@ -624,6 +624,16 @@ func luaB_collectgarbage(L *luaapi.State) int {
 		return 1
 	case 7: // incremental
 		prev := L.SetGCMode("incremental")
+		// collectgarbage("incremental" [, pause [, stepmul [, stepsize]]])
+		if pause := L.OptInteger(2, 0); pause != 0 {
+			L.SetGCParam("pause", pause)
+		}
+		if stepmul := L.OptInteger(3, 0); stepmul != 0 {
+			L.SetGCParam("stepmul", stepmul)
+		}
+		if stepsize := L.OptInteger(4, 0); stepsize != 0 {
+			L.SetGCParam("stepsize", stepsize)
+		}
 		L.PushString(prev)
 		return 1
 	case 8: // param

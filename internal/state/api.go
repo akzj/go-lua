@@ -292,9 +292,14 @@ type GlobalState struct {
 	EphemeronCount int
 
 	// Incremental GC state
-	GCDebt     int64            // bytes "owed" — triggers GC step when <= 0
+	GCDebt     int64            // bytes "owed" — positive = credit, triggers step when <= 0
 	GCEstimate int64            // estimate of non-garbage bytes (for setpause)
 	SweepGC    *object.GCObject // current position in sweep list (nil = not sweeping)
+
+	// GC tuning parameters (used by debt-based pacing)
+	GCPause    int // pause% (default 200 = collect when memory reaches 2x live)
+	GCStepMul  int // step multiplier (default 200)
+	GCStepSize int // log2 of step size in bytes (default 13 = 8KB)
 
 }
 
