@@ -814,19 +814,16 @@ func testS2d(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 // T.stacklevel() — return stack level info
 // ---------------------------------------------------------------------------
+// C Lua returns 5 values: top-stack, stacksize, nCcalls, nci, &localvar.
+// We return the first 4 (no meaningful C stack address in Go).
 
 func testStacklevel(L *luaapi.State) int {
-	// Return the number of active call frames
-	level := 0
-	for {
-		_, ok := L.GetStack(level)
-		if !ok {
-			break
-		}
-		level++
-	}
-	L.PushInteger(int64(level))
-	return 1
+	ls := L.Internal.(*state.LuaState)
+	L.PushInteger(int64(ls.Top))              // top offset (top - stack base)
+	L.PushInteger(int64(len(ls.Stack)))        // allocated stack size
+	L.PushInteger(int64(ls.NCI))               // nCcalls equivalent (CI count)
+	L.PushInteger(int64(ls.NCI))               // number of CallInfo nodes
+	return 4
 }
 
 // ---------------------------------------------------------------------------
