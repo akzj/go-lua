@@ -134,6 +134,6 @@ next Lua GC cycle.
 | File | Purpose |
 |------|---------|
 | `internal/gc/gc.go` | Core GC: FullGC, mark, propagate, sweep, weak table clearing |
-| `internal/api/impl.go` | GCCollect, gcMarkSweep, callAllPendingFinalizers, clearStaleStack |
+| `internal/api/gc_impl.go` | GCCollect, gcMarkSweep, callAllPendingFinalizers, clearStaleStack |
 | `internal/state/api.go` | GlobalState struct with all GC fields |
-| `internal/object/gc.go` | GCHeader, GCObject interface, color constants |
+| `internal/object/api.go` | GCHeader, GCObject interface, color constants |
