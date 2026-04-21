@@ -202,10 +202,11 @@ func (L *State) SetTop(idx int) {
 		newTop = ls.Top + diff
 	}
 	// When shrinking and TBC variables exist at or above newTop, close them.
+	// Uses CLOSEKTOP: don't reset L.Top inside __close (we set it below).
 	// Mirrors C Lua: if (diff < 0 && L->tbclist.p >= newtop)
+	//   newtop = luaF_close(L, newtop, CLOSEKTOP, 0);
 	if diff < 0 && ls.TBCList >= newTop {
-		// Close TBC vars from TBCList down to newTop (CLOSEKTOP semantics).
-		vm.CloseTBC(ls, newTop)
+		vm.CloseTBCKeepTop(ls, newTop)
 	}
 	ls.Top = newTop
 }
@@ -222,11 +223,12 @@ func (L *State) ToClose(idx int) {
 
 // CloseSlot closes the to-be-closed variable at the given index and sets
 // the slot to nil. The index must be the last marked to-be-closed slot.
+// Uses CLOSEKTOP semantics: does not reset L.Top (preserves stack above).
 // Mirrors: lua_closeslot in lapi.c:206-214
 func (L *State) CloseSlot(idx int) {
 	ls := L.ls()
 	level := L.index2stack(idx)
-	vm.CloseTBC(ls, level)
+	vm.CloseTBCKeepTop(ls, level)
 	ls.Stack[level].Val = object.Nil
 }
 
