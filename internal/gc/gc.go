@@ -123,7 +123,11 @@ func Barrier(g *state.GlobalState, parent, child object.GCObject) {
 	if ph.Marked&object.BlackBit == 0 || ch.Marked&object.WhiteBits == 0 {
 		return
 	}
-	// Phase 3: propagate-only — mark the child
+	// Gen mode: if parent is old, promote child to OLD0
+	if g.GCKind != object.KGC_INC && ph.IsOld() {
+		ch.Age = object.G_OLD0
+	}
+	// Mark the child (propagate forward)
 	markObject(g, child)
 }
 
@@ -141,6 +145,10 @@ func BarrierBack(g *state.GlobalState, parent object.GCObject) {
 	// Fast path: not black → nothing to do
 	if ph.Marked&object.BlackBit == 0 {
 		return
+	}
+	// Gen mode: if parent is old, set to TOUCHED1
+	if g.GCKind != object.KGC_INC && ph.IsOld() {
+		ph.Age = object.G_TOUCHED1
 	}
 	// Set back to gray (clear black bit, keep other bits)
 	ph.Marked &^= object.BlackBit
@@ -942,10 +950,6 @@ func atomicPhase(g *state.GlobalState, L *state.LuaState) int64 {
 	// Clear values from resurrected weak tables (only new entries since pre-resurrection)
 	clearByValues(g, g.Weak, origWeakLen)
 	clearByValues(g, g.AllWeak, origAllLen)
-
-	// NOTE: White was already flipped at cycle start (GCSpause → GCSpropagate).
-	// No second flip here — sweep needs to find objects with the "other" white
-	// (= the old white from before the cycle), which is correct after a single flip.
 
 	// Update GCEstimate with current live bytes
 	g.GCEstimate = atomic.LoadInt64(&g.GCTotalBytes)

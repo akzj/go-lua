@@ -46,9 +46,18 @@ func (L *State) GetGCMode() string {
 }
 
 // SetGCMode sets the GC mode and returns the previous mode string.
+// Actually switches the GC between incremental and generational modes.
 func (L *State) SetGCMode(mode string) string {
 	prev := L.GetGCMode()
+	ls := L.ls()
+	g := ls.Global
 	L.ls().Global.GCMode = mode
+	switch mode {
+	case "generational":
+		gc.ChangeMode(g, ls, object.KGC_GENMINOR)
+	case "incremental":
+		gc.ChangeMode(g, ls, object.KGC_INC)
+	}
 	return prev
 }
 
@@ -89,10 +98,25 @@ func (L *State) gcMarkSweep() {
 func (L *State) GCCollect() {
 	// Mark as explicit GC — traverseThread uses th.Top (precise marking)
 	// so weak tables can collect dead locals in registers above Top.
-	g := L.ls().Global
+	ls := L.ls()
+	g := ls.Global
 	g.GCExplicit = true
 	defer func() { g.GCExplicit = false }()
-	// Mark and sweep (with re-entrancy guard)
+
+	if g.GCKind != object.KGC_INC {
+		// Generational mode: full gen collection (minor2inc → entergen)
+		if g.GCRunning {
+			return
+		}
+		g.GCRunning = true
+		clearStaleStack(ls)
+		gc.FullGen(g, ls)
+		g.GCRunning = false
+		L.callAllPendingFinalizers()
+		return
+	}
+
+	// Incremental mode: mark and sweep (with re-entrancy guard)
 	L.gcMarkSweep()
 	// Call all pending finalizers (objects moved to tobefnz by separateTobeFnz).
 	// This runs Lua code via PCall, so must NOT be called during VM execution.
@@ -100,7 +124,9 @@ func (L *State) GCCollect() {
 	// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 }
 
-// GCStepAPI runs a bounded incremental GC step for collectgarbage("step").
+// GCStepAPI runs a bounded GC step for collectgarbage("step").
+// In incremental mode: runs bounded SingleSteps.
+// In generational mode: runs a minor (young) collection.
 // Returns true if a full GC cycle completed during this step.
 // Mirrors C Lua's lua_gc(LUA_GCSTEP).
 func (L *State) GCStepAPI() bool {
@@ -110,6 +136,17 @@ func (L *State) GCStepAPI() bool {
 		return false
 	}
 	g.GCRunning = true
+	clearStaleStack(ls)
+
+	if g.GCKind != object.KGC_INC {
+		// Generational mode: run a minor (young) collection
+		gc.YoungCollection(g, ls)
+		g.GCRunning = false
+		L.callAllPendingFinalizers()
+		return false // minor collections don't "complete" a cycle
+	}
+
+	// Incremental mode: bounded SingleSteps
 	prevState := g.GCState
 	gc.GCStep(g, ls)
 	g.GCRunning = false
