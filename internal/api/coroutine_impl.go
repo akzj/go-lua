@@ -108,6 +108,11 @@ func (L *State) Status() int {
 	return L.ls().Status
 }
 
+// SetStatus sets the thread status (used by test library for panic simulation).
+func (L *State) SetStatus(status int) {
+	L.ls().Status = status
+}
+
 // ---------------------------------------------------------------------------
 // Userdata API (stubs)
 // ---------------------------------------------------------------------------
