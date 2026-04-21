@@ -5,7 +5,7 @@
 The Lua debug hook system allows user code to intercept **call**, **return**, **line**, and **count** events during execution. This document traces the complete lifecycle from hook registration through dispatch, covering every C function and its go-lua mapping.
 
 **C Source:** `lua-master/ldo.c` (lines 444–535), `lua-master/ldebug.c` (lines 116–143, 900–978)
-**Go Source:** `internal/vm/api/do.go` (lines 390–535), `internal/state/api/api.go` (lines 155–172)
+**Go Source:** `internal/vm/do.go` (lines 390–535), `internal/state/api.go` (lines 155–172)
 
 ---
 
@@ -52,13 +52,13 @@ static void settraps (CallInfo *ci) {
 
 | C Field | Go Field | Location |
 |---------|----------|----------|
-| `L->hook` | `L.Hook` (type `any`) | `internal/state/api/api.go:169` |
-| `L->basehookcount` | `L.BaseHookCount` | `internal/state/api/api.go:170` |
-| `L->hookcount` | `L.HookCount` | `internal/state/api/api.go:171` |
-| `L->hookmask` | `L.HookMask` | `internal/state/api/api.go:172` |
-| `L->allowhook` | `L.AllowHook` | `internal/state/api/api.go:161` |
-| `L->oldpc` | `L.OldPC` | `internal/state/api/api.go:166` |
-| `ci->u.l.trap` | `ci.Trap` (bool) | `internal/state/api/api.go:95` |
+| `L->hook` | `L.Hook` (type `any`) | `internal/state/api.go:169` |
+| `L->basehookcount` | `L.BaseHookCount` | `internal/state/api.go:170` |
+| `L->hookcount` | `L.HookCount` | `internal/state/api.go:171` |
+| `L->hookmask` | `L.HookMask` | `internal/state/api.go:172` |
+| `L->allowhook` | `L.AllowHook` | `internal/state/api.go:161` |
+| `L->oldpc` | `L.OldPC` | `internal/state/api.go:166` |
+| `ci->u.l.trap` | `ci.Trap` (bool) | `internal/state/api.go:95` |
 
 **Key difference**: C `trap` is `int` (0/1); Go `Trap` is `bool`. C uses `ci->u.l.trap` (union member); Go uses `ci.Trap` (flat struct field).
 
@@ -460,8 +460,8 @@ Go handles this inline in the VM execution loop rather than as a separate functi
 ### Source Verification
 ```bash
 grep -n 'LUA_MASKCALL\|LUA_MASKRET\|LUA_MASKLINE\|LUA_MASKCOUNT' lua-master/lua.h
-grep -n 'MaskCall\|MaskRet\|MaskLine\|MaskCount' internal/state/api/api.go
+grep -n 'MaskCall\|MaskRet\|MaskLine\|MaskCount' internal/state/api.go
 grep -n 'CIST_HOOKED\|CIST_TAIL\|CIST_HOOKYIELD' lua-master/lstate.h
-grep -n 'CISTHooked\|CISTTail\|CISTHookYield' internal/state/api/api.go
-grep -n 'HookYield\|HOOKYIELD' internal/vm/api/do.go  # Verify CIST_HOOKYIELD checked
+grep -n 'CISTHooked\|CISTTail\|CISTHookYield' internal/state/api.go
+grep -n 'HookYield\|HOOKYIELD' internal/vm/do.go  # Verify CIST_HOOKYIELD checked
 ```

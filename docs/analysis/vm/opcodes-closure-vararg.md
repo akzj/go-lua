@@ -2,7 +2,7 @@
 
 > Covers: OP_CLOSURE, OP_VARARG, OP_GETVARG, OP_VARARGPREP, OP_CLOSE, OP_TBC
 >
-> Source: `lua-master/lvm.c` + `lua-master/ltm.c` (C), `internal/vm/api/vm.go` (Go)
+> Source: `lua-master/lvm.c` + `lua-master/ltm.c` (C), `internal/vm/vm.go` (Go)
 
 ---
 
@@ -405,7 +405,7 @@ case opcodeapi.OP_TBC:
     MarkTBC(L, ra)
 ```
 
-`MarkTBC` is at `internal/vm/api/do.go:1220`.
+`MarkTBC` is at `internal/vm/do.go:1220`.
 
 ### Differences
 | Aspect | C Lua | go-lua |

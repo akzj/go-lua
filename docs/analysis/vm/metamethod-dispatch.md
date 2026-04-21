@@ -1,6 +1,6 @@
 # Metamethod Dispatch Mechanism
 
-> C: `lua-master/lvm.c` + `lua-master/ltm.c` | Go: `internal/vm/api/vm.go` + `internal/metamethod/api/metamethod.go`
+> C: `lua-master/lvm.c` + `lua-master/ltm.c` | Go: `internal/vm/vm.go` + `internal/metamethod/metamethod.go`
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # Call/Return Opcodes — Deep Analysis
 
-> C source: `lua-master/lvm.c` | Go source: `internal/vm/api/vm.go`, `internal/vm/api/do.go`
+> C source: `lua-master/lvm.c` | Go source: `internal/vm/vm.go`, `internal/vm/do.go`
 
 ## Encoding Conventions
 

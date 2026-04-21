@@ -13,7 +13,7 @@ and dispatches accordingly:
   caller (`ccall`) can invoke `luaV_execute`.
 - **Neither** → tries the `__call` metamethod via `tryfuncTM` and retries.
 
-The Go equivalent is `PreCall` in `internal/vm/api/do.go:316`.
+The Go equivalent is `PreCall` in `internal/vm/do.go:316`.
 
 ---
 
@@ -223,7 +223,7 @@ union {
 } u;
 ```
 
-**In go-lua** (`internal/state/api/api.go:87-108`), there is no union — all
+**In go-lua** (`internal/state/api.go:87-108`), there is no union — all
 fields coexist in a flat struct:
 
 ```go
@@ -439,6 +439,6 @@ assert(called)
 ### 6. Go-specific: run test suite
 ```bash
 cd /home/ubuntu/workspace/go-lua
-go test ./internal/vm/api/... -run TestCall -count=1
-go test ./internal/vm/api/... -run TestHook -count=1
+go test ./internal/vm/... -run TestCall -count=1
+go test ./internal/vm/... -run TestHook -count=1
 ```

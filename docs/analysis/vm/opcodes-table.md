@@ -1,6 +1,6 @@
 # VM Table, Length & Concat Opcodes
 
-> C: `lua-master/lvm.c` | Go: `internal/vm/api/vm.go`
+> C: `lua-master/lvm.c` | Go: `internal/vm/vm.go`
 > Covers: GETTABUP, GETTABLE, GETI, GETFIELD, SETTABUP, SETTABLE, SETI, SETFIELD,
 > NEWTABLE, SELF, SETLIST, LEN, CONCAT
 

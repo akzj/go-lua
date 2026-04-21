@@ -3,7 +3,7 @@
 > Covers: OP_MOVE, OP_LOADI, OP_LOADF, OP_LOADK, OP_LOADKX, OP_LOADFALSE,
 > OP_LFALSESKIP, OP_LOADTRUE, OP_LOADNIL, OP_GETUPVAL, OP_SETUPVAL
 >
-> Source: `lua-master/lvm.c` (C), `internal/vm/api/vm.go` (Go)
+> Source: `lua-master/lvm.c` (C), `internal/vm/vm.go` (Go)
 
 ---
 
