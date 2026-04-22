@@ -3,6 +3,7 @@ package vm
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/akzj/go-lua/internal/closure"
@@ -816,31 +817,9 @@ func toStringForConcat(v object.TValue) (string, bool) {
 }
 
 func intToString(i int64) string {
-	// Simple integer to string
-	if i == 0 {
-		return "0"
-	}
-	neg := false
-	if i < 0 {
-		neg = true
-		i = -i
-		if i < 0 { // MinInt64
-			return "-9223372036854775808"
-		}
-	}
-	buf := make([]byte, 0, 20)
-	for i > 0 {
-		buf = append(buf, byte('0'+i%10))
-		i /= 10
-	}
-	// Reverse
-	for l, r := 0, len(buf)-1; l < r; l, r = l+1, r-1 {
-		buf[l], buf[r] = buf[r], buf[l]
-	}
-	if neg {
-		return "-" + string(buf)
-	}
-	return string(buf)
+	// Stack-allocated buffer avoids heap allocation for small integers.
+	var buf [20]byte
+	return string(strconv.AppendInt(buf[:0], i, 10))
 }
 
 func floatToString(f float64) string {
