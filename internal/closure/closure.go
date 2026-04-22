@@ -34,12 +34,11 @@ func FindUpval(L *state.LuaState, level int) *UpVal {
 	}
 
 	// Not found — create new upvalue at this level
-	uv := &UpVal{
-		StackIdx: level,
-		Own:      object.Nil,
-		Next:     p,     // link to rest of list (lower levels)
-		Stack:    &L.Stack, // reference to owning thread's stack for cross-thread access
-	}
+	uv := getUpVal()
+	uv.StackIdx = level
+	uv.Own = object.Nil
+	uv.Next = p     // link to rest of list (lower levels)
+	uv.Stack = &L.Stack // reference to owning thread's stack for cross-thread access
 	L.Global.LinkGC(uv) // V5: register in allgc chain
 
 	// Insert into the list
@@ -102,10 +101,10 @@ func CloseUpvals(L *state.LuaState, level int) {
 func InitUpvals(cl *LClosure) {
 	for i := range cl.UpVals {
 		if cl.UpVals[i] == nil {
-			cl.UpVals[i] = &UpVal{
-				StackIdx: -1, // closed
-				Own:      object.Nil,
-			}
+			uv := getUpVal()
+			uv.StackIdx = -1 // closed
+			uv.Own = object.Nil
+			cl.UpVals[i] = uv
 		}
 	}
 }
