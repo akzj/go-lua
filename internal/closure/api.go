@@ -114,10 +114,9 @@ func (c *CClosure) NumUpvals() int { return len(c.UpVals) }
 
 // NewLClosure creates a Lua closure with n upvalue slots (initially nil).
 func NewLClosure(p *object.Proto, nUpvals int) *LClosure {
-	cl := &LClosure{
-		Proto:  p,
-		UpVals: make([]*UpVal, nUpvals),
-	}
+	cl := getLClosure()
+	cl.Proto = p
+	cl.UpVals = make([]*UpVal, nUpvals)
 	return cl
 }
 

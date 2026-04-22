@@ -632,19 +632,21 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			// Dead — unlink from chain and decrement GCTotalBytes
 			*p = h.Next
 			h.Next = nil // help Go GC
-			// Decrement byte counter using pre-computed size (avoids type assertion)
 			if h.ObjSize > 0 {
 				g.GCTotalBytes -= h.ObjSize
 			}
-			// Remove dead strings from the interning table
-			if g.SweepStringFn != nil {
-				if _, ok := obj.(*object.LuaString); ok {
-					g.SweepStringFn(obj)
+			// Single type switch: string interning cleanup + pool returns
+			switch o := obj.(type) {
+			case *object.LuaString:
+				if g.SweepStringFn != nil {
+					g.SweepStringFn(o)
 				}
-			}
-			// Return dead tables to the pool for reuse
-			if t, ok := obj.(*table.Table); ok {
-				table.PutTable(t)
+			case *table.Table:
+				table.PutTable(o)
+			case *closure.LClosure:
+				closure.PutLClosure(o)
+			case *closure.UpVal:
+				closure.PutUpVal(o)
 			}
 			freed++
 		} else {
@@ -681,14 +683,18 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 			if h.ObjSize > 0 {
 				g.GCTotalBytes -= h.ObjSize
 			}
-			// Remove dead strings from the interning table
-			if g.SweepStringFn != nil {
-				if _, ok := obj.(*object.LuaString); ok {
-					g.SweepStringFn(obj)
+			// Single type switch: string interning cleanup + pool returns
+			switch o := obj.(type) {
+			case *object.LuaString:
+				if g.SweepStringFn != nil {
+					g.SweepStringFn(o)
 				}
-			}
-			if t, ok := obj.(*table.Table); ok {
-				table.PutTable(t)
+			case *table.Table:
+				table.PutTable(o)
+			case *closure.LClosure:
+				closure.PutLClosure(o)
+			case *closure.UpVal:
+				closure.PutUpVal(o)
 			}
 		} else {
 			// Alive — reset to current white
