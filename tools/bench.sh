@@ -57,7 +57,7 @@ echo ""
 
 # Run benchmarks — capture raw output
 cd "$REPO_ROOT"
-go test -bench=. -benchmem -count="$COUNT" -timeout=10m ./internal/stdlib/ 2>&1 | tee "$RAW_FILE"
+go test -bench=. -benchmem -count="$COUNT" -run='^$' -timeout=10m ./internal/stdlib/ 2>&1 | tee "$RAW_FILE"
 
 echo ""
 echo "Raw results saved to $RAW_FILE"
