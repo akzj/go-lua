@@ -545,6 +545,10 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 				return ok && i1 == t2.N
 			}
 		}
+		// Short vs Long string comparison by content
+		if t1.IsString() && t2.IsString() {
+			return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
+		}
 		return false
 	}
 	// Same base type
@@ -636,6 +640,10 @@ func rawEqualObj(t1, t2 object.TValue) bool {
 				i1, ok := floatToInteger(t1.Float())
 				return ok && i1 == t2.N
 			}
+		}
+		// Short vs Long string comparison by content
+		if t1.IsString() && t2.IsString() {
+			return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
 		}
 		return false
 	}
