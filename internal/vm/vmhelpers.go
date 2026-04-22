@@ -1309,36 +1309,36 @@ func forPrep(L *state.LuaState, ra int) bool {
 	return false
 }
 
-// forLoop performs one iteration of a numeric for loop.
-// Returns true if the loop should continue (jump back).
-func forLoop(L *state.LuaState, ra int) bool {
-	if L.Stack[ra+1].Val.IsInteger() {
-		// Integer loop: ra=count, ra+1=step, ra+2=control
-		count := uint64(L.Stack[ra].Val.Integer())
-		if count > 0 {
-			step := L.Stack[ra+1].Val.Integer()
-			idx := L.Stack[ra+2].Val.Integer()
-			L.Stack[ra].Val = object.MakeInteger(int64(count - 1))
-			idx += step
-			L.Stack[ra+2].Val = object.MakeInteger(idx)
+// forLoopInt handles the integer for-loop fast path.
+// Extracted from forLoop to keep inline cost low.
+// Integer loop: ra=count, ra+1=step, ra+2=control.
+// Sets N directly instead of using MakeInteger to reduce inline cost.
+func forLoopInt(stack []object.StackValue, ra int) bool {
+	count := uint64(stack[ra].Val.N)
+	if count > 0 {
+		stack[ra].Val.N = int64(count - 1)
+		stack[ra+2].Val.N += stack[ra+1].Val.N
+		return true
+	}
+	return false
+}
+
+// forLoopFloat handles the float for-loop path.
+// Float loop: ra=limit, ra+1=step, ra+2=control
+func forLoopFloat(stack []object.StackValue, ra int) bool {
+	step := stack[ra+1].Val.Float()
+	limit := stack[ra].Val.Float()
+	idx := stack[ra+2].Val.Float()
+	idx += step
+	if step > 0 {
+		if idx <= limit {
+			stack[ra+2].Val = object.MakeFloat(idx)
 			return true
 		}
 	} else {
-		// Float loop: ra=limit, ra+1=step, ra+2=control
-		step := L.Stack[ra+1].Val.Float()
-		limit := L.Stack[ra].Val.Float()
-		idx := L.Stack[ra+2].Val.Float()
-		idx += step
-		if step > 0 {
-			if idx <= limit {
-				L.Stack[ra+2].Val = object.MakeFloat(idx)
-				return true
-			}
-		} else {
-			if limit <= idx {
-				L.Stack[ra+2].Val = object.MakeFloat(idx)
-				return true
-			}
+		if limit <= idx {
+			stack[ra+2].Val = object.MakeFloat(idx)
+			return true
 		}
 	}
 	return false

@@ -978,8 +978,15 @@ startfunc:
 			}
 
 		case opcode.OP_FORLOOP:
-			if forLoop(L, ra) {
-				ci.SavedPC -= opcode.GetArgBx(inst) // jump back
+			// Split integer/float paths so forLoopInt can inline
+			if L.Stack[ra+1].Val.IsInteger() {
+				if forLoopInt(L.Stack, ra) {
+					ci.SavedPC -= opcode.GetArgBx(inst) // jump back
+				}
+			} else {
+				if forLoopFloat(L.Stack, ra) {
+					ci.SavedPC -= opcode.GetArgBx(inst) // jump back
+				}
 			}
 
 		case opcode.OP_TFORPREP:
