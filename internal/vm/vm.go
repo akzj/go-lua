@@ -272,6 +272,15 @@ startfunc:
 			c := int64(opcode.GetArgC(inst))
 			if rb.IsTable() {
 				h := rb.Obj.(*table.Table)
+				// Fast path: integer key in array range — avoid getInt call (cost 111)
+				if c >= 1 && int(c) <= len(h.Array) {
+					val := h.Array[c-1]
+					if !val.IsNil() {
+						L.Stack[ra].Val = val
+						continue
+					}
+				}
+				// Slow path: hash part lookup + metamethods
 				val, found := h.GetInt(c)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
