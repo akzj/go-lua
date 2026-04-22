@@ -973,7 +973,8 @@ func Concat(L *state.LuaState, total int) {
 			// Walk the stack backwards (toward lower indices), appending in
 			// reverse order, then build the result with strings.Builder.
 			// This avoids the O(n²) prepend of the old []string{sv}, parts... approach.
-			var parts []string
+			var buf [8]string
+			parts := buf[:0]
 			parts = append(parts, s2, s1) // reverse order: s2 first, s1 second
 			for n < total {
 				sv, ok := toStringForConcat(L.Stack[top-n-1].Val)
@@ -1102,10 +1103,8 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 		RunError(L, "table index is NaN")
 	}
 	h := tval.Obj.(*table.Table)
-	// Fast path: key already exists → just overwrite (no rehash possible)
-	_, found := h.Get(key)
-	if found {
-		h.Set(key, val)
+	// Fast path: key already exists → overwrite in single lookup (no rehash)
+	if h.SetIfExists(key, val) {
 		gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
 		return
 	}

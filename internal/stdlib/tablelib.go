@@ -2,6 +2,7 @@ package stdlib
 
 import (
 	"math"
+	"strings"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
 	"github.com/akzj/go-lua/internal/object"
@@ -164,14 +165,7 @@ func tabConcat(L *luaapi.State) int {
 }
 
 func joinStrings(ss []string, sep string) string {
-	if len(ss) == 0 {
-		return ""
-	}
-	result := ss[0]
-	for i := 1; i < len(ss); i++ {
-		result += sep + ss[i]
-	}
-	return result
+	return strings.Join(ss, sep)
 }
 
 func tabPack(L *luaapi.State) int {
