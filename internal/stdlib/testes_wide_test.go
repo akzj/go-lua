@@ -317,7 +317,7 @@ func TestTestesWide(t *testing.T) {
 				src = strings.Replace(src,
 					"print'+'\n\n-- testing some auxlib functions",
 					"end  -- END SKIP to-be-closed\nprint'+'\n\n-- testing some auxlib functions",
-					-1) // replace last occurrence
+					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)
