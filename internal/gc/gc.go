@@ -1023,6 +1023,10 @@ func atomicPhase(g *state.GlobalState, L *state.LuaState) int64 {
 	// Update GCEstimate with current live bytes
 	g.GCEstimate = g.GCTotalBytes
 
+	// Flip current white to prepare for sweep phase.
+	// C Lua: g->currentwhite = otherwhite(g) at end of atomic()
+	g.CurrentWhite ^= object.WhiteBits
+
 	return work
 }
 
