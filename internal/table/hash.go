@@ -558,10 +558,8 @@ func resizeTable(t *Table, newASize, newHSize int) {
 	// Allocate new array
 	var newArray []object.TValue
 	if newASize > 0 {
+		// make() returns zeroed memory; object.Nil is the zero value (TagNil=0x00)
 		newArray = make([]object.TValue, newASize)
-		for i := range newArray {
-			newArray[i] = object.Nil
-		}
 	}
 
 	// Copy common elements from old array
