@@ -7,12 +7,18 @@
 // Options:
 //
 //	-e "code"   Execute the given Lua code
+//	-l name     Require library 'name' before executing scripts
 //	-i          Enter interactive REPL mode after executing scripts
 //	-v          Print version information and exit
 //	-           Read script from standard input
 //
 // When invoked with no arguments, glua enters interactive REPL mode.
-// Multiple -e flags and script files can be combined; they execute in order.
+// Multiple -e and -l flags can be combined; they execute in order.
+//
+// The REPL supports expression evaluation: typing an expression like "1+2"
+// automatically prints the result (wraps in "return <expr>" internally).
+// Multi-line input is supported — if a statement is incomplete, the prompt
+// changes to ">> " and waits for more input.
 package main
 
 import (
@@ -31,16 +37,22 @@ func main() {
 	os.Exit(run())
 }
 
+// action represents a pre-script action (-e snippet or -l require).
+type action struct {
+	kind string // "exec" or "lib"
+	arg  string // code snippet or library name
+}
+
 func run() int {
 	args := os.Args[1:]
 
 	// Parse flags manually (to support Lua-style argument ordering).
 	var (
-		execSnippets []string // -e snippets
-		files        []string // script files
-		interactive  bool     // -i flag
-		showVersion  bool     // -v flag
-		readStdin    bool     // - flag
+		actions     []action // -e and -l actions in order
+		files       []string // script files
+		interactive bool     // -i flag
+		showVersion bool     // -v flag
+		readStdin   bool     // - flag
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -55,7 +67,14 @@ func run() int {
 				fmt.Fprintln(os.Stderr, "glua: '-e' needs argument")
 				return 1
 			}
-			execSnippets = append(execSnippets, args[i])
+			actions = append(actions, action{kind: "exec", arg: args[i]})
+		case "-l":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "glua: '-l' needs argument")
+				return 1
+			}
+			actions = append(actions, action{kind: "lib", arg: args[i]})
 		case "-":
 			readStdin = true
 		case "--":
@@ -81,7 +100,7 @@ func run() int {
 	}
 
 	// If no actions specified, default to interactive mode.
-	if len(execSnippets) == 0 && len(files) == 0 && !readStdin {
+	if len(actions) == 0 && len(files) == 0 && !readStdin {
 		interactive = true
 	}
 
@@ -91,11 +110,21 @@ func run() int {
 	// Set up the global 'arg' table (like C Lua).
 	setupArgTable(L, files)
 
-	// Execute -e snippets.
-	for _, code := range execSnippets {
-		if err := L.DoString(code); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+	// Execute -e and -l actions in order.
+	for _, a := range actions {
+		switch a.kind {
+		case "exec":
+			if err := L.DoString(a.arg); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		case "lib":
+			// require("name") — equivalent to C Lua's -l flag.
+			code := fmt.Sprintf("require(%q)", a.arg)
+			if err := L.DoString(code); err != nil {
+				fmt.Fprintf(os.Stderr, "glua: error loading library '%s': %v\n", a.arg, err)
+				return 1
+			}
 		}
 	}
 
@@ -262,6 +291,7 @@ func isIncomplete(msg string) bool {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "usage: glua [options] [script [args...]]")
 	fmt.Fprintln(os.Stderr, "  -e code   execute string 'code'")
+	fmt.Fprintln(os.Stderr, "  -l name   require library 'name'")
 	fmt.Fprintln(os.Stderr, "  -i        enter interactive mode after executing script")
 	fmt.Fprintln(os.Stderr, "  -v        show version information")
 	fmt.Fprintln(os.Stderr, "  -         read from standard input")
