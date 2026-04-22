@@ -42,3 +42,11 @@ func (L *State) DoFile(filename string) error {
 func (L *State) Error() int {
 	return L.s.Error()
 }
+
+// Dump dumps the Lua function at the top of the stack as a binary chunk.
+// If strip is true, debug information is removed.
+// Returns the binary chunk bytes, or nil if the value is not a Lua function.
+// Mirrors: lua_dump in lapi.c
+func (L *State) Dump(strip bool) []byte {
+	return L.s.Dump(strip)
+}
