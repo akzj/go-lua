@@ -151,6 +151,27 @@ func statusToString(status int) string {
 }
 
 // ---------------------------------------------------------------------------
+// testCContinuation — continuation function for pcallk/callk/yieldk.
+// Go equivalent of Cfunck in ltests.c. This is a state.KFunction.
+// ---------------------------------------------------------------------------
+
+// testCContinuation is called by the VM when a coroutine resumes after a
+// yield inside pcallk/callk/yieldk. It sets _G.status and _G.ctx, then
+// runs the continuation program (stored at stack index ctx) via runC.
+func testCContinuation(L *state.LuaState, status int, ctx int) int {
+	apiState := &luaapi.State{Internal: L}
+	// Set _G.status = status string
+	apiState.PushString(statusToString(status))
+	apiState.SetGlobal("status")
+	// Set _G.ctx = ctx integer
+	apiState.PushInteger(int64(ctx))
+	apiState.SetGlobal("ctx")
+	// Get continuation program from stack at index ctx
+	prog, _ := apiState.ToString(ctx)
+	return runC(apiState, apiState, prog)
+}
+
+// ---------------------------------------------------------------------------
 // Arithmetic operation encoding: "+-*%^/\&|~<>_!"
 // ---------------------------------------------------------------------------
 
@@ -200,8 +221,8 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 		case "callk":
 			narg := p.getNum(L, L1)
 			nres := p.getNum(L, L1)
-			_ = p.getIndex(L, L1) // ctx — ignored for now
-			L1.Call(narg, nres)   // simplified: no continuation support yet
+			ctx := p.getIndex(L, L1)
+			L1.CallK(narg, nres, ctx, testCContinuation)
 
 		case "checkstack":
 			sz := p.getNum(L, L1)
@@ -356,13 +377,30 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 			narg := p.getNum(L, L1)
 			nres := p.getNum(L, L1)
 			handler := p.getNum(L, L1)
-			status = L1.PCall(narg, nres, handler)
+			// Plain pcall — must clear ci.K so PCall uses PATH A (protected).
+			// Otherwise leftover K from yieldk/pcallk would cause PATH B.
+			{
+				ls := L1.Internal.(*state.LuaState)
+				savedK := ls.CI.K
+				savedCtx := ls.CI.Ctx
+				ls.CI.K = nil
+				ls.CI.Ctx = 0
+				status = L1.PCall(narg, nres, handler)
+				ls.CI.K = savedK
+				ls.CI.Ctx = savedCtx
+			}
 
 		case "pcallk":
 			narg := p.getNum(L, L1)
 			nres := p.getNum(L, L1)
-			_ = p.getIndex(L, L1) // ctx
-			status = L1.PCall(narg, nres, 0) // simplified
+			ctx := p.getIndex(L, L1)
+			// Set continuation on current CI, then use PCallK (PATH B when yieldable)
+			{
+				ls := L1.Internal.(*state.LuaState)
+				ls.CI.K = testCContinuation
+				ls.CI.Ctx = ctx
+			}
+			status = L1.PCall(narg, nres, 0)
 
 		case "pop":
 			L1.Pop(p.getNum(L, L1))
@@ -624,8 +662,12 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "yieldk":
 			nres := p.getNum(L, L1)
-			_ = p.getIndex(L, L1) // ctx
-			return L1.Yield(nres) // simplified
+			ctx := p.getIndex(L, L1)
+			// Set continuation directly on CI, then yield (Yield with nil k won't overwrite)
+			ls := L1.Internal.(*state.LuaState)
+			ls.CI.K = testCContinuation
+			ls.CI.Ctx = ctx
+			return L1.Yield(nres)
 
 		case "toclose":
 			// lua_toclose — mark slot as to-be-closed
