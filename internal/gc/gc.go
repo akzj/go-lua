@@ -281,9 +281,9 @@ func getWeakMode(t *table.Table) byte {
 	return t.WeakMode
 }
 
-// isCleared checks if a GCObject value is "cleared" (dead — has the old white).
-// Used to determine if weak table entries should be removed.
-// Only objects with the "other" white (dead white) are considered cleared.
+// isCleared checks if a GCObject value is "cleared" (dead — still white).
+// Called during atomic phase after all reachable objects are marked BLACK.
+// Any white object at that point is dead. Matches C Lua's iscleared().
 func isCleared(g *state.GlobalState, obj object.GCObject) bool {
 	if obj == nil {
 		return false // nil is never "cleared"
@@ -292,9 +292,7 @@ func isCleared(g *state.GlobalState, obj object.GCObject) bool {
 	if _, ok := obj.(*object.LuaString); ok {
 		return false
 	}
-	h := obj.GC()
-	otherwhite := g.CurrentWhite ^ object.WhiteBits
-	return h.Marked&object.WhiteBits == otherwhite && h.Marked&object.BlackBit == 0
+	return obj.GC().IsWhite()
 }
 
 // linkGCList appends a table to a GC slice (weak, ephemeron, allweak, grayagain).
@@ -730,10 +728,9 @@ func otherWhite(g *state.GlobalState) byte {
 }
 
 // isDeadMark checks if a mark byte indicates a dead object.
+// Matches C Lua's isdeadm macro: (m) & (ow).
 func isDeadMark(otherwhite byte, marked byte) bool {
-	// An object is dead if it has the "other" white color
-	// (i.e., it was white at the start of the cycle and never marked)
-	return marked&object.WhiteBits == otherwhite && marked&object.BlackBit == 0
+	return marked&otherwhite != 0
 }
 
 // ---------------------------------------------------------------------------
@@ -744,9 +741,10 @@ func isDeadMark(otherwhite byte, marked byte) bool {
 // These objects have __gc metamethods and need finalization.
 // Objects are appended to the END of tobefnz to preserve finobj order
 // (most recently created first = LIFO finalization order).
-// Mirrors C Lua's separatetobefnz which uses findlast + append.
+// Mirrors C Lua's separatetobefnz which uses iswhite(curr) (not isdeadm).
+// Called during atomic phase after all reachable objects are marked BLACK.
+// Any white object is dead and needs finalization.
 func separateTobeFnz(g *state.GlobalState) {
-	otherwhite := otherWhite(g)
 	// Find the tail of tobefnz list (to append, not prepend)
 	lastnext := &g.TobeFnz
 	for *lastnext != nil {
@@ -756,8 +754,8 @@ func separateTobeFnz(g *state.GlobalState) {
 	for *p != nil {
 		obj := *p
 		h := obj.GC()
-		if isDeadMark(otherwhite, h.Marked) {
-			// Dead — move to end of tobefnz
+		if h.IsWhite() {
+			// Dead (white = not marked) — move to end of tobefnz
 			*p = h.Next
 			h.Next = nil
 			*lastnext = obj
@@ -1048,11 +1046,8 @@ func SingleStep(g *state.GlobalState, L *state.LuaState) int64 {
 	case object.GCSpause:
 		// Reset ephemeron counter for this cycle
 		g.EphemeronCount = 0
-		// Flip white at cycle start (restartcollection).
-		// Objects created before this point have the OLD white → candidates.
-		// Objects created during mark get the NEW white → survive this cycle.
-		// A second flip happens at the end of atomic() to prepare for sweep.
-		g.CurrentWhite ^= object.WhiteBits
+		// C Lua's restartcollection does NOT flip white here.
+		// The only white flip happens at the end of atomic().
 		// Mark roots, enter propagate
 		markRoots(g)
 		g.GCState = object.GCSpropagate
