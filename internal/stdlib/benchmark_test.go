@@ -172,3 +172,95 @@ func BenchmarkGC(b *testing.B) {
 		L.Close()
 	}
 }
+
+// BenchmarkConcatOperator — string .. operator (VM OP_CONCAT path)
+func BenchmarkConcatOperator(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            local s = ""
+            for i = 1, 1000 do
+                s = s .. "x"
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkConcatMulti — multi-value concat (a .. b .. c .. d)
+func BenchmarkConcatMulti(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            local result
+            for i = 1, 1000 do
+                result = "a" .. "b" .. "c" .. "d" .. "e" .. "f"
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkCoroutineCreate — coroutine creation overhead
+func BenchmarkCoroutineCreate(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            for i = 1, 10000 do
+                coroutine.create(function() end)
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkCoroutineYieldResume — yield/resume cycle overhead
+func BenchmarkCoroutineYieldResume(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            local function gen()
+                for i = 1, 10000 do
+                    coroutine.yield(i)
+                end
+            end
+            local co = coroutine.create(gen)
+            while coroutine.resume(co) do end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkCoroutineCreateResumeFinish — full lifecycle: create, resume once, finish
+func BenchmarkCoroutineCreateResumeFinish(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            for i = 1, 10000 do
+                local co = coroutine.create(function() return i end)
+                coroutine.resume(co)
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
