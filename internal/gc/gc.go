@@ -636,6 +636,12 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			if h.ObjSize > 0 {
 				g.GCTotalBytes -= h.ObjSize
 			}
+			// Remove dead strings from the interning table
+			if g.SweepStringFn != nil {
+				if _, ok := obj.(*object.LuaString); ok {
+					g.SweepStringFn(obj)
+				}
+			}
 			// Return dead tables to the pool for reuse
 			if t, ok := obj.(*table.Table); ok {
 				table.PutTable(t)
@@ -674,6 +680,12 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 			h.Next = nil
 			if h.ObjSize > 0 {
 				g.GCTotalBytes -= h.ObjSize
+			}
+			// Remove dead strings from the interning table
+			if g.SweepStringFn != nil {
+				if _, ok := obj.(*object.LuaString); ok {
+					g.SweepStringFn(obj)
+				}
 			}
 			if t, ok := obj.(*table.Table); ok {
 				table.PutTable(t)

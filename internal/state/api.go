@@ -259,6 +259,11 @@ type GlobalState struct {
 	// Signature: func(L *LuaState) — runs GCCollect.
 	GCDrainFn func(L *LuaState)
 
+	// SweepStringFn is called by GC sweep when a dead short string is found.
+	// It removes the string from the string interning table.
+	// Set by the API layer to avoid circular imports (gc → luastring).
+	SweepStringFn func(obj object.GCObject)
+
 	// GCClosed is set true when the state is closing — suppresses further GC.
 	GCClosed  bool
 	// GCStopped is set true by collectgarbage("stop") — suppresses periodic GC.

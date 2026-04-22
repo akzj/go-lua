@@ -166,15 +166,30 @@ func NewState() *State {
 		gc.SetPause(g)
 		// Drain pending finalizers — objects moved to tobefnz by
 		// separateTobeFnz in FullGC need their __gc called.
-		wrapper := &State{Internal: thread}
-		wrapper.callAllPendingFinalizers()
+		pub, _ := thread.APIState.(*State)
+		if pub == nil {
+			pub = &State{Internal: thread}
+			thread.APIState = pub
+		}
+		pub.callAllPendingFinalizers()
 		// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 	}
 
 	// GCDrainFn: just drain pending finalizers.
 	ls.Global.GCDrainFn = func(thread *state.LuaState) {
-		wrapper := &State{Internal: thread}
-		wrapper.callAllPendingFinalizers()
+		pub, _ := thread.APIState.(*State)
+		if pub == nil {
+			pub = &State{Internal: thread}
+			thread.APIState = pub
+		}
+		pub.callAllPendingFinalizers()
+	}
+
+	// SweepStringFn: remove dead strings from the interning table during GC sweep.
+	ls.Global.SweepStringFn = func(obj object.GCObject) {
+		if ts, ok := obj.(*object.LuaString); ok {
+			L.strtab().RemoveString(ts)
+		}
 	}
 
 	return L
