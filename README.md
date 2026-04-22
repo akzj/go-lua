@@ -26,27 +26,27 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 
 ## Performance
 
-Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (median of 3 runs, `os.clock()` CPU time):
+Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (median of 5 runs, `os.clock()` CPU time):
 
 | Benchmark | C Lua (ms) | go-lua (ms) | Ratio |
 |-----------|----------:|------------:|------:|
-| Fibonacci (recursive) | 23.34 | 29.69 | **1.27×** |
-| Pattern Match | 23.60 | 39.85 | **1.69×** |
-| Concat Multi | 6.46 | 11.16 | **1.73×** |
-| Closure Creation | 33.17 | 69.71 | **2.10×** |
-| For Loop | 118.19 | 259.58 | **2.20×** |
-| Method Call | 33.62 | 81.01 | **2.41×** |
-| GC | 22.38 | 69.10 | **3.09×** |
-| Concat Operator | 2.90 | 10.34 | **3.57×** |
-| Coroutine Create/Resume/Finish | 73.24 | 337.71 | **4.61×** |
-| Coroutine Create | 42.95 | 225.46 | **5.25×** |
-| Coroutine Yield/Resume | 35.14 | 199.60 | **5.68×** |
-| Table Ops | 8.70 | 52.89 | **6.08×** |
-| String Concat | 13.35 | 96.64 | **7.24×** |
-| **Geometric Mean** | | | **3.13×** |
+| Fibonacci (recursive) | 19.52 | 24.98 | **1.28×** |
+| Pattern Match | 22.90 | 38.11 | **1.66×** |
+| Concat Multi | 5.67 | 11.12 | **1.96×** |
+| For Loop | 121.23 | 250.30 | **2.06×** |
+| Method Call | 35.44 | 76.63 | **2.16×** |
+| Closure Creation | 33.03 | 71.69 | **2.17×** |
+| Concat Operator | 5.85 | 13.46 | **2.30×** |
+| String Concat | 10.22 | 37.15 | **3.63×** |
+| Coroutine Create/Resume/Finish | 72.50 | 337.42 | **4.65×** |
+| Coroutine Create | 44.84 | 222.50 | **4.96×** |
+| Coroutine Yield/Resume | 34.66 | 198.95 | **5.74×** |
+| GC | 26.33 | 167.50 | **6.36×** |
+| Table Ops | 10.45 | 88.94 | **8.51×** |
+| **Geometric Mean** | | | **3.10×** |
 
-> Pure computation (fibonacci, pattern matching, for-loops) runs within **1.3–2.2×** of C Lua.
-> Allocation-heavy workloads (coroutines, tables, string concat) are **4–7×** due to Go runtime overhead.
+> Pure computation (fibonacci, pattern matching, for-loops) runs within **1.3–2.1×** of C Lua.
+> Allocation-heavy workloads (coroutines, tables, string concat) are **4–9×** due to Go runtime overhead.
 
 ### Optimization Highlights
 
@@ -57,6 +57,9 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 - **Pre-computed object sizes** — Eliminates type assertions during GC sweep.
 - **Capacity-based stack growth** — Stack grows within existing capacity without reallocation.
 - **CallInfo slab allocation** — Batch-allocates 32 CallInfo structs at a time.
+- **`strings.Join` for concat** — Multi-value `..` operator uses `strings.Join` instead of repeated allocation (Concat Multi 1.96×).
+- **Stack-alloc string parts** — Small concat operations use stack-allocated arrays to avoid heap escapes.
+- **Table fast-path updates** — `Table.SetIfExists` skips hash insertion when the key already exists.
 
 ## Quick Start
 
@@ -136,6 +139,53 @@ internal/
 ├── stdlib/         — Standard library implementations + testC library
 ├── table/          — Hash table with Brent's algorithm
 └── vm/             — Virtual machine (execute, do, debug)
+```
+
+## Command-Line Interpreter (`cmd/glua`)
+
+A standalone Lua 5.5 interpreter powered by go-lua, with interactive REPL support.
+
+### Install
+
+```bash
+go install github.com/akzj/go-lua/cmd/glua@latest
+```
+
+### Usage
+
+```
+glua [options] [script [args...]]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-e "code"` | Execute a Lua string |
+| `-i` | Enter interactive REPL after executing scripts |
+| `-v` | Print version and exit |
+| `-` | Read script from stdin |
+
+When invoked with no arguments, `glua` enters an interactive REPL.
+
+### Examples
+
+```bash
+# Run a Lua script
+glua hello.lua
+
+# One-liner
+glua -e 'print("Hello from go-lua!")'
+
+# Pipe from stdin
+echo 'print(1+2)' | glua -
+
+# Interactive REPL
+glua
+> 1 + 2
+3
+> for i = 1, 3 do print(i) end
+1
+2
+3
 ```
 
 ## Testing
