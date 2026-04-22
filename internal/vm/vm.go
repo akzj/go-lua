@@ -242,7 +242,9 @@ startfunc:
 			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
 				h := upval.Obj.(*table.Table)
-				val, found := h.Get(rc)
+				// Fast path: rc is always a string constant from k[]
+				key := rc.Obj.(*object.LuaString)
+				val, found := h.GetStr(key)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
 				} else {
