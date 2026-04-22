@@ -14,7 +14,7 @@ import (
 // This is for coverage mapping — individual failures are logged as skips.
 func TestTestesWide(t *testing.T) {
 	files := []string{
-		// Already passing (12)
+		// Already passing (12 + 3 new)
 		"strings.lua",
 		"math.lua",
 		"sort.lua",
@@ -27,6 +27,9 @@ func TestTestesWide(t *testing.T) {
 		"tpack.lua",
 		"code.lua",
 		"api.lua",
+		"big.lua",
+		"bwcoercion.lua",
+		"verybig.lua",
 		// Advancing but not yet passing
 		"nextvar.lua",
 		"pm.lua",
