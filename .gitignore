@@ -34,3 +34,6 @@ go.work.sum
 # Compiled C object files from lua-master reference
 lua-master/*.o
 *.prof
+
+# Benchmark raw data (results go in commit messages, not tracked)
+benchmarks/
