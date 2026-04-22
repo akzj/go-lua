@@ -160,7 +160,7 @@ func UpvalueIndex(i int) int {
 
 // Registry keys for well-known values.
 const (
-	RIdxMainThread = 1 // registry index of main thread
+	RIdxMainThread = 3 // registry index of main thread (LUA_RIDX_MAINTHREAD)
 	RIdxGlobals    = 2 // registry index of global table
 )
 
