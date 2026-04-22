@@ -533,7 +533,17 @@ startfunc:
 			nb, ok1 := toNumberNSFloat(rb)
 			nc, ok2 := toNumberNSFloat(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				// Fast path for small integer exponents (avoids expensive math.Pow)
+				switch nc {
+				case 2:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb)
+				case 0.5:
+					L.Stack[ra].Val = object.MakeFloat(math.Sqrt(nb))
+				case 3:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb * nb)
+				default:
+					L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				}
 				ci.SavedPC++
 			}
 
@@ -688,7 +698,17 @@ startfunc:
 			nb, ok1 := toNumberNSFloat(rb)
 			nc, ok2 := toNumberNSFloat(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				// Fast path for small integer exponents (avoids expensive math.Pow)
+				switch nc {
+				case 2:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb)
+				case 0.5:
+					L.Stack[ra].Val = object.MakeFloat(math.Sqrt(nb))
+				case 3:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb * nb)
+				default:
+					L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				}
 				ci.SavedPC++
 			}
 
