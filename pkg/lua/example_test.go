@@ -2,6 +2,7 @@ package lua_test
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -801,5 +802,133 @@ func TestConstants(t *testing.T) {
 	}
 	if lua.NoRef != -2 {
 		t.Errorf("NoRef should be -2, got %d", lua.NoRef)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SetHook / GetHook / LoadFile tests
+// ---------------------------------------------------------------------------
+
+func TestSetHookLine(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	var lines []int
+	L.SetHook(func(L *lua.State, event int, line int) {
+		if event == lua.HookEventLine {
+			lines = append(lines, line)
+		}
+	}, lua.MaskLine, 0)
+	if err := L.DoString("local x = 1\nlocal y = 2\nlocal z = x + y\n"); err != nil {
+		t.Fatalf("DoString failed: %v", err)
+	}
+	if len(lines) == 0 {
+		t.Error("expected line hooks to fire, got none")
+	}
+}
+
+func TestSetHookCount(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	countHits := 0
+	L.SetHook(func(L *lua.State, event int, line int) {
+		if event == lua.HookEventCount {
+			countHits++
+		}
+	}, lua.MaskCount, 10)
+	if err := L.DoString("for i = 1, 100 do end"); err != nil {
+		t.Fatalf("DoString failed: %v", err)
+	}
+	if countHits == 0 {
+		t.Error("expected count hooks to fire, got none")
+	}
+}
+
+func TestSetHookCall(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	callHits := 0
+	L.SetHook(func(L *lua.State, event int, line int) {
+		if event == lua.HookEventCall {
+			callHits++
+		}
+	}, lua.MaskCall, 0)
+	if err := L.DoString("local function f() end\nf()\nf()\n"); err != nil {
+		t.Fatalf("DoString failed: %v", err)
+	}
+	if callHits < 2 {
+		t.Errorf("expected at least 2 call hooks, got %d", callHits)
+	}
+}
+
+func TestSetHookClear(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	hits := 0
+	L.SetHook(func(L *lua.State, event int, line int) {
+		hits++
+	}, lua.MaskLine|lua.MaskCall, 0)
+	_ = L.DoString("local x = 1")
+	before := hits
+	L.SetHook(nil, 0, 0) // clear hook
+	_ = L.DoString("local y = 2")
+	if hits != before {
+		t.Errorf("hooks should not fire after SetHook(nil), got %d more hits", hits-before)
+	}
+}
+
+func TestGetHook(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	f, mask, count := L.GetHook()
+	if f != nil || mask != 0 || count != 0 {
+		t.Error("expected nil hook initially")
+	}
+	myHook := func(L *lua.State, event int, line int) {}
+	L.SetHook(myHook, lua.MaskLine|lua.MaskCall, 42)
+	f, mask, count = L.GetHook()
+	if f == nil {
+		t.Error("expected non-nil hook after SetHook")
+	}
+	if mask != lua.MaskLine|lua.MaskCall {
+		t.Errorf("expected mask %d, got %d", lua.MaskLine|lua.MaskCall, mask)
+	}
+	if count != 42 {
+		t.Errorf("expected count 42, got %d", count)
+	}
+}
+
+func TestLoadFile(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	tmpFile := t.TempDir() + "/test.lua"
+	if err := os.WriteFile(tmpFile, []byte("return 42\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	status := L.LoadFile(tmpFile, "t")
+	if status != lua.OK {
+		msg, _ := L.ToString(-1)
+		t.Fatalf("LoadFile failed: %s", msg)
+	}
+	callStatus := L.PCall(0, 1, 0)
+	if callStatus != lua.OK {
+		msg, _ := L.ToString(-1)
+		t.Fatalf("PCall failed: %s", msg)
+	}
+	val, ok := L.ToInteger(-1)
+	if !ok || val != 42 {
+		t.Errorf("expected 42, got %d (ok=%v)", val, ok)
+	}
+}
+
+func TestLoadFileNotFound(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+	status := L.LoadFile("/nonexistent/path.lua", "t")
+	if status != lua.ErrFile {
+		t.Errorf("expected ErrFile (%d), got %d", lua.ErrFile, status)
+	}
+	msg, _ := L.ToString(-1)
+	if msg == "" {
+		t.Error("expected error message on stack")
 	}
 }

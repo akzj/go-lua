@@ -146,6 +146,41 @@ func (L *State) DoString(code string) error {
 	return nil
 }
 
+// LoadFile loads a Lua file without executing it.
+// Pushes the compiled chunk as a function on success.
+// Returns a status code (StatusOK on success, or an error code).
+func (L *State) LoadFile(filename string, mode string) int {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		L.PushString(fmt.Sprintf("cannot open %s: %v", filename, err))
+		return StatusErrFile
+	}
+	code := string(data)
+	if len(code) > 1 && code[0] == '#' {
+		if idx := strings.Index(code, "\n"); idx >= 0 {
+			code = code[idx+1:]
+		}
+	}
+	dir := filepath.Dir(filename)
+	if dir != "" {
+		L.GetGlobal("package")
+		if !L.IsNil(-1) {
+			L.GetField(-1, "path")
+			oldPath, _ := L.ToString(-1)
+			L.Pop(1)
+			newPath := dir + string(filepath.Separator) + "?.lua;" + oldPath
+			L.PushString(newPath)
+			L.SetField(-2, "path")
+		}
+		L.Pop(1)
+	}
+	source := "@" + filename
+	if mode == "" {
+		mode = "bt"
+	}
+	return L.Load(code, source, mode)
+}
+
 // DoFile loads and executes a file.
 func (L *State) DoFile(filename string) error {
 	data, err := os.ReadFile(filename)
