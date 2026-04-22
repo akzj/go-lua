@@ -252,9 +252,10 @@ const (
 	ErrSyntax = 3 // syntax error during compilation
 	ErrMem    = 4 // memory allocation error
 	ErrErr    = 5 // error while running the message handler
+	ErrFile   = 6 // file I/O error (from [State.LoadFile])
 )
 
-// Hook event masks for [State.SetHookFields].
+// Hook event masks for [State.SetHook].
 // Combine with bitwise OR to set multiple hooks.
 const (
 	MaskCall  = 1 << 0 // call hook — triggered on every function call
