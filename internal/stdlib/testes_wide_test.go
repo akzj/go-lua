@@ -302,11 +302,10 @@ func TestTestesWide(t *testing.T) {
 					"do   -- testing errors during GC\n  warn(\"@off\")\n  collectgarbage(\"stop\")",
 					"if false then   -- SKIP: GC errors during collection (Go GC)\n  warn(\"@off\")\n  collectgarbage(\"stop\")",
 					1)
-				// Patch 8: Multi-state section — now enabled (newstate/doremote implemented)
-				// Skip the selective loadlib test (Go can't do selective preloading)
+				// Patch 8: Skip selective loadlib test (require is in baselib, not packagelib)
 				src = strings.Replace(src,
 					"T.loadlib(L1, 2, ~2)    -- load only 'package', preload all others\na, b, c = T.doremote(L1, [[\n  string = require'string'\n  local initialG = _G   -- not loaded yet\n  local a = require'_G'; assert(a == _G and require(\"_G\") == a)\n  assert(initialG == nil and io == nil)   -- now we have 'assert'\n  io = require'io'; assert(type(io.read) == \"function\")\n  assert(require(\"io\") == io)\n  a = require'table'; assert(type(a.insert) == \"function\")\n  a = require'debug'; assert(type(a.getlocal) == \"function\")\n  a = require'math'; assert(type(a.sin) == \"function\")\n  return string.sub('okinama', 1, 2)\n]])\nassert(a == \"ok\")",
-					"-- SKIP: selective loadlib test (Go doesn't support preloading)\n-- T.loadlib(L1, 2, ~2)",
+					"-- SKIP: selective loadlib test (require is in baselib, not packagelib like C Lua)\n-- T.loadlib(L1, 2, ~2)",
 					1)
 				// Patch 9: Skip to-be-closed section (partially working, closeslot pop test still fails)
 				src = strings.Replace(src,
