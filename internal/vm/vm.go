@@ -339,7 +339,14 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				tableSetWithMeta(L, tval, object.MakeInteger(b), rc)
+				h := tval.Obj.(*table.Table)
+				// Fast path: integer key in array range, slot exists, no metamethod
+				if h.Metatable == nil && b >= 1 && int(b) <= len(h.Array) && !h.Array[b-1].IsNil() {
+					h.Array[b-1] = rc
+					gc.BarrierBack(L.Global, h)
+				} else {
+					tableSetWithMeta(L, tval, object.MakeInteger(b), rc)
+				}
 			} else {
 				FinishSet(L, tval, object.MakeInteger(b), rc)
 			}
