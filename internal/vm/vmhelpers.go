@@ -4,7 +4,6 @@ package vm
 import (
 	"math"
 	"strings"
-	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/closure"
 	"github.com/akzj/go-lua/internal/gc"
@@ -1381,7 +1380,7 @@ func adjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 		L.Global.LinkGC(t) // V5: register in allgc chain
 		size := t.EstimateBytes()
 		t.GCHeader.ObjSize = size
-		atomic.AddInt64(&L.Global.GCTotalBytes, size)
+		L.Global.GCTotalBytes += size
 		// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 		// Set t.n = nextra
 		st := L.Global.StringTable.(*luastring.StringTable)

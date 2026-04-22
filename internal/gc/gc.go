@@ -16,8 +16,6 @@
 package gc
 
 import (
-	"sync/atomic"
-
 	"github.com/akzj/go-lua/internal/closure"
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/state"
@@ -636,7 +634,13 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			h.Next = nil // help Go GC
 			// Decrement byte counter using pre-computed size (avoids type assertion)
 			if h.ObjSize > 0 {
-				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
+				g.GCTotalBytes -= h.ObjSize
+			}
+			// Remove dead strings from the interning table
+			if g.SweepStringFn != nil {
+				if _, ok := obj.(*object.LuaString); ok {
+					g.SweepStringFn(obj)
+				}
 			}
 			// Return dead tables to the pool for reuse
 			if t, ok := obj.(*table.Table); ok {
@@ -675,7 +679,13 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 			*g.SweepGC = h.Next
 			h.Next = nil
 			if h.ObjSize > 0 {
-				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
+				g.GCTotalBytes -= h.ObjSize
+			}
+			// Remove dead strings from the interning table
+			if g.SweepStringFn != nil {
+				if _, ok := obj.(*object.LuaString); ok {
+					g.SweepStringFn(obj)
+				}
 			}
 			if t, ok := obj.(*table.Table); ok {
 				table.PutTable(t)
@@ -994,7 +1004,7 @@ func atomicPhase(g *state.GlobalState, L *state.LuaState) int64 {
 	clearByValues(g, g.AllWeak, origAllLen)
 
 	// Update GCEstimate with current live bytes
-	g.GCEstimate = atomic.LoadInt64(&g.GCTotalBytes)
+	g.GCEstimate = g.GCTotalBytes
 
 	return work
 }
@@ -1176,7 +1186,7 @@ func GCStep(g *state.GlobalState, L *state.LuaState) {
 //   debt = threshold - current_total_bytes
 // With default pause=200, GC triggers when memory reaches 2x live data.
 func SetPause(g *state.GlobalState) {
-	estimate := atomic.LoadInt64(&g.GCTotalBytes)
+	estimate := g.GCTotalBytes
 	if estimate < 1 {
 		estimate = 1
 	}

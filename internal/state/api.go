@@ -185,6 +185,11 @@ type LuaState struct {
 	// Saved state for hook yield resume (survives panic/yield)
 	HookSavedTop  int  // L.Top before hook dispatch
 	HookSavedCITop int // ci.Top before hook dispatch
+
+	// APIState caches the public api.State wrapper for this LuaState.
+	// This avoids allocating a new &State{Internal: ls} on every C function call.
+	// Set once during state creation; type is any to avoid circular import.
+	APIState any
 }
 
 // Hook event constants (matches C LUA_HOOK*)
@@ -238,7 +243,7 @@ type GlobalState struct {
 	// GCTotalBytes tracks total Lua-level object allocations (bytes).
 	// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
 	// Incremented on allocation, decremented by V5 GC sweep when dead
-	// objects are removed from allgc. Access must use sync/atomic.
+	// objects are removed from allgc. Single-threaded access only.
 	GCTotalBytes int64
 
 	// GCAllocCount counts table allocations since the last GC cycle.
@@ -253,6 +258,11 @@ type GlobalState struct {
 	// GCDrainFn is set by the API layer to run a lightweight GC cycle.
 	// Signature: func(L *LuaState) — runs GCCollect.
 	GCDrainFn func(L *LuaState)
+
+	// SweepStringFn is called by GC sweep when a dead short string is found.
+	// It removes the string from the string interning table.
+	// Set by the API layer to avoid circular imports (gc → luastring).
+	SweepStringFn func(obj object.GCObject)
 
 	// GCClosed is set true when the state is closing — suppresses further GC.
 	GCClosed  bool
