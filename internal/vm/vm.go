@@ -322,7 +322,20 @@ startfunc:
 			}
 			ra = 0 // OP_SETTABUP uses A for upvalue index, not register
 			if upval.IsTable() {
-				tableSetWithMeta(L, upval, rb, rc)
+				h := upval.Obj.(*table.Table)
+				// Fast path: string key (always from k[]), no metamethod
+				if h.Metatable == nil {
+					if h.SetIfExists(rb, rc) {
+						gc.BarrierBack(L.Global, h)
+					} else {
+						key := rb.Obj.(*object.LuaString)
+						h.SetStr(key, rc)
+						trackTableResize(L.Global, h)
+						gc.BarrierBack(L.Global, h)
+					}
+				} else {
+					tableSetWithMeta(L, upval, rb, rc)
+				}
 			} else {
 				FinishSet(L, upval, rb, rc)
 			}
