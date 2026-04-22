@@ -26,6 +26,12 @@ func sweep2old(g *state.GlobalState, p *object.GCObject) {
 			if h.ObjSize > 0 {
 				g.GCTotalBytes -= h.ObjSize
 			}
+			// Remove dead strings from the interning table
+			if g.SweepStringFn != nil {
+				if _, ok := obj.(*object.LuaString); ok {
+					g.SweepStringFn(obj)
+				}
+			}
 		} else {
 			// Alive — make old
 			h.Age = object.G_OLD
@@ -81,6 +87,12 @@ func sweepgen(g *state.GlobalState, p *object.GCObject, limit object.GCObject,
 			h.Next = nil
 			if h.ObjSize > 0 {
 				g.GCTotalBytes -= h.ObjSize
+			}
+			// Remove dead strings from the interning table
+			if g.SweepStringFn != nil {
+				if _, ok := obj.(*object.LuaString); ok {
+					g.SweepStringFn(obj)
+				}
 			}
 		} else {
 			// Alive — correct mark and age

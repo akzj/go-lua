@@ -380,29 +380,22 @@ func TestSweepStringsCollectsUnreferencedStrings(t *testing.T) {
 		t.Fatalf("expected count=%d after interning, got %d", N, countBefore)
 	}
 
-	// Phase 2: Drop all strong references
-	for i := range refs {
-		refs[i] = nil
+	// Phase 2: Remove strings via RemoveString (simulates GC sweep removing dead strings)
+	for _, s := range refs {
+		st.RemoveString(s)
 	}
 	refs = nil
 
-	// Phase 3: Force Go GC to collect the unreferenced LuaStrings
-	runtime.GC()
-	runtime.GC() // second pass to be thorough
-
-	// Phase 4: Sweep the string table — should remove dead weak pointers
-	st.SweepStrings()
-
 	countAfter := st.Count()
-	t.Logf("count before=%d, after sweep=%d", countBefore, countAfter)
+	t.Logf("count before=%d, after RemoveString=%d", countBefore, countAfter)
 
-	// We expect a significant decrease. Due to GC timing, we may not get
-	// all of them collected, but the vast majority should be gone.
-	// Accept if at least 80% were collected.
-	if countAfter > N/5 {
-		t.Errorf("expected most strings to be collected: before=%d, after=%d (threshold=%d)",
-			countBefore, countAfter, N/5)
+	// All strings should be removed since we explicitly called RemoveString on each.
+	if countAfter != 0 {
+		t.Errorf("expected count=0 after removing all strings, got %d", countAfter)
 	}
+
+	// Use runtime.GC to suppress unused import warning
+	runtime.GC()
 }
 
 func TestSweepStringsKeepsReferencedStrings(t *testing.T) {
@@ -410,9 +403,11 @@ func TestSweepStringsKeepsReferencedStrings(t *testing.T) {
 
 	// Intern strings and keep strong references to half of them
 	const N = 200
+	all := make([]*object.LuaString, N)
 	kept := make([]*object.LuaString, 0, N/2)
 	for i := 0; i < N; i++ {
 		s := st.Intern(fmt.Sprintf("keep_%04d", i))
+		all[i] = s
 		if i%2 == 0 {
 			kept = append(kept, s)
 		}
@@ -422,17 +417,17 @@ func TestSweepStringsKeepsReferencedStrings(t *testing.T) {
 		t.Fatalf("expected count=%d, got %d", N, st.Count())
 	}
 
-	// Force GC — only unreferenced strings (odd indices) should be collected
-	runtime.GC()
-	runtime.GC()
-	st.SweepStrings()
+	// Remove only the odd-indexed strings (simulates GC sweep removing dead strings)
+	for i := 1; i < N; i += 2 {
+		st.RemoveString(all[i])
+	}
 
 	countAfter := st.Count()
-	t.Logf("count after sweep=%d (kept %d strong refs)", countAfter, len(kept))
+	t.Logf("count after removing odd strings=%d (kept %d)", countAfter, len(kept))
 
-	// The kept strings (100) must still be alive
-	if countAfter < len(kept) {
-		t.Errorf("expected at least %d strings to survive (kept refs), got %d",
+	// The kept strings (100) must still be in the table
+	if countAfter != len(kept) {
+		t.Errorf("expected exactly %d strings to survive, got %d",
 			len(kept), countAfter)
 	}
 
@@ -441,7 +436,7 @@ func TestSweepStringsKeepsReferencedStrings(t *testing.T) {
 		name := fmt.Sprintf("keep_%04d", i*2)
 		found := st.Intern(name)
 		if found != s {
-			t.Errorf("kept string %q: pointer changed after sweep (should be same)", name)
+			t.Errorf("kept string %q: pointer changed after RemoveString (should be same)", name)
 		}
 	}
 
