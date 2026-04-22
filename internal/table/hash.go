@@ -552,9 +552,6 @@ func initHashPart(t *Table, size int) {
 	t.Nodes = make([]node, actualSize)
 	t.LsizeNode = lsize
 	t.LastFree = actualSize
-	for i := range t.Nodes {
-		t.Nodes[i].KeyTT = object.TagNil
-		t.Nodes[i].Val = object.Nil
-		t.Nodes[i].Next = 0
-	}
+	// No explicit zeroing needed: make() returns zeroed memory, and
+	// all default values are zero: TagNil=0x00, Nil=TValue{Tt:0x00}, Next=0.
 }
