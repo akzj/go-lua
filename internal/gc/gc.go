@@ -551,6 +551,11 @@ func traverseThread(g *state.GlobalState, th *state.LuaState) {
 		markValue(g, th.Stack[i].Val)
 	}
 
+	// Mark hook function (if any)
+	if hookVal, ok := th.Hook.(object.TValue); ok {
+		markValue(g, hookVal)
+	}
+
 	// Mark open upvalues
 	if th.OpenUpval != nil {
 		if uv, ok := th.OpenUpval.(*closure.UpVal); ok {
@@ -648,6 +653,7 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 			case *closure.UpVal:
 				closure.PutUpVal(o)
 			case *state.LuaState:
+				closure.CloseUpvals(o, 0) // close all open upvalues before pooling
 				state.PutLuaState(o)
 			}
 			freed++
@@ -698,6 +704,7 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 			case *closure.UpVal:
 				closure.PutUpVal(o)
 			case *state.LuaState:
+				closure.CloseUpvals(o, 0) // close all open upvalues before pooling
 				state.PutLuaState(o)
 			}
 		} else {
