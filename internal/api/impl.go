@@ -150,6 +150,7 @@ func NewState() *State {
 	// loops. The debt-based pacer (GCPause/GCDebt) controls how often
 	// this runs — with GCPause=250, it triggers when memory reaches
 	// 2.5x live data, which is infrequent enough for good performance.
+	ls.Global.GCCountdown = 5000 // countdown for periodic GC safety net
 	ls.Global.GCStepFn = func(thread *state.LuaState) {
 		g := thread.Global
 		if g.GCRunning || g.GCRunningFinalizer || g.GCStopped {
