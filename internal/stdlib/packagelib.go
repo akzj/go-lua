@@ -218,9 +218,9 @@ func OpenPackage(L *luaapi.State) int {
 	L.PushString(string(os.PathSeparator) + "\n;\n?\n!\n-")
 	L.SetField(-2, "config")
 
-	// Set package.preload = {} (empty table for preloaded modules)
-	// C Lua: luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE)
-	L.CreateTable(0, 0)
+	// Set package.preload = registry["_PRELOAD"] (shared table)
+	// Mirrors C Lua: luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE)
+	L.GetSubTable(luaapi.RegistryIndex, "_PRELOAD")
 	L.SetField(-2, "preload")
 
 	// Create package.searchers table with 4 searcher functions.

@@ -1015,47 +1015,55 @@ func testClosestate(L *luaapi.State) int {
 
 func testLoadlib(L *luaapi.State) int {
 	// T.loadlib(L1, what, preload)
-	// what: bitmask of libs to open fully
-	// preload: bitmask of libs to preload (available via require)
-	// Bit mapping: 0=_G, 1=package, 2=coroutine, 3=table,
-	//   4=io, 5=os, 6=string, 7=math, 8=utf8, 9=debug
+	// what: bitmask of libs to open fully (via luaL_requiref)
+	// preload: bitmask of libs to preload (register in package.preload)
+	// Bit mapping matches C Lua's stdlibs order in linit.c:
+	//   0=_G, 1=package, 2=coroutine, 3=debug, 4=io, 5=math,
+	//   6=os, 7=string, 8=table, 9=utf8
 	ud := L.ToUserdata(1)
 	L1, ok := ud.(*luaapi.State)
 	if !ok {
 		return 0
 	}
 	what := int(L.OptInteger(2, 0))
-	preload := int(L.OptInteger(3, 0))
+	preloadMask := int(L.OptInteger(3, 0))
 
-	// Library openers in order matching C Lua's loadedlibs
+	// Library openers in order matching C Lua's stdlibs (linit.c)
 	type libEntry struct {
 		name string
-		open func(*luaapi.State) int
+		open luaapi.CFunction
 	}
 	libs := []libEntry{
 		{"_G", OpenBase},
 		{"package", OpenPackage},
 		{"coroutine", OpenCoroutineLib},
-		{"table", OpenTable},
+		{"debug", OpenDebug},
 		{"io", OpenIO},
+		{"math", OpenMath},
 		{"os", OpenOS},
 		{"string", OpenString},
-		{"math", OpenMath},
+		{"table", OpenTable},
 		{"utf8", OpenUTF8},
-		{"debug", OpenDebug},
 	}
+
+	// First, get/create the PRELOAD table for preload entries
+	L1.GetSubTable(luaapi.RegistryIndex, "_PRELOAD")
+	preloadIdx := L1.GetTop()
 
 	for i, lib := range libs {
 		bit := 1 << i
 		if what&bit != 0 {
-			// Load fully
-			lib.open(L1)
-		} else if preload&bit != 0 {
-			// Preload: register in package.preload so require() works
-			// For simplicity, just open it (Go doesn't have a clean preload mechanism)
-			lib.open(L1)
+			// Load fully: call via Require (= luaL_requiref with glb=true)
+			L1.Require(lib.name, lib.open, true)
+			L1.Pop(1) // remove module from stack
+		} else if preloadMask&bit != 0 {
+			// Preload: register opener in package.preload[name]
+			L1.PushCFunction(lib.open)
+			L1.SetField(preloadIdx, lib.name)
 		}
 	}
+	L1.Pop(1) // remove PRELOAD table
+
 	return 0
 }
 
