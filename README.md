@@ -3,12 +3,12 @@
 **Pure Go implementation of Lua 5.5.1 | 纯 Go 实现的 Lua 5.5.1 虚拟机**
 
 ![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-29%2F29_passing-brightgreen)
 ![Lua 5.5](https://img.shields.io/badge/Lua-5.5.1-blue?logo=lua&logoColor=white)
 ![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **25 of 26 official Lua 5.5 test suites** (including the C-API test suite) and achieves **near-parity performance** with the C reference implementation.
+A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **all 29 official Lua 5.5.1 test suites** (including the C-API test suite and generational GC tests) with a **3.1× geometric mean** vs C Lua on computation benchmarks.
 
 ---
 
@@ -22,30 +22,31 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 - **String interning** via `weak.Pointer` for memory-efficient string handling
 - **testC testing library** — 97 C-API-level instructions with multi-state testing (`newstate`/`closestate`/`doremote`)
 - **Public embedding API** — clean `pkg/lua/` package for external use
-- **~26,000 lines of source** across 13 internal packages, with **8,570 lines of tests**
+- **~30,500 lines of source** across 13 internal packages, with **~9,700 lines of tests**
 
 ## Performance
 
-### Computation — At Parity with C Lua 5.5.1
+Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (median of 3 runs, `os.clock()` CPU time):
 
-Benchmarked against C Lua 5.5.1 on the same hardware (Intel i7-14700KF):
+| Benchmark | C Lua (ms) | go-lua (ms) | Ratio |
+|-----------|----------:|------------:|------:|
+| Fibonacci (recursive) | 23.34 | 29.69 | **1.27×** |
+| Pattern Match | 23.60 | 39.85 | **1.69×** |
+| Concat Multi | 6.46 | 11.16 | **1.73×** |
+| Closure Creation | 33.17 | 69.71 | **2.10×** |
+| For Loop | 118.19 | 259.58 | **2.20×** |
+| Method Call | 33.62 | 81.01 | **2.41×** |
+| GC | 22.38 | 69.10 | **3.09×** |
+| Concat Operator | 2.90 | 10.34 | **3.57×** |
+| Coroutine Create/Resume/Finish | 73.24 | 337.71 | **4.61×** |
+| Coroutine Create | 42.95 | 225.46 | **5.25×** |
+| Coroutine Yield/Resume | 35.14 | 199.60 | **5.68×** |
+| Table Ops | 8.70 | 52.89 | **6.08×** |
+| String Concat | 13.35 | 96.64 | **7.24×** |
+| **Geometric Mean** | | | **3.13×** |
 
-| Benchmark | Go-Lua | C Lua 5.5.1 | Ratio |
-|---|---|---|---|
-| Numeric for-loop (1M iterations) | ~5ms | ~5ms | **1:1** |
-| Fibonacci(20) recursive | ~0.54ms | ~1ms | **Go faster** |
-| Method call (100K OOP dispatch) | ~7.8ms | ~7ms | **~1.1:1** |
-| Table ops (10K read/write) | ~1.6ms | — | — |
-| Closure creation (10K) | ~3.7ms | — | — |
-
-### GC Performance
-
-| Metric | Go-Lua | C Lua 5.5.1 | Notes |
-|---|---|---|---|
-| GC collect (50K live objects) | 780µs | 500µs | **1.6x** — close |
-| GC weak table clearing | 1.1ms | 1.2ms | **~1:1** — parity |
-| Object creation (100K tables) | ~97ms | ~15ms | 6.5x — Go allocator overhead |
-| Memory usage | 7042 KB | 5289 KB | 1.33x — TValue 32B vs C's 16B |
+> Pure computation (fibonacci, pattern matching, for-loops) runs within **1.3–2.2×** of C Lua.
+> Allocation-heavy workloads (coroutines, tables, string concat) are **4–7×** due to Go runtime overhead.
 
 ### Optimization Highlights
 
@@ -124,7 +125,7 @@ pkg/lua/            — Public embedding API (State, stack ops, type checks)
 internal/
 ├── api/            — Internal Lua API implementation
 ├── closure/        — Closures and upvalues
-├── gc/             — Mark-and-sweep garbage collector (V5)
+├── gc/             — Mark-and-sweep + generational garbage collector
 ├── lex/            — Lexer/scanner
 ├── luastring/      — String interning (weak.Pointer based)
 ├── metamethod/     — Metamethod dispatch and tag method cache
@@ -137,13 +138,11 @@ internal/
 └── vm/             — Virtual machine (execute, do, debug)
 ```
 
-## Test Suite
+## Testing
 
-**Go unit tests** plus **25 of 26 official Lua 5.5 test suites** from the reference implementation:
+Passes **29 of 29** official Lua 5.5.1 test suites (`lua-master/testes/`):
 
-`strings` · `math` · `sort` · `vararg` · `constructs` · `events` · `calls` · `locals` · `bitwise` · `tpack` · `code` · `api` · `nextvar` · `pm` · `db` · `attrib` · `coroutine` · `errors` · `goto` · `literals` · `utf8` · `closure` · `gc` · `files` · `cstack`
-
-> **Note:** `gengc.lua` is skipped — Go's garbage collector does not expose generational mode controls.
+`strings` · `math` · `sort` · `vararg` · `constructs` · `events` · `calls` · `locals` · `bitwise` · `tpack` · `code` · `api` · `big` · `bwcoercion` · `verybig` · `nextvar` · `pm` · `db` · `attrib` · `coroutine` · `errors` · `goto` · `literals` · `utf8` · `closure` · `gc` · `gengc` · `files` · `cstack`
 
 ### Running Tests
 
@@ -152,10 +151,13 @@ internal/
 go test ./... -count=1 -timeout 300s
 
 # Official Lua 5.5 test suite
-go test ./internal/stdlib/ -run TestTestesWide -v
+go test -run TestTestesWide -v ./internal/stdlib/
 
-# Performance benchmarks
+# Performance benchmarks (internal)
 go test ./internal/stdlib/ -bench=. -benchmem
+
+# Performance comparison vs C Lua
+./tools/luabench.sh 3
 ```
 
 ## Requirements
