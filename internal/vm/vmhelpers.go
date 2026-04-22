@@ -913,6 +913,20 @@ func makeInternedString(L *state.LuaState, s string) object.TValue {
 	return object.MakeString(internString(L, s))
 }
 
+// makeConcatString creates a non-interned (long) string for concat results.
+// Concat results are often ephemeral — skipping interning avoids the hash
+// table lookup + insertion overhead. Long strings still work correctly as
+// table keys (content comparison) and are properly GC-tracked.
+func makeConcatString(L *state.LuaState, s string) object.TValue {
+	ls := &object.LuaString{
+		Data:    s,
+		Hash_:   0,     // computed lazily if used as table key
+		IsShort: false, // non-interned — content comparison for equality
+	}
+	L.Global.LinkGC(ls) // register with GC so it gets swept
+	return object.MakeString(ls)
+}
+
 // Concat concatenates 'total' values on the stack from L.Top-total to L.Top-1.
 func Concat(L *state.LuaState, total int) {
 	if total == 1 {
@@ -977,7 +991,7 @@ func Concat(L *state.LuaState, total int) {
 			for _, p := range parts {
 				b.WriteString(p)
 			}
-			L.Stack[top-n].Val = makeInternedString(L, b.String())
+			L.Stack[top-n].Val = makeConcatString(L, b.String())
 			total -= n - 1
 			L.Top -= n - 1
 		}
