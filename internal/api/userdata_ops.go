@@ -109,3 +109,53 @@ func (L *State) SetUpvalue(funcIdx, n int) (string, bool) {
 	}
 	return "", false
 }
+
+// ---------------------------------------------------------------------------
+// Upvalue identity and joining
+// ---------------------------------------------------------------------------
+
+// UpvalueId returns a unique identifier for the upvalue n of the closure
+// at funcIdx. This can be used to check if two closures share the same
+// upvalue. Returns nil if the upvalue doesn't exist.
+// Mirrors: lua_upvalueid in lapi.c
+func (L *State) UpvalueId(funcIdx, n int) interface{} {
+	v := L.index2val(funcIdx)
+	if v == nil {
+		return nil
+	}
+	switch v.Tt {
+	case object.TagLuaClosure:
+		cl := v.Obj.(*closure.LClosure)
+		if n < 1 || n > len(cl.UpVals) {
+			return nil
+		}
+		return cl.UpVals[n-1] // pointer identity
+	case object.TagCClosure:
+		cc := v.Obj.(*closure.CClosure)
+		if n < 1 || n > len(cc.UpVals) {
+			return nil
+		}
+		return &cc.UpVals[n-1] // address of the TValue slot
+	}
+	return nil
+}
+
+// UpvalueJoin makes the n1-th upvalue of the closure at funcIdx1 refer to
+// the n2-th upvalue of the closure at funcIdx2.
+// Mirrors: lua_upvaluejoin in lapi.c
+func (L *State) UpvalueJoin(funcIdx1, n1, funcIdx2, n2 int) {
+	v1 := L.index2val(funcIdx1)
+	v2 := L.index2val(funcIdx2)
+	if v1 == nil || v2 == nil {
+		return
+	}
+	cl1, ok1 := v1.Obj.(*closure.LClosure)
+	cl2, ok2 := v2.Obj.(*closure.LClosure)
+	if !ok1 || !ok2 {
+		return
+	}
+	if n1 < 1 || n1 > len(cl1.UpVals) || n2 < 1 || n2 > len(cl2.UpVals) {
+		return
+	}
+	cl1.UpVals[n1-1] = cl2.UpVals[n2-1]
+}

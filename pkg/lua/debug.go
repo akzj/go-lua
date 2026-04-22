@@ -89,3 +89,23 @@ func (L *State) HookActive() bool {
 func (L *State) HasCallFrames() bool {
 	return L.s.HasCallFrames()
 }
+
+// ---------------------------------------------------------------------------
+// Upvalue identity and joining
+// ---------------------------------------------------------------------------
+
+// UpvalueId returns a unique identifier for upvalue n of the closure at funcIdx.
+// This can be used to check if two closures share the same upvalue.
+// Returns nil if the upvalue doesn't exist.
+// Mirrors: lua_upvalueid in lapi.c
+func (L *State) UpvalueId(funcIdx, n int) interface{} {
+	return L.s.UpvalueId(funcIdx, n)
+}
+
+// UpvalueJoin makes the n1-th upvalue of the closure at funcIdx1 refer to
+// the n2-th upvalue of the closure at funcIdx2.
+// Both closures must be Lua closures (not C closures).
+// Mirrors: lua_upvaluejoin in lapi.c
+func (L *State) UpvalueJoin(funcIdx1, n1, funcIdx2, n2 int) {
+	L.s.UpvalueJoin(funcIdx1, n1, funcIdx2, n2)
+}
