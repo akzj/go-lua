@@ -66,9 +66,9 @@ func (h *GCHeader) IsBlack() bool { return h.Marked&BlackBit != 0 }
 // IsGray returns true if the object is gray (marked but not yet traversed).
 func (h *GCHeader) IsGray() bool { return !h.IsWhite() && !h.IsBlack() }
 
-// IsDead returns true if the object is dead (has the "other" white color).
+// IsDead returns true if the object is dead. Matches C Lua's isdeadm: (m) & (ow).
 func (h *GCHeader) IsDead(otherwhite byte) bool {
-	return h.Marked&(WhiteBits|BlackBit) == otherwhite
+	return h.Marked&otherwhite != 0
 }
 
 // IsOld returns true if the object is older than SURVIVAL (OLD0, OLD1, OLD, TOUCHED1, TOUCHED2).
