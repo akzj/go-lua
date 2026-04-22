@@ -243,7 +243,7 @@ type GlobalState struct {
 	// GCTotalBytes tracks total Lua-level object allocations (bytes).
 	// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
 	// Incremented on allocation, decremented by V5 GC sweep when dead
-	// objects are removed from allgc. Access must use sync/atomic.
+	// objects are removed from allgc. Single-threaded access only.
 	GCTotalBytes int64
 
 	// GCAllocCount counts table allocations since the last GC cycle.

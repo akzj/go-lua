@@ -8,7 +8,6 @@ package vm
 
 import (
 	"math"
-	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/closure"
 	"github.com/akzj/go-lua/internal/gc"
@@ -40,7 +39,7 @@ func checkGC(g *state.GlobalState, L *state.LuaState) {
 		return
 	}
 	g.GCAllocCount++
-	if atomic.LoadInt64(&g.GCDebt) <= 0 || g.GCAllocCount%5000 == 0 {
+	if g.GCDebt <= 0 || g.GCAllocCount%5000 == 0 {
 		g.GCStepFn(L)
 	}
 }
@@ -365,7 +364,7 @@ startfunc:
 			L.Global.LinkGC(t) // V5: register in allgc chain
 			size := t.EstimateBytes()
 			t.GCHeader.ObjSize = size
-			atomic.AddInt64(&L.Global.GCTotalBytes, size)
+			L.Global.GCTotalBytes += size
 			// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 			L.Stack[ra].Val = object.TValue{Tt: object.TagTable, Obj: t}
 
