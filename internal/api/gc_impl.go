@@ -2,8 +2,6 @@
 package api
 
 import (
-	"sync/atomic"
-
 	"github.com/akzj/go-lua/internal/gc"
 	"github.com/akzj/go-lua/internal/metamethod"
 	"github.com/akzj/go-lua/internal/object"
@@ -24,15 +22,13 @@ func (L *State) GC(what GCWhat, args ...int) int {
 
 // GCTotalBytes returns the Lua-level allocation counter (bytes).
 // Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
-// Uses atomic load since finalizers may concurrently modify the counter.
 func (L *State) GCTotalBytes() int64 {
-	return atomic.LoadInt64(&L.ls().Global.GCTotalBytes)
+	return L.ls().Global.GCTotalBytes
 }
 
 // TrackAlloc adds n bytes to the Lua-level allocation counter.
-// Uses atomic add since finalizers may concurrently modify the counter.
 func (L *State) TrackAlloc(n int64) {
-	atomic.AddInt64(&L.ls().Global.GCTotalBytes, n)
+	L.ls().Global.GCTotalBytes += n
 }
 
 // GetGCMode returns the current GC mode string ("incremental" or "generational").

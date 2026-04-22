@@ -3,8 +3,6 @@
 package gc
 
 import (
-	"sync/atomic"
-
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/state"
 )
@@ -26,7 +24,7 @@ func sweep2old(g *state.GlobalState, p *object.GCObject) {
 			*p = h.Next
 			h.Next = nil
 			if h.ObjSize > 0 {
-				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
+				g.GCTotalBytes -= h.ObjSize
 			}
 		} else {
 			// Alive — make old
@@ -82,7 +80,7 @@ func sweepgen(g *state.GlobalState, p *object.GCObject, limit object.GCObject,
 			*p = h.Next
 			h.Next = nil
 			if h.ObjSize > 0 {
-				atomic.AddInt64(&g.GCTotalBytes, -h.ObjSize)
+				g.GCTotalBytes -= h.ObjSize
 			}
 		} else {
 			// Alive — correct mark and age
