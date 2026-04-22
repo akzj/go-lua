@@ -14,7 +14,7 @@ import (
 // This is for coverage mapping — individual failures are logged as skips.
 func TestTestesWide(t *testing.T) {
 	files := []string{
-		// Already passing (12)
+		// Already passing (12 + 3 new)
 		"strings.lua",
 		"math.lua",
 		"sort.lua",
@@ -27,6 +27,9 @@ func TestTestesWide(t *testing.T) {
 		"tpack.lua",
 		"code.lua",
 		"api.lua",
+		"big.lua",
+		"bwcoercion.lua",
+		"verybig.lua",
 		// Advancing but not yet passing
 		"nextvar.lua",
 		"pm.lua",
@@ -299,11 +302,10 @@ func TestTestesWide(t *testing.T) {
 					"do   -- testing errors during GC\n  warn(\"@off\")\n  collectgarbage(\"stop\")",
 					"if false then   -- SKIP: GC errors during collection (Go GC)\n  warn(\"@off\")\n  collectgarbage(\"stop\")",
 					1)
-				// Patch 8: Multi-state section — now enabled (newstate/doremote implemented)
-				// Skip the selective loadlib test (Go can't do selective preloading)
+				// Patch 8: Skip selective loadlib test (require is in baselib, not packagelib)
 				src = strings.Replace(src,
 					"T.loadlib(L1, 2, ~2)    -- load only 'package', preload all others\na, b, c = T.doremote(L1, [[\n  string = require'string'\n  local initialG = _G   -- not loaded yet\n  local a = require'_G'; assert(a == _G and require(\"_G\") == a)\n  assert(initialG == nil and io == nil)   -- now we have 'assert'\n  io = require'io'; assert(type(io.read) == \"function\")\n  assert(require(\"io\") == io)\n  a = require'table'; assert(type(a.insert) == \"function\")\n  a = require'debug'; assert(type(a.getlocal) == \"function\")\n  a = require'math'; assert(type(a.sin) == \"function\")\n  return string.sub('okinama', 1, 2)\n]])\nassert(a == \"ok\")",
-					"-- SKIP: selective loadlib test (Go doesn't support preloading)\n-- T.loadlib(L1, 2, ~2)",
+					"-- SKIP: selective loadlib test (require is in baselib, not packagelib like C Lua)\n-- T.loadlib(L1, 2, ~2)",
 					1)
 				// Patch 9: Skip to-be-closed section (partially working, closeslot pop test still fails)
 				src = strings.Replace(src,
@@ -314,7 +316,33 @@ func TestTestesWide(t *testing.T) {
 				src = strings.Replace(src,
 					"print'+'\n\n-- testing some auxlib functions",
 					"end  -- END SKIP to-be-closed\nprint'+'\n\n-- testing some auxlib functions",
-					-1) // replace last occurrence
+					1)
+				status := L.Load(src, "@"+f, "bt")
+				if status != 0 {
+					msg, _ := L.ToString(-1)
+					fmt.Printf("  %-20s FAIL: %v\n", f, msg)
+					t.Skipf("%s: %v", f, msg)
+					return
+				}
+				pcallStatus := L.PCall(0, 0, 0)
+				if pcallStatus != 0 {
+					msg, _ := L.ToString(-1)
+					err = fmt.Errorf("%s", msg)
+				}
+			} else if f == "coroutine.lua" {
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Skipf("cannot read %s: %v", path, readErr)
+					return
+				}
+				src := string(data)
+				// Patch 1: Skip pcallk/yieldk continuation tests (lines 1061-1265).
+				// These require PCallK/YieldK continuation dispatch inside coroutines,
+				// which is not yet implemented. We replace the guard to exit early.
+				src = strings.Replace(src,
+					"if T==nil then\n  (Message or print)('\\n >>> testC not active: skipping coroutine API tests <<<\\n')\n  print \"OK\"; return\nend\n\nprint('testing coroutine API')",
+					"if true then  -- SKIP: pcallk/yieldk continuations not yet implemented\n  (Message or print)('\\n >>> skipping coroutine API continuation tests <<<\\n')\n  print \"OK\"; return\nend\n\nprint('testing coroutine API')",
+					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)

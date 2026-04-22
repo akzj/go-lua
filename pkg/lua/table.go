@@ -149,3 +149,17 @@ func (L *State) Arith(op ArithOp) {
 func (L *State) GetSubTable(idx int, fname string) bool {
 	return L.s.GetSubTable(idx, fname)
 }
+
+// RawGetP does t[p] where p is a light userdata pointer key.
+// Pushes the result. Returns the type of the result.
+// Mirrors: lua_rawgetp in lapi.c
+func (L *State) RawGetP(idx int, p uintptr) Type {
+	return toPublicType(L.s.RawGetP(idx, p))
+}
+
+// RawSetP does t[p] = v where p is a light userdata pointer key.
+// v is the value at the top of the stack (popped).
+// Mirrors: lua_rawsetp in lapi.c
+func (L *State) RawSetP(idx int, p uintptr) {
+	L.s.RawSetP(idx, p)
+}
