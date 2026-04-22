@@ -36,4 +36,5 @@ lua-master/*.o
 *.prof
 
 # Benchmark raw data (results go in commit messages, not tracked)
-benchmarks/
+/benchmarks/
+tools/luarunner/luarunner
