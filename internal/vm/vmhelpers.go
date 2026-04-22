@@ -969,19 +969,35 @@ func Concat(L *state.LuaState, total int) {
 			total -= n - 1
 			L.Top -= n - 1
 		} else {
-			// Collect as many strings as possible
+			// Collect as many consecutive string-convertible values as possible.
+			// Walk the stack backwards (toward lower indices), appending in
+			// reverse order, then build the result with strings.Builder.
+			// This avoids the O(n²) prepend of the old []string{sv}, parts... approach.
 			var parts []string
-			parts = append(parts, s1, s2)
+			parts = append(parts, s2, s1) // reverse order: s2 first, s1 second
 			for n < total {
 				sv, ok := toStringForConcat(L.Stack[top-n-1].Val)
 				if !ok {
 					break
 				}
-				parts = append([]string{sv}, parts...)
+				parts = append(parts, sv)
 				n++
 			}
-			result := strings.Join(parts, "")
-			L.Stack[top-n].Val = makeInternedString(L, result)
+			// Reverse parts to get correct left-to-right order
+			for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+				parts[i], parts[j] = parts[j], parts[i]
+			}
+			// Pre-size builder to avoid intermediate allocations
+			totalLen := 0
+			for _, p := range parts {
+				totalLen += len(p)
+			}
+			var b strings.Builder
+			b.Grow(totalLen)
+			for _, p := range parts {
+				b.WriteString(p)
+			}
+			L.Stack[top-n].Val = makeInternedString(L, b.String())
 			total -= n - 1
 			L.Top -= n - 1
 		}

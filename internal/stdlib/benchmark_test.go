@@ -173,6 +173,42 @@ func BenchmarkGC(b *testing.B) {
 	}
 }
 
+// BenchmarkConcatOperator — string .. operator (VM OP_CONCAT path)
+func BenchmarkConcatOperator(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            local s = ""
+            for i = 1, 1000 do
+                s = s .. "x"
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkConcatMulti — multi-value concat (a .. b .. c .. d)
+func BenchmarkConcatMulti(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            local result
+            for i = 1, 1000 do
+                result = "a" .. "b" .. "c" .. "d" .. "e" .. "f"
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
 // BenchmarkCoroutineCreate — coroutine creation overhead
 func BenchmarkCoroutineCreate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
