@@ -70,11 +70,11 @@ func TestTestesWide(t *testing.T) {
 			//   nextvar.lua   — T enabled; OP_SETLIST pre-resize + checktab fix
 			//   calls.lua     — T enabled; T.listk preserves string pointer identity
 			//   errors.lua    — T enabled; skip T.totalmem memory-limit block (Go memory control)
-			//   cstack.lua    — T blocks use T.sethook (not implemented); hangs
+			//   cstack.lua    — T enabled; T blocks use only T.stacklevel()
 			//   gc.lua        — T enabled; skip T.totalmem + T.alloccount blocks (Go memory control)
 			//   coroutine.lua — T.sethook yields-inside-hooks not implemented
 			switch f {
-			case "api.lua", "events.lua", "closure.lua", "gengc.lua", "gc.lua", "nextvar.lua", "calls.lua", "coroutine.lua", "errors.lua":
+			case "api.lua", "events.lua", "closure.lua", "gengc.lua", "gc.lua", "nextvar.lua", "calls.lua", "coroutine.lua", "errors.lua", "cstack.lua":
 				OpenTestLib(L)
 			}
 			// go-lua is a "port" — skip platform-specific tests (os.setlocale, etc.)
@@ -270,7 +270,7 @@ func TestTestesWide(t *testing.T) {
 					"  assert(x == \"XX\" .. \"not enough memory\")\n",
 					"  assert(x == \"XX\" .. \"not enough memory\")\n  end  -- END SKIP alloccount\n",
 					1)
-				// Patch 2: Skip toclose checkpanic test (toclose not fully implemented)
+				// Patch 2: Skip toclose checkpanic test (panic+TBC interaction not yet implemented)
 				src = strings.Replace(src,
 					"  -- exit in panic still close to-be-closed variables\n  assert(T.checkpanic(",
 					"  if false then  -- SKIP: toclose not fully implemented\n  assert(T.checkpanic(",
@@ -293,15 +293,7 @@ func TestTestesWide(t *testing.T) {
 					"assert(#cl == 1 and cl[1] == x)   -- old `x' must be collected\n",
 					"assert(#cl == 1 and cl[1] == x)   -- old `x' must be collected\nend  -- END SKIP GC finalizer ordering\n",
 					1)
-				// Patch 6: Skip hooks section (T.sethook not implemented)
-				src = strings.Replace(src,
-					"-- testing changing hooks during hooks\n",
-					"if false then  -- SKIP: T.sethook not implemented\n-- testing changing hooks during hooks\n",
-					1)
-				src = strings.Replace(src,
-					"_G.TT = nil\n\n\n-----",
-					"_G.TT = nil\nend  -- END SKIP hooks\n\n\n-----",
-					1)
+				// Patch 6 REMOVED: hooks section now works (hookDispatch rewrite)
 				// Patch 7: Skip GC errors during collection (hangs with Go GC)
 				src = strings.Replace(src,
 					"do   -- testing errors during GC\n  warn(\"@off\")\n  collectgarbage(\"stop\")",
@@ -313,10 +305,10 @@ func TestTestesWide(t *testing.T) {
 					"T.loadlib(L1, 2, ~2)    -- load only 'package', preload all others\na, b, c = T.doremote(L1, [[\n  string = require'string'\n  local initialG = _G   -- not loaded yet\n  local a = require'_G'; assert(a == _G and require(\"_G\") == a)\n  assert(initialG == nil and io == nil)   -- now we have 'assert'\n  io = require'io'; assert(type(io.read) == \"function\")\n  assert(require(\"io\") == io)\n  a = require'table'; assert(type(a.insert) == \"function\")\n  a = require'debug'; assert(type(a.getlocal) == \"function\")\n  a = require'math'; assert(type(a.sin) == \"function\")\n  return string.sub('okinama', 1, 2)\n]])\nassert(a == \"ok\")",
 					"-- SKIP: selective loadlib test (Go doesn't support preloading)\n-- T.loadlib(L1, 2, ~2)",
 					1)
-				// Patch 9: Skip to-be-closed section (toclose/closeslot not implemented)
+				// Patch 9: Skip to-be-closed section (partially working, closeslot pop test still fails)
 				src = strings.Replace(src,
 					"-- testing to-be-closed variables\n",
-					"if false then  -- SKIP: toclose/closeslot not implemented\n-- testing to-be-closed variables\n",
+					"if false then  -- SKIP: toclose section partially working (closeslot pop test fails)\n-- testing to-be-closed variables\n",
 					1)
 				// The to-be-closed section ends before "testing some auxlib functions"
 				src = strings.Replace(src,

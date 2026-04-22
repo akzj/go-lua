@@ -387,13 +387,15 @@ retry:
 func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 	wanted := ci.NResults()
 	res := ci.Func // destination for results
+	hasTBC := ci.CallStatus&state.CISTTBC != 0
 
 	// Fire return hook and restore OldPC for caller.
 	// Mirrors: rethook in ldo.c — called when ANY hook is active, not just MaskRet.
+	// When CIST_TBC is set, defer the hook until after closing TBC vars.
 	// The OldPC restoration is unconditional (needed by line hook even when
 	// return hook is off). This is critical: without it, the line hook fires
 	// spurious events when returning from calls (e.g. hook function returns).
-	if L.HookMask != 0 {
+	if L.HookMask != 0 && !hasTBC {
 		if L.AllowHook && L.HookMask&state.MaskRet != 0 {
 			retHook(L, ci, nres)
 		}
@@ -403,6 +405,22 @@ func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 		// otherwise changedline() sees stale OldPC and misses a line event.
 		if prev := ci.Prev; prev != nil && prev.IsLua() {
 			L.OldPC = prev.SavedPC - 1
+		}
+	}
+
+	// Handle to-be-closed variables before moving results.
+	// Mirrors C Lua: moveresults checks CIST_TBC and calls luaF_close.
+	if hasTBC {
+		// Close TBC vars from TBCList down to res (CLOSEKTOP semantics).
+		closeTBCWithError(L, res, state.StatusCloseKTop, object.Nil, true)
+		// Call return hook after __close methods (C Lua defers hook for TBC).
+		if L.HookMask != 0 {
+			if L.AllowHook && L.HookMask&state.MaskRet != 0 {
+				retHook(L, ci, nres)
+			}
+			if prev := ci.Prev; prev != nil && prev.IsLua() {
+				L.OldPC = prev.SavedPC - 1
+			}
 		}
 	}
 
@@ -419,6 +437,32 @@ func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 // event: "call", "return", "line", "count", "tail call"
 // line: line number for line hooks, -1 otherwise
 // ftransfer/ntransfer: parameter/return value transfer info (0 if N/A)
+// hookEventInt maps event string to integer constant.
+func hookEventInt(event string) int {
+	switch event {
+	case "call":
+		return state.HookCall
+	case "return":
+		return state.HookReturn
+	case "line":
+		return state.HookLine
+	case "count":
+		return state.HookCount
+	case "tail call":
+		return state.HookTailCall
+	}
+	return state.HookCall
+}
+
+// hookDispatch calls the debug hook function.
+// Mirrors: luaD_hook in ldo.c
+//
+// For CFunction hooks (e.g. T.sethook): called directly without creating
+// a CI frame, matching C Lua's behavior. This allows yields inside hooks.
+// Event/line are passed via L.HookEvent/L.HookLine state fields.
+//
+// For Lua closure hooks (e.g. debug.sethook): called via Call() with
+// noyield semantics (cannot yield from Lua hook functions, same as C Lua).
 func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntransfer int) {
 	hookVal, ok := L.Hook.(object.TValue)
 	if !ok || hookVal.Tt == object.TagNil || hookVal.Obj == nil {
@@ -431,13 +475,19 @@ func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntra
 	ci := L.CI
 	savedTop := L.Top
 	savedCITop := ci.Top
-	savedAllowHook := L.AllowHook
+	// Save for hook-yield resume (survives panic/yield)
+	L.HookSavedTop = savedTop
+	L.HookSavedCITop = savedCITop
 	L.AllowHook = false // cannot call hooks inside a hook
 	ci.CallStatus |= state.CISTHooked // mark caller as hook frame
 
 	// Set transfer info for debug.getinfo "r" flag
 	L.FTransfer = ftransfer
 	L.NTransfer = ntransfer
+
+	// Set hook event/line fields for direct CFunction hooks
+	L.HookEvent = hookEventInt(event)
+	L.HookLine = line
 
 	// Protect entire activation register (mirrors luaD_hook in ldo.c)
 	// For Lua functions, L.Top may be below ci.Top. Push hook args above ci.Top
@@ -446,35 +496,62 @@ func hookDispatch(L *state.LuaState, event string, line int, ftransfer int, ntra
 		L.Top = ci.Top
 	}
 
-	defer func() {
-		L.AllowHook = savedAllowHook
-		ci.CallStatus &^= state.CISTHooked // clear hook flag
-		ci.Top = savedCITop
-		L.Top = savedTop
-	}()
-
-	// Ensure stack space: hook_func + event_name + optional_line_arg
-	CheckStack(L, 4)
-
-	st := L.Global.StringTable.(*luastring.StringTable)
-
-	// Push hook function
-	L.Stack[L.Top].Val = hookVal
-	L.Top++
-
-	// Push event name
-	L.Stack[L.Top].Val = object.MakeString(st.Intern(event))
-	L.Top++
-
-	// For line hooks, push line number as second arg
-	nargs := 1
-	if line >= 0 {
-		L.Stack[L.Top].Val = object.MakeInteger(int64(line))
-		L.Top++
-		nargs = 2
+	// Ensure stack space for hook args
+	CheckStack(L, luaMinStack)
+	if ci.Top < L.Top+luaMinStack {
+		ci.Top = L.Top + luaMinStack
 	}
 
-	Call(L, L.Top-nargs-1, 0)
+	// Determine hook type and dispatch accordingly
+	if hookVal.Tt == object.TagLightCFunc {
+		// CFunction hook — call directly without CI frame.
+		// This matches C Lua's (*hook)(L, &ar) pattern.
+		// The CFunction reads event/line from L.HookEvent/L.HookLine.
+		if cFn, ok := hookVal.Obj.(state.CFunction); ok {
+			cFn(L)
+		}
+		// After direct call: if the hook yielded, leave state as-is
+		// (caller will detect L.Status == StatusYield).
+		// If no yield, restore normally.
+	} else {
+		// Lua closure or CClosure hook — call via Call() with noyield.
+		// Mirrors C Lua's hookf wrapper: cannot yield from Lua hook functions.
+		st := L.Global.StringTable.(*luastring.StringTable)
+
+		// Push hook function
+		L.Stack[L.Top].Val = hookVal
+		L.Top++
+
+		// Push event name
+		L.Stack[L.Top].Val = object.MakeString(st.Intern(event))
+		L.Top++
+
+		// For line hooks, push line number as second arg
+		nargs := 1
+		if line >= 0 {
+			L.Stack[L.Top].Val = object.MakeInteger(int64(line))
+			L.Top++
+			nargs = 2
+		}
+
+		// Increment NCCalls to prevent yield (noyield semantics).
+		// Mirrors: luaD_callnoyield increments nCcalls by CSTACKERR
+		// to make !yieldable(L) true during the call.
+		savedNCCalls := L.NCCalls
+		L.NCCalls |= 0x10000 // set high bit to disable yield
+		Call(L, L.Top-nargs-1, 0)
+		L.NCCalls = savedNCCalls
+	}
+
+	// Restore state (only if hook didn't yield)
+	if L.Status != state.StatusYield {
+		L.AllowHook = true
+		ci.CallStatus &^= state.CISTHooked
+		ci.Top = savedCITop
+		L.Top = savedTop
+	}
+	// If hook yielded (L.Status == StatusYield), caller handles cleanup.
+	// AllowHook, CIST_HOOKED, ci.Top, L.Top are left as-is for resume.
 }
 
 // retHook fires the return hook if set.
@@ -522,6 +599,11 @@ func callHook(L *state.LuaState, ci *state.CallInfo) {
 		ci.SavedPC++ // hooks assume 'pc' is already incremented
 		hookDispatch(L, event, -1, 1, numparams)
 		ci.SavedPC-- // correct 'pc'
+		// Check if hook yielded
+		if L.Status == state.StatusYield {
+			ci.CallStatus |= state.CISTHookYield
+			panic(state.LuaYield{})
+		}
 	} else {
 		// For C functions: ftransfer=1, ntransfer=narg (top - func - 1)
 		narg := L.Top - ci.Func - 1
@@ -547,7 +629,7 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	}
 	p := cl.Proto
 
-	// Count hook
+	// Count hook — decrement first, then check for HOOKYIELD
 	countHook := false
 	if mask&state.MaskCount != 0 {
 		L.HookCount--
@@ -558,6 +640,15 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	}
 	if !countHook && mask&state.MaskLine == 0 {
 		return true // no line hook and count != 0
+	}
+
+	// If hook yielded last time, clear the mark and skip this hook.
+	// The instruction hasn't executed yet — VM will re-enter traceExec
+	// after the instruction runs.
+	// Mirrors: luaG_traceexec CIST_HOOKYIELD check in ldebug.c
+	if ci.CallStatus&state.CISTHookYield != 0 {
+		ci.CallStatus &^= state.CISTHookYield
+		return true // keep trap active but skip hook this time
 	}
 
 	if countHook {
@@ -588,6 +679,16 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 			hookDispatch(L, "line", newline, 0, 0)
 		}
 		L.OldPC = npci
+	}
+
+	// Check if hook yielded (after all hooks have been called).
+	// Mirrors: luaG_traceexec yield check at end of function.
+	if L.Status == state.StatusYield {
+		if countHook {
+			L.HookCount = 1 // undo decrement to zero
+		}
+		ci.CallStatus |= state.CISTHookYield
+		panic(state.LuaYield{})
 	}
 
 	return true // keep trap active
@@ -1029,7 +1130,21 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 				// Resuming from yield
 				L.Status = state.StatusOK
 				ci := L.CI
-				if !ci.IsLua() {
+				if ci.IsLua() {
+					// Yielded inside a hook — ci is the Lua frame.
+					// Mirrors: resume() in ldo.c — isLua(ci) branch.
+					// Restore hook state that hookDispatch left dirty:
+					L.AllowHook = true
+					ci.CallStatus &^= state.CISTHooked
+					// Restore stack state saved by hookDispatch
+					ci.Top = L.HookSavedCITop
+					L.Top = L.HookSavedTop
+					// Undo the savedpc increment from traceExec
+					// (instruction was not executed yet).
+					ci.SavedPC--
+					// Re-enter the VM to continue executing
+					execute(L, ci)
+				} else {
 					// C function with continuation
 					if ci.K != nil {
 						n := ci.K(L, state.StatusYield, ci.Ctx)
@@ -1331,8 +1446,15 @@ func markTBC(L *state.LuaState, level int) {
 		// Get variable name from debug info (C Lua: luaG_findlocal)
 		vname := "?"
 		if L.CI != nil {
-			idx := level - L.CI.Func // stack offset from function slot
-			vname = getLocalName(L, L.CI, idx)
+			if L.CI.IsLua() {
+				idx := level - L.CI.Func // stack offset from function slot
+				vname = getLocalName(L, L.CI, idx)
+				if vname == "?" {
+					vname = "(temporary)"
+				}
+			} else {
+				vname = "(C temporary)"
+			}
 		}
 		RunError(L, "variable '"+vname+"' got a non-closable value")
 	}
@@ -1392,6 +1514,28 @@ func popTBCList(L *state.LuaState) {
 func closeTBC(L *state.LuaState, level int) {
 	closeTBCWithError(L, level, state.StatusOK, object.Nil, true)
 }
+
+// MarkTBC is the exported wrapper for markTBC.
+// Used by the API layer (lua_toclose) to mark a stack slot as to-be-closed.
+func MarkTBC(L *state.LuaState, level int) {
+	markTBC(L, level)
+}
+
+// CloseTBC is the exported wrapper for closeTBC.
+// Closes all TBC variables from L.TBCList down to (but not including) level.
+// Uses StatusOK semantics: resets L.Top to level+1 before calling __close.
+// Used by the API layer (lua_settop).
+func CloseTBC(L *state.LuaState, level int) {
+	closeTBC(L, level)
+}
+
+// CloseTBCKeepTop closes TBC variables with CLOSEKTOP semantics:
+// does NOT reset L.Top, preserving values above the closed slot.
+// Used by lua_closeslot where return values sit above TBC vars.
+func CloseTBCKeepTop(L *state.LuaState, level int) {
+	closeTBCWithError(L, level, state.StatusCloseKTop, object.Nil, true)
+}
+
 
 // closeTBCWithError is closeTBC with error status and error object.
 // For normal close: status=StatusOK, errObj=Nil → __close(obj) with 1 arg

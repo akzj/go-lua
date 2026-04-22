@@ -33,7 +33,7 @@ func NewState() *LuaState {
 	g.CurrentWhite = object.WhiteBit0
 	g.GCState = object.GCSpause
 	// GC tuning defaults (C Lua 5.5.1: LUAI_GCPAUSE=200, LUAI_GCMUL=200, LUAI_GCSTEPSIZE=13)
-	g.GCPause = 200
+	g.GCPause = 250 // C Lua 5.5.1 default (LUAI_GCPAUSE)
 	g.GCStepMul = 200
 	g.GCStepSize = 13
 	// Initial GC debt: give 64KB of allocation credit before first GC triggers.
