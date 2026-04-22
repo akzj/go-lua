@@ -1,13 +1,14 @@
 // Command luarunner is a minimal go-lua CLI for running Lua scripts.
 // It is used by tools/luabench.sh to benchmark go-lua against C Lua.
+//
+// For a full-featured interpreter with REPL support, see cmd/glua/.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	luaapi "github.com/akzj/go-lua/internal/api"
-	"github.com/akzj/go-lua/internal/stdlib"
+	"github.com/akzj/go-lua/pkg/lua"
 )
 
 func main() {
@@ -16,8 +17,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	L := luaapi.NewState()
-	stdlib.OpenAll(L)
+	L := lua.NewState()
 
 	var err error
 	if os.Args[1] == "-e" {

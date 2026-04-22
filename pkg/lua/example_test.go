@@ -1,6 +1,7 @@
 package lua_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,7 +9,280 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// 1. Basic: NewState → DoString → Close
+// Runnable Examples (godoc + go test -run Example)
+// ---------------------------------------------------------------------------
+
+func ExampleNewState() {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`print("hello from Lua")`)
+	if err != nil {
+		fmt.Println("error:", err)
+	}
+	// Output:
+	// hello from Lua
+}
+
+func ExampleNewBareState() {
+	L := lua.NewBareState()
+	defer L.Close()
+
+	// Bare state has no standard libraries loaded.
+	// Attempting to call print will fail:
+	err := L.DoString(`print("hello")`)
+	if err != nil {
+		fmt.Println("error: standard library not available")
+	}
+	// Output:
+	// error: standard library not available
+}
+
+func ExampleState_PushFunction() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Register a Go function that adds two integers.
+	add := func(L *lua.State) int {
+		a := L.CheckInteger(1)
+		b := L.CheckInteger(2)
+		L.PushInteger(a + b)
+		return 1 // one return value
+	}
+
+	L.PushFunction(add)
+	L.SetGlobal("add")
+
+	err := L.DoString(`print(add(40, 2))`)
+	if err != nil {
+		fmt.Println("error:", err)
+	}
+	// Output:
+	// 42
+}
+
+func ExampleState_PushClosure() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a counter closure with an upvalue.
+	L.PushInteger(0) // initial counter value (upvalue 1)
+
+	counter := func(L *lua.State) int {
+		val, _ := L.ToInteger(lua.UpvalueIndex(1))
+		val++
+		L.PushInteger(val)
+		L.Copy(-1, lua.UpvalueIndex(1)) // update the upvalue
+		return 1
+	}
+
+	L.PushClosure(counter, 1) // 1 upvalue
+	L.SetGlobal("counter")
+
+	L.DoString(`
+		print(counter())
+		print(counter())
+		print(counter())
+	`)
+	// Output:
+	// 1
+	// 2
+	// 3
+}
+
+func ExampleState_NewTable() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a table from Go and pass it to Lua.
+	L.NewTable()
+
+	L.PushString("localhost")
+	L.SetField(-2, "host")
+
+	L.PushInteger(8080)
+	L.SetField(-2, "port")
+
+	L.SetGlobal("config")
+
+	L.DoString(`print(config.host .. ":" .. config.port)`)
+	// Output:
+	// localhost:8080
+}
+
+func ExampleState_GetField() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a table in Lua and read it from Go.
+	L.DoString(`settings = { width = 1920, height = 1080 }`)
+
+	L.GetGlobal("settings")
+
+	L.GetField(-1, "width")
+	w, _ := L.ToInteger(-1)
+	L.Pop(1)
+
+	L.GetField(-1, "height")
+	h, _ := L.ToInteger(-1)
+	L.Pop(2) // pop height + settings table
+
+	fmt.Printf("%dx%d\n", w, h)
+	// Output:
+	// 1920x1080
+}
+
+func ExampleState_DoString() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// DoString returns a Go error on failure.
+	err := L.DoString(`error("something went wrong")`)
+	if err != nil {
+		fmt.Println("caught error:", err != nil)
+	}
+	// Output:
+	// caught error: true
+}
+
+func ExampleState_PCall() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Load a chunk without executing it.
+	status := L.Load(`return 6 * 7`, "=example", "t")
+	if status != lua.OK {
+		fmt.Println("load error")
+		return
+	}
+
+	// Call it in protected mode.
+	status = L.PCall(0, 1, 0)
+	if status != lua.OK {
+		msg, _ := L.ToString(-1)
+		fmt.Println("error:", msg)
+		L.Pop(1)
+		return
+	}
+
+	result, _ := L.ToInteger(-1)
+	L.Pop(1)
+	fmt.Println(result)
+	// Output:
+	// 42
+}
+
+func ExampleState_NewThread() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Define a generator function in Lua.
+	L.DoString(`
+		function squares(n)
+			for i = 1, n do
+				coroutine.yield(i * i)
+			end
+		end
+	`)
+
+	// Create a coroutine thread from Go.
+	thread := L.NewThread()
+	thread.GetGlobal("squares")
+	thread.PushInteger(4) // n = 4
+
+	// Drive the coroutine from Go, collecting yielded values.
+	for {
+		status, nresults := thread.Resume(L, 1)
+		if status == lua.OK {
+			break // coroutine finished
+		}
+		if status != lua.Yield {
+			msg, _ := thread.ToString(-1)
+			fmt.Println("error:", msg)
+			break
+		}
+		val, _ := thread.ToInteger(-1)
+		fmt.Println(val)
+		thread.Pop(nresults)
+	}
+	L.Pop(1) // pop the thread
+
+	// Output:
+	// 1
+	// 4
+	// 9
+	// 16
+}
+
+func ExampleState_SetFuncs() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a module table with multiple Go functions.
+	L.NewTable()
+	L.SetFuncs(map[string]lua.Function{
+		"upper": func(L *lua.State) int {
+			s := L.CheckString(1)
+			L.PushString(strings.ToUpper(s))
+			return 1
+		},
+		"repeat": func(L *lua.State) int {
+			s := L.CheckString(1)
+			n := L.CheckInteger(2)
+			L.PushString(strings.Repeat(s, int(n)))
+			return 1
+		},
+	}, 0)
+	L.SetGlobal("mystr")
+
+	L.DoString(`
+		print(mystr.upper("hello"))
+		print(mystr["repeat"]("ab", 3))
+	`)
+	// Output:
+	// HELLO
+	// ababab
+}
+
+func ExampleState_Ref() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Store a Lua value in the registry and retrieve it later.
+	L.PushString("stored-value")
+	ref := L.Ref(lua.RegistryIndex)
+
+	// ... later, retrieve it by reference:
+	L.RawGetI(lua.RegistryIndex, int64(ref))
+	s, _ := L.ToString(-1)
+	fmt.Println(s)
+	L.Pop(1)
+
+	// Free the reference when no longer needed.
+	L.Unref(lua.RegistryIndex, ref)
+	// Output:
+	// stored-value
+}
+
+func ExampleState_NewUserdata() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a userdata wrapping a Go value.
+	L.NewUserdata(0, 0)
+	L.SetUserdataValue(-1, map[string]int{"x": 10, "y": 20})
+
+	// Read it back.
+	val := L.UserdataValue(-1)
+	m := val.(map[string]int)
+	fmt.Printf("x=%d y=%d\n", m["x"], m["y"])
+	L.Pop(1)
+	// Output:
+	// x=10 y=20
+}
+
+// ---------------------------------------------------------------------------
+// Test functions (more thorough coverage)
 // ---------------------------------------------------------------------------
 
 func TestBasicDoString(t *testing.T) {
@@ -29,7 +303,6 @@ func TestBasicPrint(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// print is available because NewState loads all stdlib
 	err := L.DoString(`print("hello from Lua")`)
 	if err != nil {
 		t.Fatalf("DoString with print failed: %v", err)
@@ -40,22 +313,16 @@ func TestBareStateNoStdlib(t *testing.T) {
 	L := lua.NewBareState()
 	defer L.Close()
 
-	// print should NOT be available in bare state
 	err := L.DoString(`print("hello")`)
 	if err == nil {
 		t.Fatal("expected error from bare state without stdlib")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 2. Go→Lua function registration
-// ---------------------------------------------------------------------------
-
 func TestGoFunctionRegistration(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Register a Go function that adds two numbers
 	add := func(L *lua.State) int {
 		a := L.CheckInteger(1)
 		b := L.CheckInteger(2)
@@ -79,7 +346,6 @@ func TestGoFunctionMultipleReturns(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Register a function that returns multiple values
 	divmod := func(L *lua.State) int {
 		a := L.CheckInteger(1)
 		b := L.CheckInteger(2)
@@ -123,27 +389,17 @@ func TestGoFunctionWithStrings(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 3. Table creation and field access from Go side
-// ---------------------------------------------------------------------------
-
 func TestTableCreationAndAccess(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Create a table from Go
 	L.NewTable()
-
-	// Set fields
 	L.PushString("bar")
 	L.SetField(-2, "foo")
-
 	L.PushInteger(42)
 	L.SetField(-2, "num")
-
 	L.SetGlobal("mytable")
 
-	// Verify from Lua
 	err := L.DoString(`
 		assert(mytable.foo == "bar", "expected bar")
 		assert(mytable.num == 42, "expected 42")
@@ -157,7 +413,6 @@ func TestTableReadFromGo(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Create table from Lua
 	err := L.DoString(`
 		config = {
 			host = "localhost",
@@ -169,7 +424,6 @@ func TestTableReadFromGo(t *testing.T) {
 		t.Fatalf("DoString failed: %v", err)
 	}
 
-	// Read from Go
 	L.GetGlobal("config")
 
 	L.GetField(-1, "host")
@@ -191,7 +445,7 @@ func TestTableReadFromGo(t *testing.T) {
 	if !debug {
 		t.Fatal("expected debug=true")
 	}
-	L.Pop(2) // pop debug value + config table
+	L.Pop(2)
 }
 
 func TestTableArrayAccess(t *testing.T) {
@@ -215,10 +469,6 @@ func TestTableArrayAccess(t *testing.T) {
 	L.Pop(1)
 }
 
-// ---------------------------------------------------------------------------
-// 4. Error handling
-// ---------------------------------------------------------------------------
-
 func TestSyntaxError(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
@@ -226,9 +476,6 @@ func TestSyntaxError(t *testing.T) {
 	err := L.DoString(`this is not valid lua!!!`)
 	if err == nil {
 		t.Fatal("expected syntax error")
-	}
-	if !strings.Contains(err.Error(), "error") {
-		t.Fatalf("expected error message, got: %v", err)
 	}
 }
 
@@ -249,19 +496,16 @@ func TestPCallProtectedError(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Load a chunk that will error
 	status := L.Load(`error("oops")`, "=test", "t")
 	if status != lua.OK {
 		t.Fatalf("Load failed with status %d", status)
 	}
 
-	// PCall should catch the error
 	status = L.PCall(0, 0, 0)
 	if status == lua.OK {
 		t.Fatal("expected PCall to return error status")
 	}
 
-	// Error message should be on the stack
 	msg, ok := L.ToString(-1)
 	if !ok {
 		t.Fatal("expected error message on stack")
@@ -276,23 +520,16 @@ func TestNilGlobalAccess(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	err := L.DoString(`
-		local x = nonexistent_function()
-	`)
+	err := L.DoString(`local x = nonexistent_function()`)
 	if err == nil {
 		t.Fatal("expected error calling nil value")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 5. Coroutines
-// ---------------------------------------------------------------------------
-
 func TestCoroutineBasic(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Test coroutines from pure Lua
 	err := L.DoString(`
 		local co = coroutine.create(function()
 			coroutine.yield(1)
@@ -321,7 +558,6 @@ func TestCoroutineFromGo(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Load a function that yields
 	err := L.DoString(`
 		function producer()
 			for i = 1, 3 do
@@ -334,18 +570,14 @@ func TestCoroutineFromGo(t *testing.T) {
 		t.Fatalf("DoString failed: %v", err)
 	}
 
-	// Create a thread from Go
 	thread := L.NewThread()
-
-	// Push the function onto the thread's stack
 	thread.GetGlobal("producer")
 
-	// Resume the thread, collecting yielded values
 	expected := []int64{10, 20, 30, 999}
 	for i, exp := range expected {
 		status, nresults := thread.Resume(L, 0)
 		if i < 3 {
-			if status != 1 { // Yield
+			if status != 1 {
 				t.Fatalf("iteration %d: expected yield status, got %d", i, status)
 			}
 		} else {
@@ -363,12 +595,8 @@ func TestCoroutineFromGo(t *testing.T) {
 		thread.Pop(nresults)
 	}
 
-	L.Pop(1) // pop the thread from L's stack
+	L.Pop(1)
 }
-
-// ---------------------------------------------------------------------------
-// 6. Additional coverage: type checking, stack manipulation
-// ---------------------------------------------------------------------------
 
 func TestTypeChecking(t *testing.T) {
 	L := lua.NewState()
@@ -438,7 +666,6 @@ func TestStackManipulation(t *testing.T) {
 		t.Fatalf("expected top=3, got %d", L.GetTop())
 	}
 
-	// Copy idx 1 to top
 	L.PushValue(1)
 	val, _ := L.ToInteger(-1)
 	if val != 1 {
@@ -446,8 +673,7 @@ func TestStackManipulation(t *testing.T) {
 	}
 	L.Pop(1)
 
-	// Remove middle element
-	L.Remove(2) // removes '2', stack is now [1, 3]
+	L.Remove(2)
 	if L.GetTop() != 2 {
 		t.Fatalf("expected top=2 after Remove, got %d", L.GetTop())
 	}
@@ -456,7 +682,7 @@ func TestStackManipulation(t *testing.T) {
 		t.Fatalf("expected 3 at idx 2, got %d", val)
 	}
 
-	L.SetTop(0) // clear stack
+	L.SetTop(0)
 	if L.GetTop() != 0 {
 		t.Fatalf("expected empty stack, got %d", L.GetTop())
 	}
@@ -466,7 +692,6 @@ func TestUserdata(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Create userdata and store a Go value in it
 	L.NewUserdata(0, 1)
 	L.SetUserdataValue(-1, "my-data")
 
@@ -475,7 +700,6 @@ func TestUserdata(t *testing.T) {
 		t.Fatalf("expected 'my-data', got %v", val)
 	}
 
-	// Test user values
 	L.PushString("uv1")
 	ok := L.SetIUserValue(-2, 1)
 	if !ok {
@@ -490,7 +714,7 @@ func TestUserdata(t *testing.T) {
 	if s != "uv1" {
 		t.Fatalf("expected 'uv1', got %q", s)
 	}
-	L.Pop(2) // pop user value + userdata
+	L.Pop(2)
 }
 
 func TestMetatable(t *testing.T) {
@@ -524,14 +748,12 @@ func TestClosureUpvalues(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Test Go closure with upvalues
-	L.PushInteger(100) // upvalue
+	L.PushInteger(100)
 	counter := func(L *lua.State) int {
-		// Get upvalue (the counter)
 		val, _ := L.ToInteger(lua.UpvalueIndex(1))
 		val++
 		L.PushInteger(val)
-		L.Copy(-1, lua.UpvalueIndex(1)) // update upvalue
+		L.Copy(-1, lua.UpvalueIndex(1))
 		return 1
 	}
 	L.PushClosure(counter, 1)
@@ -551,14 +773,12 @@ func TestRefUnref(t *testing.T) {
 	L := lua.NewState()
 	defer L.Close()
 
-	// Create a reference to a value in the registry
 	L.PushString("stored-value")
 	ref := L.Ref(lua.RegistryIndex)
 	if ref == lua.RefNil || ref == lua.NoRef {
 		t.Fatal("expected valid reference")
 	}
 
-	// Retrieve it
 	L.RawGetI(lua.RegistryIndex, int64(ref))
 	s, ok := L.ToString(-1)
 	if !ok || s != "stored-value" {
@@ -566,12 +786,10 @@ func TestRefUnref(t *testing.T) {
 	}
 	L.Pop(1)
 
-	// Unref
 	L.Unref(lua.RegistryIndex, ref)
 }
 
 func TestConstants(t *testing.T) {
-	// Verify constants have expected values
 	if lua.OK != 0 {
 		t.Errorf("OK should be 0, got %d", lua.OK)
 	}

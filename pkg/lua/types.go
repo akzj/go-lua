@@ -1,15 +1,55 @@
-// Package lua provides a public Go API for the Lua 5.5.1 interpreter.
+// Package lua provides a public Go API for embedding the Lua 5.5 interpreter.
 //
-// This package wraps the internal implementation, providing a clean,
-// stable API for embedding Lua in Go applications.
+// This package wraps the internal implementation behind a clean, stable API
+// suitable for embedding Lua in Go applications. It follows the C Lua API
+// conventions (stack-based value passing, pseudo-indices, protected calls)
+// while providing Go-idiomatic error handling and type safety.
 //
-// Basic usage:
+// # Quick Start
+//
+// Create a Lua state, execute code, and close it:
 //
 //	L := lua.NewState()
 //	defer L.Close()
-//	if err := L.DoString(`print("hello")`); err != nil {
+//	if err := L.DoString(`print("hello from Lua")`); err != nil {
 //	    log.Fatal(err)
 //	}
+//
+// # Registering Go Functions
+//
+// Go functions can be registered as Lua globals:
+//
+//	add := func(L *lua.State) int {
+//	    a := L.CheckInteger(1)
+//	    b := L.CheckInteger(2)
+//	    L.PushInteger(a + b)
+//	    return 1 // number of return values
+//	}
+//	L.PushFunction(add)
+//	L.SetGlobal("add")
+//
+// # Stack-Based API
+//
+// Values are passed between Go and Lua via a virtual stack. Push functions
+// move values from Go to the stack; To/Check functions read values from the
+// stack back to Go. Positive indices count from the bottom (1 = first),
+// negative indices count from the top (-1 = top element).
+//
+// # Error Handling
+//
+// Use [State.DoString] or [State.DoFile] for simple execution with Go error
+// returns. For finer control, use [State.Load] + [State.PCall] which return
+// status codes and leave error messages on the stack.
+//
+// # Coroutines
+//
+// Create coroutines with [State.NewThread] and drive them from Go with
+// [State.Resume]. Yielded values appear on the coroutine's stack.
+//
+// # Memory Management
+//
+// The interpreter uses Go's garbage collector. Call [State.Close] when done
+// to release internal resources promptly.
 package lua
 
 import (
@@ -18,25 +58,36 @@ import (
 )
 
 // Function is the signature for Go functions callable from Lua.
+//
 // The function receives the Lua state and returns the number of results
-// it pushed onto the stack.
+// it pushed onto the stack. Arguments passed from Lua are on the stack
+// at positive indices starting from 1.
+//
+// Example:
+//
+//	greet := func(L *lua.State) int {
+//	    name := L.CheckString(1)
+//	    L.PushString("Hello, " + name + "!")
+//	    return 1
+//	}
 type Function func(L *State) int
 
-// Type represents a Lua value type.
+// Type represents a Lua value type, corresponding to the LUA_T* constants
+// in the C Lua API.
 type Type int
 
 // Lua value types. These match the C Lua LUA_T* constants.
 const (
-	TypeNil           Type = 0    // LUA_TNIL
-	TypeBoolean       Type = 1    // LUA_TBOOLEAN
-	TypeLightUserdata Type = 2    // LUA_TLIGHTUSERDATA
-	TypeNumber        Type = 3    // LUA_TNUMBER
-	TypeString        Type = 4    // LUA_TSTRING
-	TypeTable         Type = 5    // LUA_TTABLE
-	TypeFunction      Type = 6    // LUA_TFUNCTION
-	TypeUserdata      Type = 7    // LUA_TUSERDATA
-	TypeThread        Type = 8    // LUA_TTHREAD
-	TypeNone          Type = -1   // LUA_TNONE — invalid/absent
+	TypeNil           Type = 0  // LUA_TNIL — the nil value
+	TypeBoolean       Type = 1  // LUA_TBOOLEAN — true or false
+	TypeLightUserdata Type = 2  // LUA_TLIGHTUSERDATA — raw Go interface{} without metatable
+	TypeNumber        Type = 3  // LUA_TNUMBER — integer or floating-point number
+	TypeString        Type = 4  // LUA_TSTRING — immutable string
+	TypeTable         Type = 5  // LUA_TTABLE — associative array
+	TypeFunction      Type = 6  // LUA_TFUNCTION — Lua or Go function
+	TypeUserdata      Type = 7  // LUA_TUSERDATA — full userdata with metatable support
+	TypeThread        Type = 8  // LUA_TTHREAD — coroutine
+	TypeNone          Type = -1 // LUA_TNONE — invalid or absent stack index
 )
 
 // toPublicType converts internal object.Type to public Type.
@@ -58,65 +109,76 @@ func toInternalType(t Type) object.Type {
 // CompareOp is the comparison operation type for [State.Compare].
 type CompareOp int
 
-// Comparison operations.
+// Comparison operations for [State.Compare].
 const (
-	OpEQ CompareOp = 0 // ==
-	OpLT CompareOp = 1 // <
-	OpLE CompareOp = 2 // <=
+	OpEQ CompareOp = 0 // == (may invoke __eq metamethod)
+	OpLT CompareOp = 1 // <  (may invoke __lt metamethod)
+	OpLE CompareOp = 2 // <= (may invoke __le metamethod)
 )
 
 // ArithOp is the arithmetic operation type for [State.Arith].
 type ArithOp int
 
-// Arithmetic operations.
+// Arithmetic and bitwise operations for [State.Arith].
 const (
-	OpAdd  ArithOp = 0  // +
-	OpSub  ArithOp = 1  // -
-	OpMul  ArithOp = 2  // *
-	OpMod  ArithOp = 3  // %
-	OpPow  ArithOp = 4  // ^
-	OpDiv  ArithOp = 5  // /
-	OpIDiv ArithOp = 6  // //
-	OpBAnd ArithOp = 7  // &
-	OpBOr  ArithOp = 8  // |
-	OpBXor ArithOp = 9  // ~
-	OpShl  ArithOp = 10 // <<
-	OpShr  ArithOp = 11 // >>
-	OpUnm  ArithOp = 12 // - (unary)
-	OpBNot ArithOp = 13 // ~ (unary)
+	OpAdd  ArithOp = 0  // + addition
+	OpSub  ArithOp = 1  // - subtraction
+	OpMul  ArithOp = 2  // * multiplication
+	OpMod  ArithOp = 3  // % modulo
+	OpPow  ArithOp = 4  // ^ exponentiation
+	OpDiv  ArithOp = 5  // / float division
+	OpIDiv ArithOp = 6  // // floor division
+	OpBAnd ArithOp = 7  // & bitwise AND
+	OpBOr  ArithOp = 8  // | bitwise OR
+	OpBXor ArithOp = 9  // ~ bitwise XOR
+	OpShl  ArithOp = 10 // << left shift
+	OpShr  ArithOp = 11 // >> right shift
+	OpUnm  ArithOp = 12 // - (unary minus)
+	OpBNot ArithOp = 13 // ~ (bitwise NOT, unary)
 )
 
 // GCWhat is the GC operation type for [State.GC].
 type GCWhat int
 
-// GC operations.
+// Garbage collection operations for [State.GC].
 const (
-	GCStop      GCWhat = 0
-	GCRestart   GCWhat = 1
-	GCCollect   GCWhat = 2
-	GCCount     GCWhat = 3
-	GCCountB    GCWhat = 4
-	GCStep      GCWhat = 5
-	GCIsRunning GCWhat = 9
-	GCGen       GCWhat = 10
-	GCInc       GCWhat = 11
+	GCStop      GCWhat = 0  // stop the garbage collector
+	GCRestart   GCWhat = 1  // restart the garbage collector
+	GCCollect   GCWhat = 2  // perform a full collection cycle
+	GCCount     GCWhat = 3  // return total memory in use (KBytes)
+	GCCountB    GCWhat = 4  // return remainder bytes of memory in use
+	GCStep      GCWhat = 5  // perform an incremental GC step
+	GCIsRunning GCWhat = 9  // return 1 if GC is running, 0 if stopped
+	GCGen       GCWhat = 10 // switch to generational GC mode
+	GCInc       GCWhat = 11 // switch to incremental GC mode
 )
 
-// DebugInfo holds debug information about a function activation.
+// DebugInfo holds debug information about a function activation record.
 // Returned by [State.GetStack] and filled by [State.GetInfo].
+//
+// Not all fields are filled by every call. The "what" parameter to
+// [State.GetInfo] controls which fields are populated:
+//
+//   - 'n': Name, NameWhat
+//   - 'S': Source, ShortSrc, What, LineDefined, LastLineDefined
+//   - 'l': CurrentLine
+//   - 'u': NUps, NParams, IsVararg
+//   - 'f': pushes the function onto the stack
+//   - 'r': FTransfer, NTransfer
+//   - 't': IsTailCall, ExtraArgs
 type DebugInfo struct {
-	Source          string // source of the chunk
-	ShortSrc        string // short source (for error messages)
-	LineDefined     int    // line where definition starts
-	LastLineDefined int    // line where definition ends
-	CurrentLine     int    // current line
+	Source          string // source of the chunk (e.g. "@filename.lua" or "=stdin")
+	ShortSrc        string // short source for error messages (max 60 chars)
+	LineDefined     int    // line where the function definition starts
+	LastLineDefined int    // line where the function definition ends
+	CurrentLine     int    // current line being executed
 	Name            string // function name (if known)
-	NameWhat        string // "global", "local", "method", "field", ""
-	What            string // "Lua", "C", "main"
+	NameWhat        string // "global", "local", "method", "field", or ""
+	What            string // "Lua", "C", or "main"
 	NUps            int    // number of upvalues
-	NParams         int    // number of parameters
-	IsVararg        bool   // is a vararg function
-	IsTailCall      bool   // is a tail call
+	NParams         int    // number of fixed parameters
+	IsVararg        bool   // true if the function is variadic
+	IsTailCall      bool   // true if this is a tail call
 	ExtraArgs       int    // number of extra arguments (vararg)
 	FTransfer       int    // index of first transferred value (for call/return hooks)
 	NTransfer       int    // number of transferred values (for call/return hooks)
@@ -149,41 +211,54 @@ func (d *DebugInfo) copyFromInternal() {
 
 // Pseudo-indices and special constants.
 const (
-	RegistryIndex = -1001000 // pseudo-index for the registry
-	MultiRet      = -1       // signals "return all results"
+	// RegistryIndex is the pseudo-index for the Lua registry, a global table
+	// used to store values that need to persist across function calls.
+	RegistryIndex = -1001000
+
+	// MultiRet signals that a function call should return all results,
+	// used as the nResults argument to [State.Call] and [State.PCall].
+	MultiRet = -1
 )
 
-// UpvalueIndex returns the pseudo-index for upvalue i (1-based).
+// UpvalueIndex returns the pseudo-index for the i-th upvalue (1-based).
+// Use this inside a [Function] to access closure upvalues.
 func UpvalueIndex(i int) int {
 	return RegistryIndex - i
 }
 
-// Registry keys for well-known values.
+// Well-known registry keys for accessing standard values.
 const (
-	RIdxMainThread = 3 // registry index of main thread (LUA_RIDX_MAINTHREAD)
-	RIdxGlobals    = 2 // registry index of global table
+	// RIdxMainThread is the registry index of the main thread.
+	RIdxMainThread = 3
+
+	// RIdxGlobals is the registry index of the global environment table.
+	RIdxGlobals = 2
 )
 
-// Reference constants for [State.Ref] / [State.Unref].
+// Reference constants for [State.Ref] and [State.Unref].
 const (
-	RefNil = -1 // reference value for nil
-	NoRef  = -2 // "no reference" sentinel
+	// RefNil is the reference returned by [State.Ref] when the value is nil.
+	RefNil = -1
+
+	// NoRef is the "no reference" sentinel, indicating an invalid reference.
+	NoRef = -2
 )
 
-// Status codes returned by [State.PCall], [State.Resume], etc.
+// Status codes returned by [State.PCall], [State.Resume], and related functions.
 const (
 	OK        = 0 // no errors
-	Yield     = 1 // coroutine yielded
+	Yield     = 1 // coroutine yielded (from [State.Resume])
 	ErrRun    = 2 // runtime error
 	ErrSyntax = 3 // syntax error during compilation
 	ErrMem    = 4 // memory allocation error
-	ErrErr    = 5 // error in error handler
+	ErrErr    = 5 // error while running the message handler
 )
 
-// Hook event masks for debug hooks.
+// Hook event masks for [State.SetHookFields].
+// Combine with bitwise OR to set multiple hooks.
 const (
-	MaskCall  = 1 << 0 // call hook
-	MaskRet   = 1 << 1 // return hook
-	MaskLine  = 1 << 2 // line hook
-	MaskCount = 1 << 3 // count hook
+	MaskCall  = 1 << 0 // call hook — triggered on every function call
+	MaskRet   = 1 << 1 // return hook — triggered on every function return
+	MaskLine  = 1 << 2 // line hook — triggered on every new source line
+	MaskCount = 1 << 3 // count hook — triggered every N instructions
 )
