@@ -119,7 +119,8 @@ const (
 	StatusErrRun = 2
 	StatusErrSyntax = 3
 	StatusErrMem = 4
-	StatusErrErr = 5
+	StatusErrErr  = 5
+	StatusErrFile = 6 // file I/O error (mirrors LUA_ERRFILE)
 )
 
 // MultiRet signals "return all results".

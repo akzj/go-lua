@@ -31,6 +31,17 @@ func (L *State) DoString(code string) error {
 	return L.s.DoString(code)
 }
 
+// LoadFile loads a Lua file without executing it.
+// Pushes the compiled chunk as a function on success.
+// Returns a status code ([OK] on success, or an error code).
+// On error, an error message is pushed onto the stack.
+//
+// The mode parameter controls what kind of chunks can be loaded:
+// "t" for text only, "b" for binary only, "bt" for both (default if empty).
+func (L *State) LoadFile(filename string, mode string) int {
+	return L.s.LoadFile(filename, mode)
+}
+
 // DoFile loads and executes a Lua file.
 // Returns nil on success, or an error.
 func (L *State) DoFile(filename string) error {
