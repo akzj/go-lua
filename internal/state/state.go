@@ -216,7 +216,21 @@ func GrowStack(L *LuaState, n int) {
 // Since upvalues use StackIdx (not pointers), no upvalue fixup is needed.
 func reallocStack(L *LuaState, newSize int) {
 	oldSize := len(L.Stack)
-	newStack := make([]object.StackValue, newSize)
+
+	// Fast path: if the underlying array has enough capacity, just reslice.
+	if newSize <= cap(L.Stack) {
+		L.Stack = L.Stack[:newSize]
+		// Initialize new slots to nil
+		for i := oldSize; i < newSize; i++ {
+			L.Stack[i].Val = object.Nil
+		}
+		return
+	}
+
+	// Slow path: allocate new slice with 50% extra capacity headroom
+	// to reduce future reallocations.
+	newCap := newSize + newSize/2
+	newStack := make([]object.StackValue, newSize, newCap)
 	copy(newStack, L.Stack)
 
 	// Initialize new slots to nil
