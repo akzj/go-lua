@@ -250,6 +250,11 @@ type GlobalState struct {
 	// Used to trigger periodic GC during tight allocation loops.
 	GCAllocCount int64
 
+	// GCCountdown is a countdown counter for periodic GC triggering.
+	// Starts at 5000, decrements each checkGC call. When ≤ 0, triggers GC
+	// and resets. Uses countdown instead of modulo for lower inline cost.
+	GCCountdown int64
+
 	// GCStepFn is set by the API layer to run a full GC cycle.
 	// The VM calls this periodically during allocation-heavy loops.
 	// Signature: func(L *LuaState) — runs GCCollect.

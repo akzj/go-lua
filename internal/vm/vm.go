@@ -31,15 +31,24 @@ const maxTagLoop = 2000
 // checkGC triggers a GC step when GCDebt has been exhausted (≤ 0).
 // GCDebt is decremented by TrackAllocation (called from LinkGC and table
 // resize paths). After a collection, SetPause resets debt based on live data.
-// Also maintains a counter-based safety net: even if debt hasn't run out,
+// Also maintains a countdown-based safety net: even if debt hasn't run out,
 // trigger GC every 5000 allocations to prevent Go-heap OOM when Lua's
 // ObjSize estimates undercount actual Go memory usage.
+// Uses countdown instead of modulo to keep inline cost below 80.
 func checkGC(g *state.GlobalState, L *state.LuaState) {
-	if g.GCStepFn == nil {
-		return
+	g.GCCountdown--
+	if g.GCDebt <= 0 || g.GCCountdown <= 0 {
+		checkGCSlow(g, L)
 	}
-	g.GCAllocCount++
-	if g.GCDebt <= 0 || g.GCAllocCount%5000 == 0 {
+}
+
+// checkGCSlow is the slow path for checkGC — resets the countdown and
+// runs a GC step. Separated to keep checkGC inlineable.
+//
+//go:noinline
+func checkGCSlow(g *state.GlobalState, L *state.LuaState) {
+	g.GCCountdown = 5000
+	if g.GCStepFn != nil {
 		g.GCStepFn(L)
 	}
 }
@@ -263,6 +272,15 @@ startfunc:
 			c := int64(opcode.GetArgC(inst))
 			if rb.IsTable() {
 				h := rb.Obj.(*table.Table)
+				// Fast path: integer key in array range — avoid getInt call (cost 111)
+				if c >= 1 && int(c) <= len(h.Array) {
+					val := h.Array[c-1]
+					if !val.IsNil() {
+						L.Stack[ra].Val = val
+						continue
+					}
+				}
+				// Slow path: hash part lookup + metamethods
 				val, found := h.GetInt(c)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
@@ -330,7 +348,14 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				tableSetWithMeta(L, tval, object.MakeInteger(b), rc)
+				h := tval.Obj.(*table.Table)
+				// Fast path: integer key in array range, slot exists, no metamethod
+				if h.Metatable == nil && b >= 1 && int(b) <= len(h.Array) && !h.Array[b-1].IsNil() {
+					h.Array[b-1] = rc
+					gc.BarrierBack(L.Global, h)
+				} else {
+					tableSetWithMeta(L, tval, object.MakeInteger(b), rc)
+				}
 			} else {
 				FinishSet(L, tval, object.MakeInteger(b), rc)
 			}
@@ -953,8 +978,15 @@ startfunc:
 			}
 
 		case opcode.OP_FORLOOP:
-			if forLoop(L, ra) {
-				ci.SavedPC -= opcode.GetArgBx(inst) // jump back
+			// Split integer/float paths so forLoopInt can inline
+			if L.Stack[ra+1].Val.IsInteger() {
+				if forLoopInt(L.Stack, ra) {
+					ci.SavedPC -= opcode.GetArgBx(inst) // jump back
+				}
+			} else {
+				if forLoopFloat(L.Stack, ra) {
+					ci.SavedPC -= opcode.GetArgBx(inst) // jump back
+				}
 			}
 
 		case opcode.OP_TFORPREP:
