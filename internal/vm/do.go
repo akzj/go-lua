@@ -1145,11 +1145,14 @@ func Resume(L *state.LuaState, from *state.LuaState, nArgs int) (int, int) {
 					// Re-enter the VM to continue executing
 					execute(L, ci)
 				} else {
-					// C function with continuation
+					// C function yield — call continuation if present,
+					// then ALWAYS finish the call frame via posCall.
+					// Mirrors: resume() in ldo.c — 'common' yield branch.
+					n := nArgs // default: resume args become return values
 					if ci.K != nil {
-						n := ci.K(L, state.StatusYield, ci.Ctx)
-						posCall(L, ci, n)
+						n = ci.K(L, state.StatusYield, ci.Ctx)
 					}
+					posCall(L, ci, n)
 				}
 				// Continue executing
 				unroll(L)
