@@ -8,7 +8,8 @@ import (
 // State is the main Lua interpreter state.
 // It wraps the internal API state and provides a clean public interface.
 type State struct {
-	s *api.State
+	s      *api.State
+	goHook HookFunc // Go hook callback set via SetHook (nil if unset)
 }
 
 // NewState creates a new Lua state with all standard libraries loaded.
