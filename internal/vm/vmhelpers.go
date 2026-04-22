@@ -973,7 +973,8 @@ func Concat(L *state.LuaState, total int) {
 			// Walk the stack backwards (toward lower indices), appending in
 			// reverse order, then build the result with strings.Builder.
 			// This avoids the O(n²) prepend of the old []string{sv}, parts... approach.
-			var parts []string
+			var buf [8]string
+			parts := buf[:0]
 			parts = append(parts, s2, s1) // reverse order: s2 first, s1 second
 			for n < total {
 				sv, ok := toStringForConcat(L.Stack[top-n-1].Val)
