@@ -307,15 +307,16 @@ func TestTestesWide(t *testing.T) {
 					"T.loadlib(L1, 2, ~2)    -- load only 'package', preload all others\na, b, c = T.doremote(L1, [[\n  string = require'string'\n  local initialG = _G   -- not loaded yet\n  local a = require'_G'; assert(a == _G and require(\"_G\") == a)\n  assert(initialG == nil and io == nil)   -- now we have 'assert'\n  io = require'io'; assert(type(io.read) == \"function\")\n  assert(require(\"io\") == io)\n  a = require'table'; assert(type(a.insert) == \"function\")\n  a = require'debug'; assert(type(a.getlocal) == \"function\")\n  a = require'math'; assert(type(a.sin) == \"function\")\n  return string.sub('okinama', 1, 2)\n]])\nassert(a == \"ok\")",
 					"-- SKIP: selective loadlib test (require is in baselib, not packagelib like C Lua)\n-- T.loadlib(L1, 2, ~2)",
 					1)
-				// Patch 9: Skip to-be-closed section (partially working, closeslot pop test still fails)
+				// Patch 9 PARTIALLY REMOVED: toclose section now enabled.
+				// Still need to skip checkstack/alloccount/newstate tests after toclose
+				// (Go can't control allocations or limit stack growth like C Lua).
 				src = strings.Replace(src,
-					"-- testing to-be-closed variables\n",
-					"if false then  -- SKIP: toclose section partially working (closeslot pop test fails)\n-- testing to-be-closed variables\n",
+					"\n\ndo   -- testing failing in 'lua_checkstack'",
+					"\n\nif false then  -- SKIP: checkstack/alloccount/newstate (Go can't control allocations)\ndo   -- testing failing in 'lua_checkstack'",
 					1)
-				// The to-be-closed section ends before "testing some auxlib functions"
 				src = strings.Replace(src,
-					"print'+'\n\n-- testing some auxlib functions",
-					"end  -- END SKIP to-be-closed\nprint'+'\n\n-- testing some auxlib functions",
+					"  T.closestate(L)\nend\n\nprint'+'",
+					"  T.closestate(L)\nend\nend  -- END SKIP checkstack/alloccount\n\nprint'+'",
 					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
