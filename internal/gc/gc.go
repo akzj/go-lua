@@ -1116,18 +1116,57 @@ func FullGC(g *state.GlobalState, L *state.LuaState) {
 // GC Step + Debt-Based Pacing
 // ---------------------------------------------------------------------------
 
-// GCStep performs one GC step triggered by the debt-based pacer.
-// For now (no write barriers), this runs a full collection cycle.
-// Later with barriers, this will run bounded SingleSteps.
-// After the cycle, SetPause recalculates debt for the next trigger.
+// GCStep performs bounded incremental GC work triggered by the debt-based
+// pacer. Matches C Lua's incstep() (lgc.c:1710-1728):
+//
+//	stepsize = applygcparam(STEPSIZE, 100)
+//	work2do  = applygcparam(STEPMUL, stepsize / sizeof(void*))
+//	fast     = (work2do == 0)   // stepsize=0 → full collection per step
+//	loop SingleStep until work >= work2do or cycle completes (or fast)
+//	if completed: SetPause resets debt based on live data
+//	if partial:   debt = stepsize (allocation credit until next step)
 func GCStep(g *state.GlobalState, L *state.LuaState) {
 	if g.GCStopped {
 		return
 	}
-	// Run a full collection cycle
-	FullGC(g, L)
-	// Recalculate debt based on live data estimate
-	SetPause(g)
+
+	// GCStepSize is log2 of step size in bytes (default 13 → 8KB).
+	// Special case: stepsize=0 means "stop-the-world" — run a full cycle
+	// per step (matches C Lua's fast flag in incstep).
+	if g.GCStepSize == 0 {
+		FullGC(g, L)
+		SetPause(g)
+		return
+	}
+
+	// Calculate work budget.
+	// stepsize = 1 << GCStepSize (bytes → work units, divided by pointer size)
+	// work2do  = stepmul * (stepsize / ptrsize) / 100
+	// C Lua divides by sizeof(void*) to convert bytes to "work units".
+	stepsize := int64(1) << g.GCStepSize // e.g. 1<<13 = 8192
+	stepmul := int64(g.GCStepMul)
+	if stepmul == 0 {
+		stepmul = 200 // safety default
+	}
+	work2do := stepmul * (stepsize / 8) / 100 // 8 = sizeof(void*) on 64-bit
+
+	// Do bounded incremental work via SingleStep
+	var work int64
+	for {
+		work += SingleStep(g, L)
+		if g.GCState == object.GCSpause || work >= work2do {
+			break
+		}
+	}
+
+	if g.GCState == object.GCSpause {
+		// Completed a full cycle — recalculate debt based on live data
+		SetPause(g)
+	} else {
+		// Partial step — set debt = stepsize bytes of allocation credit
+		// before the next GC step triggers.
+		g.GCDebt = stepsize
+	}
 }
 
 // SetPause calculates the GC debt (allocation credit) after a collection.

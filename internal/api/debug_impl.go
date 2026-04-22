@@ -66,6 +66,9 @@ func (L *State) GetStack(level int) (*DebugInfo, bool) {
 		ar.Source = "=[C]"
 		ar.ShortSrc = "[C]"
 		ar.What = "C"
+		ar.LineDefined = -1     // C functions have no line info
+		ar.LastLineDefined = -1 // C functions have no line info
+		ar.CurrentLine = -1     // C functions have no current line
 		ar.IsVararg = true // All C functions are vararg
 		ar.NParams = 0
 		if fval.Tt == object.TagCClosure {

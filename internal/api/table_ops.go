@@ -153,6 +153,10 @@ func (L *State) SetTable(idx int) {
 			L.Errorf("table index is NaN")
 		}
 		tbl.Set(key, val)
+		if delta := tbl.SizeDelta; delta != 0 {
+			tbl.SizeDelta = 0
+			ls.Global.TrackAllocation(delta)
+		}
 		gc.BarrierBack(ls.Global, tbl) // GC write barrier: table mutated
 	}
 	ls.Top -= 2
@@ -179,6 +183,10 @@ func (L *State) SetField(idx int, key string) {
 		ks := L.internStr(key)
 		val := ls.Stack[ls.Top-1].Val
 		tbl.SetStr(ks, val)
+		if delta := tbl.SizeDelta; delta != 0 {
+			tbl.SizeDelta = 0
+			ls.Global.TrackAllocation(delta)
+		}
 		gc.BarrierBack(ls.Global, tbl) // GC write barrier: table mutated
 	}
 	ls.Top--
@@ -214,6 +222,10 @@ func (L *State) SetGlobal(name string) {
 	ks := L.internStr(name)
 	val := ls.Stack[ls.Top-1].Val
 	gt.SetStr(ks, val)
+	if delta := gt.SizeDelta; delta != 0 {
+		gt.SizeDelta = 0
+		ls.Global.TrackAllocation(delta)
+	}
 	gc.BarrierBack(ls.Global, gt) // GC write barrier: global table mutated
 	ls.Top--
 }

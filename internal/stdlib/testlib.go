@@ -629,18 +629,18 @@ func runC(L *luaapi.State, L1 *luaapi.State, pc string) int {
 
 		case "toclose":
 			// lua_toclose — mark slot as to-be-closed
-			_ = p.getNum(L, L1)
-			// no-op stub for now
+			idx := p.getNum(L, L1)
+			L1.ToClose(idx)
 
 		case "closeslot":
-			_ = p.getNum(L, L1)
-			// no-op stub for now
+			idx := p.getNum(L, L1)
+			L1.CloseSlot(idx)
 
 		case "sethook":
-			_ = p.getNum(L, L1)
-			_ = p.getNum(L, L1)
-			_ = p.getString()
-			// no-op stub
+			mask := p.getNum(L, L1)
+			count := p.getNum(L, L1)
+			scpt := p.getString()
+			sethookaux(L, L1, mask, count, scpt)
 
 		case "traceback":
 			msg := p.getString()
@@ -814,19 +814,16 @@ func testS2d(L *luaapi.State) int {
 // ---------------------------------------------------------------------------
 // T.stacklevel() — return stack level info
 // ---------------------------------------------------------------------------
+// C Lua returns 5 values: top-stack, stacksize, nCcalls, nci, &localvar.
+// We return the first 4 (no meaningful C stack address in Go).
 
 func testStacklevel(L *luaapi.State) int {
-	// Return the number of active call frames
-	level := 0
-	for {
-		_, ok := L.GetStack(level)
-		if !ok {
-			break
-		}
-		level++
-	}
-	L.PushInteger(int64(level))
-	return 1
+	ls := L.Internal.(*state.LuaState)
+	L.PushInteger(int64(ls.Top))              // top offset (top - stack base)
+	L.PushInteger(int64(len(ls.Stack)))        // allocated stack size
+	L.PushInteger(int64(ls.NCI))               // nCcalls equivalent (CI count)
+	L.PushInteger(int64(ls.NCI))               // number of CallInfo nodes
+	return 4
 }
 
 // ---------------------------------------------------------------------------
@@ -1360,14 +1357,14 @@ func testSethook(L *luaapi.State) int {
 	return 0
 }
 
+// hookEventNames maps hook event integer constants to string names.
+// Matches C Lua's hooknames[] in ldblib.c.
+var hookEventNames = [5]string{"call", "return", "line", "count", "tail call"}
+
 // sethookaux sets a C-script hook on the target thread.
 // Mirrors: sethookaux + Chook in ltests.c.
-// hookDispatch (in vm/do.go) calls the hook as a C function with:
-//
-//	arg1 = event name (string)
-//	arg2 = line number (integer, line hooks only)
-//
-// The Go closure captures 'script' and runs it via runC.
+// hookDispatch calls CFunction hooks directly (no CI frame).
+// Event/line are read from L.HookEvent/L.HookLine state fields.
 func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script string) {
 	ls1 := L1.Internal.(*state.LuaState)
 	if script == "" {
@@ -1378,30 +1375,20 @@ func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script strin
 		return
 	}
 	hookFn := state.CFunction(func(hookL *state.LuaState) int {
-		ci := hookL.CI
-		// Read event string (arg 1) and line (arg 2) from the call frame
-		eventIdx := ci.Func + 1
+		// Read event/line from state fields (set by hookDispatch).
+		// hookDispatch calls CFunction hooks directly without CI frame.
+		eventInt := hookL.HookEvent
 		var eventStr string
-		if eventIdx < hookL.Top {
-			if s, ok := hookL.Stack[eventIdx].Val.Obj.(*object.LuaString); ok {
-				eventStr = s.String()
-			}
+		if eventInt >= 0 && eventInt < len(hookEventNames) {
+			eventStr = hookEventNames[eventInt]
 		}
-		lineIdx := ci.Func + 2
-		var lineVal int64
-		hasLine := false
-		if lineIdx < hookL.Top {
-			lv := hookL.Stack[lineIdx].Val
-			if lv.IsInteger() {
-				lineVal = lv.Integer()
-				hasLine = true
-			}
-		}
+		lineVal := hookL.HookLine
+
 		// Push event and line for the script (mirrors C Lua's Chook)
 		apiL := &luaapi.State{Internal: hookL}
 		apiL.PushString(eventStr)
-		if hasLine {
-			apiL.PushInteger(lineVal)
+		if lineVal >= 0 {
+			apiL.PushInteger(int64(lineVal))
 		}
 		runC(apiL, apiL, script)
 		return 0

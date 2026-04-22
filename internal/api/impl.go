@@ -14,6 +14,7 @@ import (
 	"github.com/akzj/go-lua/internal/parse"
 	"github.com/akzj/go-lua/internal/state"
 	"github.com/akzj/go-lua/internal/table"
+	"github.com/akzj/go-lua/internal/vm"
 )
 
 // ---------------------------------------------------------------------------
@@ -129,11 +130,17 @@ func NewState() *State {
 	// without importing this package.
 
 	// GCStepFn: periodic GC during VM allocation loops.
-	// Runs FullGC (mark/sweep + weak table clearing) AND drains
+	// Runs a full GC cycle (mark/sweep + weak table clearing) AND drains
 	// pending finalizers (__gc). This is required for gc.lua tests
 	// where allocation loops depend on __gc setting a finish flag.
 	// The traverseThread function marks ALL allocated stack slots,
 	// preventing premature collection of live registers.
+	//
+	// Note: This uses FullGC (not incremental GCStep) because Lua tests
+	// and user code rely on finalizers running promptly during allocation
+	// loops. The debt-based pacer (GCPause/GCDebt) controls how often
+	// this runs — with GCPause=250, it triggers when memory reaches
+	// 2.5x live data, which is infrequent enough for good performance.
 	ls.Global.GCStepFn = func(thread *state.LuaState) {
 		g := thread.Global
 		if g.GCRunning || g.GCRunningFinalizer || g.GCStopped {
@@ -180,21 +187,55 @@ func (L *State) GetTop() int {
 }
 
 // SetTop sets the stack top to idx. Fills with nil if growing.
+// When shrinking, closes any to-be-closed variables above the new top.
+// Mirrors: lua_settop in lapi.c:179-203
 func (L *State) SetTop(idx int) {
 	ls := L.ls()
 	ci := ls.CI
 	base := ci.Func + 1
+	var newTop int
+	var diff int
 	if idx >= 0 {
-		newTop := base + idx
+		newTop = base + idx
+		diff = newTop - ls.Top
 		// Fill new slots with nil
 		for ls.Top < newTop {
 			ls.Stack[ls.Top].Val = object.Nil
 			ls.Top++
 		}
-		ls.Top = newTop
 	} else {
-		ls.Top = ls.Top + idx + 1
+		diff = idx + 1 // negative
+		newTop = ls.Top + diff
 	}
+	// When shrinking and TBC variables exist at or above newTop, close them.
+	// Uses CLOSEKTOP: don't reset L.Top inside __close (we set it below).
+	// Mirrors C Lua: if (diff < 0 && L->tbclist.p >= newtop)
+	//   newtop = luaF_close(L, newtop, CLOSEKTOP, 0);
+	if diff < 0 && ls.TBCList >= newTop {
+		vm.CloseTBCKeepTop(ls, newTop)
+	}
+	ls.Top = newTop
+}
+
+// ToClose marks the value at the given index as to-be-closed.
+// Its __close metamethod will be called when the slot goes out of scope.
+// Mirrors: lua_toclose in lapi.c:1288-1296
+func (L *State) ToClose(idx int) {
+	ls := L.ls()
+	level := L.index2stack(idx)
+	vm.MarkTBC(ls, level)
+	ls.CI.CallStatus |= state.CISTTBC
+}
+
+// CloseSlot closes the to-be-closed variable at the given index and sets
+// the slot to nil. The index must be the last marked to-be-closed slot.
+// Uses CLOSEKTOP semantics: does not reset L.Top (preserves stack above).
+// Mirrors: lua_closeslot in lapi.c:206-214
+func (L *State) CloseSlot(idx int) {
+	ls := L.ls()
+	level := L.index2stack(idx)
+	vm.CloseTBCKeepTop(ls, level)
+	ls.Stack[level].Val = object.Nil
 }
 
 // AbsIndex converts a possibly-negative index to absolute.

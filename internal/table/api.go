@@ -35,6 +35,11 @@ type Table struct {
 
 	// Weak table support (__mode metafield)
 	WeakMode byte // bit 0 = weak keys, bit 1 = weak values
+
+	// SizeDelta accumulates the net change in ObjSize from table resizes.
+	// The VM/API layer checks this after table mutations and calls
+	// TrackAllocation to update GCDebt. Reset to 0 after consumption.
+	SizeDelta int64
 }
 
 // GC returns the GC header for this table.

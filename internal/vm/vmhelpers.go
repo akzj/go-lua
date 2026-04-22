@@ -1087,7 +1087,7 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 		RunError(L, "table index is NaN")
 	}
 	h := tval.Obj.(*table.Table)
-	// Fast path: key already exists → just overwrite
+	// Fast path: key already exists → just overwrite (no rehash possible)
 	_, found := h.Get(key)
 	if found {
 		h.Set(key, val)
@@ -1097,9 +1097,10 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 	// Key absent — check for __newindex metamethod
 	tm := getTableTM(L.Global, h, metamethod.TM_NEWINDEX)
 	if tm.IsNil() {
-		// No metamethod — raw set
+		// No metamethod — raw set (may trigger rehash)
 		h.Set(key, val)
-		gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
+		trackTableResize(L.Global, h) // track resize delta for GC debt
+		gc.BarrierBack(L.Global, h)   // GC write barrier: table mutated
 		return
 	}
 	// Has __newindex — delegate to FinishSet which handles the chain
@@ -1115,7 +1116,8 @@ func FinishSet(L *state.LuaState, t, key, val object.TValue) {
 			tm = getTableTM(L.Global, h, metamethod.TM_NEWINDEX)
 			if tm.IsNil() {
 				h.Set(key, val)
-				gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
+				trackTableResize(L.Global, h) // track resize delta for GC debt
+				gc.BarrierBack(L.Global, h)   // GC write barrier: table mutated
 				return
 			}
 		} else {
