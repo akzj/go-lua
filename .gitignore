@@ -38,3 +38,4 @@ lua-master/*.o
 # Benchmark raw data (results go in commit messages, not tracked)
 /benchmarks/
 tools/luarunner/luarunner
+glua
