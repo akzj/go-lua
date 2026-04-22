@@ -89,7 +89,13 @@ func stackInit(L *LuaState) {
 	// Allocate stack with extra space and capacity headroom
 	// to avoid reallocation on moderate growth.
 	size := BasicStackSize + ExtraStack
-	L.Stack = make([]object.StackValue, size, size+size/2)
+	if cap(L.Stack) >= size {
+		// Reuse existing stack slice from pool — just reslice and clear
+		L.Stack = L.Stack[:size]
+	} else {
+		// Allocate new stack with capacity headroom
+		L.Stack = make([]object.StackValue, size, size+size/2)
+	}
 	for i := range L.Stack {
 		L.Stack[i].Val = object.Nil
 	}
@@ -342,7 +348,7 @@ func ShrinkCI(L *LuaState) {
 
 // NewThread creates a new Lua thread (coroutine) sharing the same GlobalState.
 func NewThread(L *LuaState) *LuaState {
-	L1 := &LuaState{}
+	L1 := getLuaState() // from pool instead of &LuaState{}
 	g := L.Global
 	L1.Global = g
 

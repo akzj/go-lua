@@ -172,3 +172,59 @@ func BenchmarkGC(b *testing.B) {
 		L.Close()
 	}
 }
+
+// BenchmarkCoroutineCreate — coroutine creation overhead
+func BenchmarkCoroutineCreate(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            for i = 1, 10000 do
+                coroutine.create(function() end)
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkCoroutineYieldResume — yield/resume cycle overhead
+func BenchmarkCoroutineYieldResume(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            local function gen()
+                for i = 1, 10000 do
+                    coroutine.yield(i)
+                end
+            end
+            local co = coroutine.create(gen)
+            while coroutine.resume(co) do end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
+
+// BenchmarkCoroutineCreateResumeFinish — full lifecycle: create, resume once, finish
+func BenchmarkCoroutineCreateResumeFinish(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		err := L.DoString(`
+            for i = 1, 10000 do
+                local co = coroutine.create(function() return i end)
+                coroutine.resume(co)
+            end
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
