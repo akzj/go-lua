@@ -647,6 +647,8 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 				closure.PutLClosure(o)
 			case *closure.UpVal:
 				closure.PutUpVal(o)
+			case *state.LuaState:
+				state.PutLuaState(o)
 			}
 			freed++
 		} else {
@@ -695,6 +697,8 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 				closure.PutLClosure(o)
 			case *closure.UpVal:
 				closure.PutUpVal(o)
+			case *state.LuaState:
+				state.PutLuaState(o)
 			}
 		} else {
 			// Alive — reset to current white
