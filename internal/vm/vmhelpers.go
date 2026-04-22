@@ -1103,10 +1103,8 @@ func tableSetWithMeta(L *state.LuaState, tval object.TValue, key, val object.TVa
 		RunError(L, "table index is NaN")
 	}
 	h := tval.Obj.(*table.Table)
-	// Fast path: key already exists → just overwrite (no rehash possible)
-	_, found := h.Get(key)
-	if found {
-		h.Set(key, val)
+	// Fast path: key already exists → overwrite in single lookup (no rehash)
+	if h.SetIfExists(key, val) {
 		gc.BarrierBack(L.Global, h) // GC write barrier: table mutated
 		return
 	}

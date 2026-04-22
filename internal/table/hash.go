@@ -276,6 +276,81 @@ func getStrFromHash(t *Table, key *object.LuaString) (object.TValue, bool) {
 }
 
 // ---------------------------------------------------------------------------
+// SetIfExists helpers — combined lookup + overwrite (no insertion)
+// ---------------------------------------------------------------------------
+
+// setInHashLoopIfExists walks the hash chain and overwrites the value if found.
+func setInHashLoopIfExists(t *Table, key object.TValue, mp int, value object.TValue) bool {
+	idx := mp
+	for {
+		nd := &t.Nodes[idx]
+		if equalKey(key, nd, false) {
+			if !nodeIsEmpty(nd) {
+				nd.Val = value
+				return true
+			}
+			return false
+		}
+		nx := nd.Next
+		if nx == 0 {
+			return false
+		}
+		idx += int(nx)
+	}
+}
+
+// setIntInHashIfExists searches the hash part for an integer key and overwrites if found.
+func setIntInHashIfExists(t *Table, key int64, value object.TValue) bool {
+	if len(t.Nodes) == 0 {
+		return false
+	}
+	hmask := (1 << t.LsizeNode) - 1
+	idx := hashInt(key, hmask)
+	for {
+		nd := &t.Nodes[idx]
+		if nd.KeyTT == object.TagInteger && nd.KeyVal.(int64) == key {
+			if !nodeIsEmpty(nd) {
+				nd.Val = value
+				return true
+			}
+			return false
+		}
+		nx := nd.Next
+		if nx == 0 {
+			return false
+		}
+		idx += int(nx)
+	}
+}
+
+// setStrInHashIfExists searches the hash part for a short string key and overwrites if found.
+func setStrInHashIfExists(t *Table, key *object.LuaString, value object.TValue) bool {
+	if len(t.Nodes) == 0 {
+		return false
+	}
+	hmask := (1 << t.LsizeNode) - 1
+	idx := hashStr(key, hmask)
+	for {
+		nd := &t.Nodes[idx]
+		if nd.KeyTT == object.TagShortStr {
+			ndKey := nd.KeyVal.(*object.LuaString)
+			if ndKey == key || ndKey.Data == key.Data {
+				if !nodeIsEmpty(nd) {
+					nd.Val = value
+					return true
+				}
+				return false
+			}
+		}
+		nx := nd.Next
+		if nx == 0 {
+			return false
+		}
+		idx += int(nx)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Free slot management
 // ---------------------------------------------------------------------------
 
