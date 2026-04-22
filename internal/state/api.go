@@ -185,6 +185,11 @@ type LuaState struct {
 	// Saved state for hook yield resume (survives panic/yield)
 	HookSavedTop  int  // L.Top before hook dispatch
 	HookSavedCITop int // ci.Top before hook dispatch
+
+	// APIState caches the public api.State wrapper for this LuaState.
+	// This avoids allocating a new &State{Internal: ls} on every C function call.
+	// Set once during state creation; type is any to avoid circular import.
+	APIState any
 }
 
 // Hook event constants (matches C LUA_HOOK*)
