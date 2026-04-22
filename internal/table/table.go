@@ -88,6 +88,48 @@ func (t *Table) getStr(key *object.LuaString) (object.TValue, bool) {
 // Set operations
 // ---------------------------------------------------------------------------
 
+// setIfExists overwrites the value for an existing key and returns true.
+// If the key is not found, returns false without modifying the table.
+// This avoids the double hash-chain walk of get() + set().
+func (t *Table) setIfExists(key, value object.TValue) bool {
+	switch key.Tt {
+	case object.TagInteger:
+		if key.N >= 1 && int(key.N) <= len(t.Array) {
+			if !t.Array[key.N-1].Tt.IsNil() {
+				t.Array[key.N-1] = value
+				return true
+			}
+			return false
+		}
+		return setIntInHashIfExists(t, key.N, value)
+	case object.TagFloat:
+		f := key.Float()
+		if i, ok := floatToInteger(f); ok {
+			if i >= 1 && int(i) <= len(t.Array) {
+				if !t.Array[i-1].Tt.IsNil() {
+					t.Array[i-1] = value
+					return true
+				}
+				return false
+			}
+			return setIntInHashIfExists(t, i, value)
+		}
+		if len(t.Nodes) == 0 {
+			return false
+		}
+		return setInHashLoopIfExists(t, key, mainPosition(t, key), value)
+	case object.TagShortStr:
+		return setStrInHashIfExists(t, key.Obj.(*object.LuaString), value)
+	case object.TagNil:
+		return false
+	default:
+		if len(t.Nodes) == 0 {
+			return false
+		}
+		return setInHashLoopIfExists(t, key, mainPosition(t, key), value)
+	}
+}
+
 // set sets the value for a key. Panics on nil/NaN keys.
 func (t *Table) set(key, value object.TValue) {
 	switch key.Tt {

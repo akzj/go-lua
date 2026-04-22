@@ -103,6 +103,13 @@ func (t *Table) RawLen() int64 {
 // Set operations — may trigger rehash
 // ---------------------------------------------------------------------------
 
+// SetIfExists overwrites the value for an existing key and returns true.
+// If the key is not found, returns false without modifying the table.
+// This is the "fast set" path — no insertion, no rehash, single hash lookup.
+func (t *Table) SetIfExists(key, value object.TValue) bool {
+	return t.setIfExists(key, value)
+}
+
 // Set sets the value for the given key. Panics if key is nil or NaN.
 // If the key is new and the hash part is full, triggers a rehash.
 func (t *Table) Set(key, value object.TValue) {
