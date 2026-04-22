@@ -642,9 +642,14 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 					g.SweepStringFn(obj)
 				}
 			}
-			// Return dead tables to the pool for reuse
-			if t, ok := obj.(*table.Table); ok {
-				table.PutTable(t)
+			// Return dead objects to pools for reuse
+			switch o := obj.(type) {
+			case *table.Table:
+				table.PutTable(o)
+			case *closure.LClosure:
+				closure.PutLClosure(o)
+			case *closure.UpVal:
+				closure.PutUpVal(o)
 			}
 			freed++
 		} else {
@@ -687,8 +692,14 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 					g.SweepStringFn(obj)
 				}
 			}
-			if t, ok := obj.(*table.Table); ok {
-				table.PutTable(t)
+			// Return dead objects to pools for reuse
+			switch o := obj.(type) {
+			case *table.Table:
+				table.PutTable(o)
+			case *closure.LClosure:
+				closure.PutLClosure(o)
+			case *closure.UpVal:
+				closure.PutUpVal(o)
 			}
 		} else {
 			// Alive — reset to current white
