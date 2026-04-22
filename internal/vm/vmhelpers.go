@@ -3,6 +3,7 @@ package vm
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/akzj/go-lua/internal/closure"
@@ -544,6 +545,10 @@ func EqualObj(L *state.LuaState, t1, t2 object.TValue) bool {
 				return ok && i1 == t2.N
 			}
 		}
+		// Short vs Long string comparison by content
+		if t1.IsString() && t2.IsString() {
+			return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
+		}
 		return false
 	}
 	// Same base type
@@ -635,6 +640,10 @@ func rawEqualObj(t1, t2 object.TValue) bool {
 				i1, ok := floatToInteger(t1.Float())
 				return ok && i1 == t2.N
 			}
+		}
+		// Short vs Long string comparison by content
+		if t1.IsString() && t2.IsString() {
+			return t1.Obj.(*object.LuaString).Data == t2.Obj.(*object.LuaString).Data
 		}
 		return false
 	}
@@ -816,31 +825,9 @@ func toStringForConcat(v object.TValue) (string, bool) {
 }
 
 func intToString(i int64) string {
-	// Simple integer to string
-	if i == 0 {
-		return "0"
-	}
-	neg := false
-	if i < 0 {
-		neg = true
-		i = -i
-		if i < 0 { // MinInt64
-			return "-9223372036854775808"
-		}
-	}
-	buf := make([]byte, 0, 20)
-	for i > 0 {
-		buf = append(buf, byte('0'+i%10))
-		i /= 10
-	}
-	// Reverse
-	for l, r := 0, len(buf)-1; l < r; l, r = l+1, r-1 {
-		buf[l], buf[r] = buf[r], buf[l]
-	}
-	if neg {
-		return "-" + string(buf)
-	}
-	return string(buf)
+	// Stack-allocated buffer avoids heap allocation for small integers.
+	var buf [20]byte
+	return string(strconv.AppendInt(buf[:0], i, 10))
 }
 
 func floatToString(f float64) string {
@@ -934,6 +921,20 @@ func makeInternedString(L *state.LuaState, s string) object.TValue {
 	return object.MakeString(internString(L, s))
 }
 
+// makeConcatString creates a non-interned (long) string for concat results.
+// Concat results are often ephemeral — skipping interning avoids the hash
+// table lookup + insertion overhead. Long strings still work correctly as
+// table keys (content comparison) and are properly GC-tracked.
+func makeConcatString(L *state.LuaState, s string) object.TValue {
+	ls := &object.LuaString{
+		Data:    s,
+		Hash_:   0,     // computed lazily if used as table key
+		IsShort: false, // non-interned — content comparison for equality
+	}
+	L.Global.LinkGC(ls) // register with GC so it gets swept
+	return object.MakeString(ls)
+}
+
 // Concat concatenates 'total' values on the stack from L.Top-total to L.Top-1.
 func Concat(L *state.LuaState, total int) {
 	if total == 1 {
@@ -998,7 +999,7 @@ func Concat(L *state.LuaState, total int) {
 			for _, p := range parts {
 				b.WriteString(p)
 			}
-			L.Stack[top-n].Val = makeInternedString(L, b.String())
+			L.Stack[top-n].Val = makeConcatString(L, b.String())
 			total -= n - 1
 			L.Top -= n - 1
 		}
@@ -1309,36 +1310,36 @@ func forPrep(L *state.LuaState, ra int) bool {
 	return false
 }
 
-// forLoop performs one iteration of a numeric for loop.
-// Returns true if the loop should continue (jump back).
-func forLoop(L *state.LuaState, ra int) bool {
-	if L.Stack[ra+1].Val.IsInteger() {
-		// Integer loop: ra=count, ra+1=step, ra+2=control
-		count := uint64(L.Stack[ra].Val.Integer())
-		if count > 0 {
-			step := L.Stack[ra+1].Val.Integer()
-			idx := L.Stack[ra+2].Val.Integer()
-			L.Stack[ra].Val = object.MakeInteger(int64(count - 1))
-			idx += step
-			L.Stack[ra+2].Val = object.MakeInteger(idx)
+// forLoopInt handles the integer for-loop fast path.
+// Extracted from forLoop to keep inline cost low.
+// Integer loop: ra=count, ra+1=step, ra+2=control.
+// Sets N directly instead of using MakeInteger to reduce inline cost.
+func forLoopInt(stack []object.StackValue, ra int) bool {
+	count := uint64(stack[ra].Val.N)
+	if count > 0 {
+		stack[ra].Val.N = int64(count - 1)
+		stack[ra+2].Val.N += stack[ra+1].Val.N
+		return true
+	}
+	return false
+}
+
+// forLoopFloat handles the float for-loop path.
+// Float loop: ra=limit, ra+1=step, ra+2=control
+func forLoopFloat(stack []object.StackValue, ra int) bool {
+	step := stack[ra+1].Val.Float()
+	limit := stack[ra].Val.Float()
+	idx := stack[ra+2].Val.Float()
+	idx += step
+	if step > 0 {
+		if idx <= limit {
+			stack[ra+2].Val = object.MakeFloat(idx)
 			return true
 		}
 	} else {
-		// Float loop: ra=limit, ra+1=step, ra+2=control
-		step := L.Stack[ra+1].Val.Float()
-		limit := L.Stack[ra].Val.Float()
-		idx := L.Stack[ra+2].Val.Float()
-		idx += step
-		if step > 0 {
-			if idx <= limit {
-				L.Stack[ra+2].Val = object.MakeFloat(idx)
-				return true
-			}
-		} else {
-			if limit <= idx {
-				L.Stack[ra+2].Val = object.MakeFloat(idx)
-				return true
-			}
+		if limit <= idx {
+			stack[ra+2].Val = object.MakeFloat(idx)
+			return true
 		}
 	}
 	return false

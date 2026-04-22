@@ -155,7 +155,8 @@ func equalKey(k1 object.TValue, n2 *node, deadOk bool) bool {
 			}
 			return k1.Payload() == n2.KeyVal
 		}
-		if n2.KeyTT == object.TagShortStr && k1.Tt == object.TagLongStr {
+		// Cross-type string comparison (short vs long or long vs short)
+		if k1.IsString() && (n2.KeyTT == object.TagShortStr || n2.KeyTT == object.TagLongStr) {
 			s1 := k1.Obj.(*object.LuaString)
 			s2 := n2.KeyVal.(*object.LuaString)
 			return s1.Data == s2.Data
@@ -558,10 +559,8 @@ func resizeTable(t *Table, newASize, newHSize int) {
 	// Allocate new array
 	var newArray []object.TValue
 	if newASize > 0 {
+		// make() returns zeroed memory; object.Nil is the zero value (TagNil=0x00)
 		newArray = make([]object.TValue, newASize)
-		for i := range newArray {
-			newArray[i] = object.Nil
-		}
 	}
 
 	// Copy common elements from old array
