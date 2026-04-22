@@ -250,6 +250,24 @@ func (L *State) RawSetI(idx int, n int64) {
 	L.SetI(idx, n)
 }
 
+// RawGetP does t[p] where p is a light userdata pointer key.
+// Pushes the result. Mirrors: lua_rawgetp in lapi.c
+func (L *State) RawGetP(idx int, p uintptr) object.Type {
+	L.PushLightUserdata(p)
+	return L.RawGet(idx)
+}
+
+// RawSetP does t[p] = v where p is a light userdata pointer key.
+// v is the value at the top of the stack (popped).
+// Mirrors: lua_rawsetp in lapi.c
+func (L *State) RawSetP(idx int, p uintptr) {
+	// Stack: ... v
+	// We need to push the key, then swap so key is at -2, v at -1
+	L.PushLightUserdata(p) // ... v key
+	L.Insert(-2)           // ... key v
+	L.RawSet(idx)
+}
+
 // CreateTable pushes a new table with pre-allocated space.
 func (L *State) CreateTable(nArr, nRec int) {
 	t := table.New(nArr, nRec)

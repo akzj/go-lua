@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akzj/go-lua/internal/closure"
 	"github.com/akzj/go-lua/internal/object"
 
 	"github.com/akzj/go-lua/internal/state"
@@ -195,4 +196,17 @@ func (L *State) DoFile(filename string) error {
 func (L *State) Error() int {
 	vm.ErrorMsg(L.ls())
 	return 0 // unreachable
+}
+
+// Dump dumps the function at the top of the stack as a binary chunk.
+// If strip is true, debug information is removed.
+// Returns the binary chunk bytes, or nil if the value is not a Lua function.
+// Mirrors: lua_dump in lapi.c
+func (L *State) Dump(strip bool) []byte {
+	v := L.index2val(-1)
+	if v == nil || v.Tt != object.TagLuaClosure {
+		return nil
+	}
+	cl := v.Obj.(*closure.LClosure)
+	return vm.DumpProto(cl.Proto, strip)
 }
