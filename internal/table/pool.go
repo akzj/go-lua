@@ -18,12 +18,17 @@ var tablePool = sync.Pool{
 }
 
 // getTable gets a Table from the pool or allocates a new one.
-// The returned Table is zero-valued (all fields cleared).
+// PutTable already clears reference fields (Array, Nodes, Metatable, GCHeader).
+// We only need to zero the scalar fields here.
 func getTable() *Table {
 	t := tablePool.Get().(*Table)
-	// CRITICAL: zero out ALL fields for safe reuse.
-	// A reused table with stale pointers would corrupt the GC.
-	*t = Table{}
+	// Reference fields (Array, Nodes, Metatable, GCHeader) were cleared by PutTable.
+	// Zero the remaining scalar fields for safe reuse.
+	t.LsizeNode = 0
+	t.LastFree = 0
+	t.Flags = 0
+	t.WeakMode = 0
+	t.SizeDelta = 0
 	return t
 }
 
