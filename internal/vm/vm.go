@@ -374,7 +374,20 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				tableSetWithMeta(L, tval, rb, rc)
+				h := tval.Obj.(*table.Table)
+				// Fast path: string key (always from k[]), no metamethod
+				if h.Metatable == nil {
+					key := rb.Obj.(*object.LuaString)
+					if h.SetIfExists(rb, rc) {
+						gc.BarrierBack(L.Global, h)
+					} else {
+						h.SetStr(key, rc)
+						trackTableResize(L.Global, h)
+						gc.BarrierBack(L.Global, h)
+					}
+				} else {
+					tableSetWithMeta(L, tval, rb, rc)
+				}
 			} else {
 				FinishSet(L, tval, rb, rc)
 			}
