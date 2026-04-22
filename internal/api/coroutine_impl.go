@@ -25,7 +25,11 @@ func (L *State) NewThread() *State {
 	L1 := state.NewThread(ls)
 	// Push the new thread onto the parent's stack
 	L.push(object.TValue{Tt: object.TagThread, Obj: L1})
-	return &State{Internal: L1}
+	// Cache the public State wrapper on the new thread so that
+	// wrapCFunctionStatic can reuse it without allocating.
+	pub := &State{Internal: L1}
+	L1.APIState = pub
+	return pub
 }
 
 // PushThread pushes the running thread onto its own stack.

@@ -109,10 +109,16 @@ func (L *State) PushTValue(v object.TValue) {
 }
 
 // wrapCFunctionStatic creates an adapter without capturing a specific State.
-// Each call creates a temporary State wrapper.
+// Uses the cached APIState on the LuaState to avoid allocating a new State
+// wrapper on every C function call.
 func wrapCFunctionStatic(f CFunction) state.CFunction {
 	return func(ls *state.LuaState) int {
-		pub := &State{Internal: ls}
+		pub, _ := ls.APIState.(*State)
+		if pub == nil {
+			// Fallback for coroutines or states not yet initialized.
+			pub = &State{Internal: ls}
+			ls.APIState = pub
+		}
 		return f(pub)
 	}
 }
@@ -125,6 +131,9 @@ func wrapCFunctionStatic(f CFunction) state.CFunction {
 func NewState() *State {
 	ls := state.NewState()
 	L := &State{Internal: ls}
+	// Cache the public State wrapper on the LuaState so that
+	// wrapCFunctionStatic can reuse it without allocating.
+	ls.APIState = L
 
 	// Wire up GC step functions so the VM can trigger periodic GC
 	// without importing this package.
@@ -157,15 +166,30 @@ func NewState() *State {
 		gc.SetPause(g)
 		// Drain pending finalizers — objects moved to tobefnz by
 		// separateTobeFnz in FullGC need their __gc called.
-		wrapper := &State{Internal: thread}
-		wrapper.callAllPendingFinalizers()
+		pub, _ := thread.APIState.(*State)
+		if pub == nil {
+			pub = &State{Internal: thread}
+			thread.APIState = pub
+		}
+		pub.callAllPendingFinalizers()
 		// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 	}
 
 	// GCDrainFn: just drain pending finalizers.
 	ls.Global.GCDrainFn = func(thread *state.LuaState) {
-		wrapper := &State{Internal: thread}
-		wrapper.callAllPendingFinalizers()
+		pub, _ := thread.APIState.(*State)
+		if pub == nil {
+			pub = &State{Internal: thread}
+			thread.APIState = pub
+		}
+		pub.callAllPendingFinalizers()
+	}
+
+	// SweepStringFn: remove dead strings from the interning table during GC sweep.
+	ls.Global.SweepStringFn = func(obj object.GCObject) {
+		if ts, ok := obj.(*object.LuaString); ok {
+			L.strtab().RemoveString(ts)
+		}
 	}
 
 	return L

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"sync/atomic"
 
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/luastring"
@@ -217,7 +216,21 @@ func GrowStack(L *LuaState, n int) {
 // Since upvalues use StackIdx (not pointers), no upvalue fixup is needed.
 func reallocStack(L *LuaState, newSize int) {
 	oldSize := len(L.Stack)
-	newStack := make([]object.StackValue, newSize)
+
+	// Fast path: if the underlying array has enough capacity, just reslice.
+	if newSize <= cap(L.Stack) {
+		L.Stack = L.Stack[:newSize]
+		// Initialize new slots to nil
+		for i := oldSize; i < newSize; i++ {
+			L.Stack[i].Val = object.Nil
+		}
+		return
+	}
+
+	// Slow path: allocate new slice with 50% extra capacity headroom
+	// to reduce future reallocations.
+	newCap := newSize + newSize/2
+	newStack := make([]object.StackValue, newSize, newCap)
 	copy(newStack, L.Stack)
 
 	// Initialize new slots to nil
@@ -379,9 +392,10 @@ func (g *GlobalState) LinkGC(obj object.GCObject) {
 
 // TrackAllocation increments GCTotalBytes and decrements GCDebt by n bytes.
 // Used for debt-based GC pacing: when GCDebt reaches 0, a GC step triggers.
+// Lua is single-threaded so no atomics needed.
 func (g *GlobalState) TrackAllocation(n int64) {
-	atomic.AddInt64(&g.GCTotalBytes, n)
-	atomic.AddInt64(&g.GCDebt, -n)
+	g.GCTotalBytes += n
+	g.GCDebt -= n
 }
 
 // ---------------------------------------------------------------------------
