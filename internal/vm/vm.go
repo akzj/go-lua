@@ -242,7 +242,9 @@ startfunc:
 			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
 				h := upval.Obj.(*table.Table)
-				val, found := h.Get(rc)
+				// Fast path: rc is always a string constant from k[]
+				key := rc.Obj.(*object.LuaString)
+				val, found := h.GetStr(key)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
 				} else {
@@ -296,7 +298,9 @@ startfunc:
 			rc := k[opcode.GetArgC(inst)]
 			if rb.IsTable() {
 				h := rb.Obj.(*table.Table)
-				val, found := h.Get(rc)
+				// Fast path: rc is always a string constant from k[]
+				key := rc.Obj.(*object.LuaString)
+				val, found := h.GetStr(key)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
 				} else {
@@ -318,7 +322,20 @@ startfunc:
 			}
 			ra = 0 // OP_SETTABUP uses A for upvalue index, not register
 			if upval.IsTable() {
-				tableSetWithMeta(L, upval, rb, rc)
+				h := upval.Obj.(*table.Table)
+				// Fast path: string key (always from k[]), no metamethod
+				if h.Metatable == nil {
+					if h.SetIfExists(rb, rc) {
+						gc.BarrierBack(L.Global, h)
+					} else {
+						key := rb.Obj.(*object.LuaString)
+						h.SetStr(key, rc)
+						trackTableResize(L.Global, h)
+						gc.BarrierBack(L.Global, h)
+					}
+				} else {
+					tableSetWithMeta(L, upval, rb, rc)
+				}
 			} else {
 				FinishSet(L, upval, rb, rc)
 			}
@@ -370,7 +387,20 @@ startfunc:
 			}
 			tval := L.Stack[ra].Val
 			if tval.IsTable() {
-				tableSetWithMeta(L, tval, rb, rc)
+				h := tval.Obj.(*table.Table)
+				// Fast path: string key (always from k[]), no metamethod
+				if h.Metatable == nil {
+					key := rb.Obj.(*object.LuaString)
+					if h.SetIfExists(rb, rc) {
+						gc.BarrierBack(L.Global, h)
+					} else {
+						h.SetStr(key, rc)
+						trackTableResize(L.Global, h)
+						gc.BarrierBack(L.Global, h)
+					}
+				} else {
+					tableSetWithMeta(L, tval, rb, rc)
+				}
 			} else {
 				FinishSet(L, tval, rb, rc)
 			}
@@ -405,7 +435,9 @@ startfunc:
 			L.Stack[ra+1].Val = rb // save table as self
 			if rb.IsTable() {
 				h := rb.Obj.(*table.Table)
-				val, found := h.Get(rc)
+				// Fast path: rc is always a string constant from k[]
+				key := rc.Obj.(*object.LuaString)
+				val, found := h.GetStr(key)
 				if found && !val.IsNil() {
 					L.Stack[ra].Val = val
 				} else {
@@ -501,7 +533,17 @@ startfunc:
 			nb, ok1 := toNumberNSFloat(rb)
 			nc, ok2 := toNumberNSFloat(kc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				// Fast path for small integer exponents (avoids expensive math.Pow)
+				switch nc {
+				case 2:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb)
+				case 0.5:
+					L.Stack[ra].Val = object.MakeFloat(math.Sqrt(nb))
+				case 3:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb * nb)
+				default:
+					L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				}
 				ci.SavedPC++
 			}
 
@@ -656,7 +698,17 @@ startfunc:
 			nb, ok1 := toNumberNSFloat(rb)
 			nc, ok2 := toNumberNSFloat(rc)
 			if ok1 && ok2 {
-				L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				// Fast path for small integer exponents (avoids expensive math.Pow)
+				switch nc {
+				case 2:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb)
+				case 0.5:
+					L.Stack[ra].Val = object.MakeFloat(math.Sqrt(nb))
+				case 3:
+					L.Stack[ra].Val = object.MakeFloat(nb * nb * nb)
+				default:
+					L.Stack[ra].Val = object.MakeFloat(math.Pow(nb, nc))
+				}
 				ci.SavedPC++
 			}
 
