@@ -282,6 +282,171 @@ func ExampleState_NewUserdata() {
 	// x=10 y=20
 }
 
+
+func ExampleState_Resume() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Lua generator that yields values.
+	L.DoString(`
+		function generate()
+			coroutine.yield("hello")
+			coroutine.yield("world")
+			return "done"
+		end
+	`)
+
+	thread := L.NewThread()
+	thread.GetGlobal("generate")
+
+	for {
+		status, nresults := thread.Resume(L, 0)
+		if nresults > 0 {
+			val, _ := thread.ToString(-1)
+			fmt.Println(val)
+			thread.Pop(nresults)
+		}
+		if status == lua.OK {
+			break
+		}
+	}
+	L.Pop(1) // pop the thread
+	// Output:
+	// hello
+	// world
+	// done
+}
+
+func ExampleState_Yield() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Register a Go function that yields back to the Go host.
+	askUser := func(L *lua.State) int {
+		// The argument (prompt string) is already on the stack.
+		return L.Yield(1) // yield 1 value (the prompt)
+	}
+	L.PushFunction(askUser)
+	L.SetGlobal("ask_user")
+
+	L.DoString(`
+		function chat()
+			local name = ask_user("What is your name?")
+			return "Hello, " .. name .. "!"
+		end
+	`)
+
+	thread := L.NewThread()
+	thread.GetGlobal("chat")
+
+	// First resume: starts the coroutine, which yields at ask_user.
+	status, _ := thread.Resume(L, 0)
+	if status == lua.Yield {
+		prompt, _ := thread.ToString(-1)
+		fmt.Println("Prompt:", prompt)
+		thread.Pop(1)
+
+		// Resume with the "user's answer".
+		thread.PushString("Alice")
+		status, _ = thread.Resume(L, 1)
+	}
+	if status == lua.OK {
+		result, _ := thread.ToString(-1)
+		fmt.Println("Result:", result)
+	}
+	L.Pop(1) // pop the thread
+	// Output:
+	// Prompt: What is your name?
+	// Result: Hello, Alice!
+}
+
+func ExampleState_SetHook() {
+	L := lua.NewState()
+	defer L.Close()
+
+	var lines []int
+	L.SetHook(func(L *lua.State, event int, currentLine int) {
+		if event == lua.HookEventLine {
+			lines = append(lines, currentLine)
+		}
+	}, lua.MaskLine, 0)
+
+	L.DoString(`
+		local x = 1
+		local y = 2
+		local z = x + y
+	`)
+
+	fmt.Println("Lines executed:", len(lines))
+	// Output:
+	// Lines executed: 3
+}
+
+func ExampleState_DoFile() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// DoFile loads and executes a Lua file.
+	// Returns a Go error on failure.
+	err := L.DoFile("nonexistent.lua")
+	if err != nil {
+		fmt.Println("Error loading file (expected)")
+	}
+	// Output:
+	// Error loading file (expected)
+}
+
+func ExampleNewBareState_sandbox() {
+	L := lua.NewBareState()
+	defer L.Close()
+
+	// Register only safe functions — no io, os, or debug.
+	L.PushFunction(func(L *lua.State) int {
+		s := L.CheckString(1)
+		fmt.Println(s)
+		return 0
+	})
+	L.SetGlobal("safe_print")
+
+	// This works: safe_print is explicitly registered.
+	L.DoString(`safe_print("sandboxed hello")`)
+
+	// io/os/debug are NOT available in a bare state.
+	err := L.DoString(`io.open("secret.txt")`)
+	if err != nil {
+		fmt.Println("io blocked (expected)")
+	}
+	// Output:
+	// sandboxed hello
+	// io blocked (expected)
+}
+
+func ExampleState_NewMetatable() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a "Point" metatable with a __tostring metamethod.
+	L.NewMetatable("Point")
+	L.PushFunction(func(L *lua.State) int {
+		p := L.UserdataValue(1).([]int64)
+		L.PushString(fmt.Sprintf("(%d, %d)", p[0], p[1]))
+		return 1
+	})
+	L.SetField(-2, "__tostring")
+	L.Pop(1) // pop the metatable
+
+	// Create a userdata and attach the metatable.
+	L.NewUserdata(0, 0)
+	L.SetUserdataValue(-1, []int64{3, 4})
+	L.GetField(lua.RegistryIndex, "Point") // retrieve the metatable
+	L.SetMetatable(-2)
+	L.SetGlobal("pt")
+
+	L.DoString(`print(tostring(pt))`)
+	// Output:
+	// (3, 4)
+}
+
 // ---------------------------------------------------------------------------
 // Test functions (more thorough coverage)
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@
 ![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **all 29 official Lua 5.5.1 test suites** (including the C-API test suite and generational GC tests) with a **3.1× geometric mean** vs C Lua on computation benchmarks.
+A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **all 29 official Lua 5.5.1 test suites** (including the C-API test suite and generational GC tests) with a **2.86× geometric mean** vs C Lua on computation benchmarks.
 
 ---
 
@@ -22,7 +22,7 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 - **String interning** via `weak.Pointer` for memory-efficient string handling
 - **testC testing library** — 97 C-API-level instructions with multi-state testing (`newstate`/`closestate`/`doremote`)
 - **Public embedding API** — clean `pkg/lua/` package for external use
-- **~30,500 lines of source** across 13 internal packages, with **~9,700 lines of tests**
+- **~31,500 lines of source** across 13 internal packages, with **~10,800 lines of tests**
 
 ## Performance
 
@@ -30,23 +30,23 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 
 | Benchmark | C Lua (ms) | go-lua (ms) | Ratio |
 |-----------|----------:|------------:|------:|
-| Fibonacci (recursive) | 19.52 | 24.98 | **1.28×** |
-| Pattern Match | 22.90 | 38.11 | **1.66×** |
-| Concat Multi | 5.67 | 11.12 | **1.96×** |
-| For Loop | 121.23 | 250.30 | **2.06×** |
-| Method Call | 35.44 | 76.63 | **2.16×** |
-| Closure Creation | 33.03 | 71.69 | **2.17×** |
-| Concat Operator | 5.85 | 13.46 | **2.30×** |
-| String Concat | 10.22 | 37.15 | **3.63×** |
-| Coroutine Create/Resume/Finish | 72.50 | 337.42 | **4.65×** |
-| Coroutine Create | 44.84 | 222.50 | **4.96×** |
-| Coroutine Yield/Resume | 34.66 | 198.95 | **5.74×** |
-| GC | 26.33 | 167.50 | **6.36×** |
-| Table Ops | 10.45 | 88.94 | **8.51×** |
-| **Geometric Mean** | | | **3.10×** |
+| Concat Multi | 8.06 | 8.47 | **1.05×** |
+| Method Call | 36.64 | 53.73 | **1.47×** |
+| Pattern Match | 23.49 | 37.89 | **1.61×** |
+| Fibonacci (recursive) | 13.37 | 24.15 | **1.81×** |
+| For Loop | 120.69 | 227.21 | **1.88×** |
+| String Concat | 15.77 | 32.09 | **2.04×** |
+| Closure Creation | 33.77 | 72.89 | **2.16×** |
+| Coroutine Create/Resume/Finish | 75.82 | 323.31 | **4.26×** |
+| Coroutine Create | 43.48 | 222.85 | **5.13×** |
+| Table Ops | 13.29 | 70.78 | **5.33×** |
+| Coroutine Yield/Resume | 35.14 | 188.69 | **5.37×** |
+| GC | 26.23 | 142.81 | **5.44×** |
+| Concat Operator | 3.16 | 21.16 | **6.70×** |
+| **Geometric Mean** | | | **2.86×** |
 
-> Pure computation (fibonacci, pattern matching, for-loops) runs within **1.3–2.1×** of C Lua.
-> Allocation-heavy workloads (coroutines, tables, string concat) are **4–9×** due to Go runtime overhead.
+> Pure computation (fibonacci, pattern matching, for-loops, method calls) runs within **1.0–2.1×** of C Lua.
+> Allocation-heavy workloads (coroutines, tables, GC) are **4–7×** due to Go runtime overhead.
 
 ### Optimization Highlights
 
@@ -57,9 +57,15 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 - **Pre-computed object sizes** — Eliminates type assertions during GC sweep.
 - **Capacity-based stack growth** — Stack grows within existing capacity without reallocation.
 - **CallInfo slab allocation** — Batch-allocates 32 CallInfo structs at a time.
-- **`strings.Join` for concat** — Multi-value `..` operator uses `strings.Join` instead of repeated allocation (Concat Multi 1.96×).
+- **`strings.Join` for concat** — Multi-value `..` operator uses `strings.Join` instead of repeated allocation (Concat Multi 1.05×).
 - **Stack-alloc string parts** — Small concat operations use stack-allocated arrays to avoid heap escapes.
 - **Table fast-path updates** — `Table.SetIfExists` skips hash insertion when the key already exists.
+- **Inline `checkGC`** — Countdown counter with slow-path split reduces per-instruction GC check overhead.
+- **Integer for-loop fast path** — Extracted `forLoopInt` inlines at cost 43, eliminating function call overhead.
+- **Array fast paths** — OP_GETI/OP_SETI bypass `tableSetWithMeta` for direct array access.
+- **Non-interned concat strings** — Skip string interning for concat results, reducing hash table pressure.
+- **Direct GetStr lookups** — OP_GETFIELD/GETTABUP/SELF use `GetStr` to skip type dispatch on string keys.
+- **OP_POW fast paths** — x², x³, √x computed directly without `math.Pow`.
 
 ## Quick Start
 
@@ -81,7 +87,7 @@ func main() {
     }
 
     // Register a Go function and call it from Lua
-    L.PushCFunction(func(L *lua.State) int {
+    L.PushFunction(func(L *lua.State) int {
         name := L.CheckString(1)
         L.PushString(fmt.Sprintf("Hello, %s!", name))
         return 1
@@ -160,6 +166,7 @@ glua [options] [script [args...]]
 | Flag | Description |
 |------|-------------|
 | `-e "code"` | Execute a Lua string |
+| `-l name` | Preload a library (`require("name")`) before executing scripts |
 | `-i` | Enter interactive REPL after executing scripts |
 | `-v` | Print version and exit |
 | `-` | Read script from stdin |
