@@ -1,5 +1,45 @@
 # Changelog
 
+## [v0.2.0] — 2026-04-23
+
+### API Additions
+- `SetHook` / `GetHook` — debug hook support (call, return, line, count hooks)
+- `LoadFile` / `DoFile` — load and execute Lua files
+- `cmd/glua -l` flag — preload libraries from command line
+
+### Performance (vs C Lua 5.5.1)
+- Geometric mean: **2.86×** (improved from 3.50× in v0.1.0)
+- Best: Concat Multi 1.05×, Method Call 1.47×, Pattern Match 1.61×
+
+### Performance Optimizations (Rounds 4-6)
+**Round 4 (3.50× → 3.10×):**
+- `strings.Join` for multi-value concat operator
+- Stack-allocated string parts for small concats
+- `Table.SetIfExists` skips hash insertion for existing keys
+
+**Round 5 (3.10× → 2.73×):**
+- Inline `checkGC` with countdown counter (cost 83→75)
+- Integer for-loop fast path extraction (`forLoopInt` inlines at cost 43)
+- Array fast paths for OP_GETI/OP_SETI (bypass tableSetWithMeta)
+- Skip string interning for concat results (non-interned long strings)
+- `intToString` uses `strconv.AppendInt` with stack-allocated buffer
+- Fix string cross-type equality for non-interned concat results
+
+**Round 6 (2.73× → 2.86× measured):**
+- OP_GETFIELD/GETTABUP/SELF use GetStr for direct string lookup
+- OP_SETFIELD/SETTABUP string fast paths (skip nil/NaN checks)
+- OP_POW/POWK fast paths for x², x³, √x (avoid math.Pow)
+
+### Documentation
+- Documented all 21 SKIP annotations in test suite (all are C-only features)
+- Added embedding guide (`docs/embedding-guide.md`)
+- Added 6 godoc examples (Resume, Yield, SetHook, DoFile, sandbox, NewMetatable)
+- Updated README performance data (3.10× → 2.86×)
+
+### Bug Fixes
+- Fix string cross-type equality for non-interned concat results
+- Remove committed glua binary, add to .gitignore
+
 ## [v0.1.0] — 2026-04-22
 
 ### Features
