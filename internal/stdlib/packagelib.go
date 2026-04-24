@@ -11,7 +11,9 @@ package stdlib
 // a loader is found.
 
 import (
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	luaapi "github.com/akzj/go-lua/internal/api"
@@ -70,7 +72,7 @@ func searcher_Lua(L *luaapi.State) int {
 	L.Pop(2) // pop path + package
 
 	// Search for the module file
-	filename, tried := searchPathForSearcher(name, pathStr)
+	filename, tried := searchPathWithFS(L.FileSystem, name, pathStr)
 	if filename == "" {
 		// Not found — return error string with all tried paths
 		var msg strings.Builder
@@ -88,7 +90,7 @@ func searcher_Lua(L *luaapi.State) int {
 	}
 
 	// Found — load the file and return (loader, filename)
-	data, err := os.ReadFile(filename)
+	data, err := readFileWithFS(L.FileSystem, filename)
 	if err != nil {
 		L.PushString("cannot read '" + filename + "': " + err.Error())
 		return 1
@@ -144,6 +146,7 @@ func searcher_Clib(L *luaapi.State) int {
 	L.Pop(2) // pop cpath + package
 
 	// Search the cpath to produce the correct error messages
+	// (C lib searcher never uses custom FS — it's OS-only)
 	_, tried := searchPathForSearcher(name, cpathStr)
 	if len(tried) == 0 {
 		L.PushString("no file (cpath empty)")
@@ -170,14 +173,57 @@ func searcher_Croot(L *luaapi.State) int {
 	return 1
 }
 
-// searchPathForSearcher searches pathStr (semicolon-separated templates) for name.
-// Replaces '.' in name with OS path separator, then '?' in each template with the result.
-// Returns (found_file, tried_list). If found, tried_list is nil.
-func searchPathForSearcher(name, pathStr string) (string, []string) {
+// ---------------------------------------------------------------------------
+// File helpers — support custom fs.FS or real OS filesystem
+// ---------------------------------------------------------------------------
+
+// readFileWithFS reads a file from the given fs.FS, or from the real OS
+// filesystem if fsys is nil. Paths for fs.FS are normalized.
+func readFileWithFS(fsys fs.FS, filename string) ([]byte, error) {
+	if fsys != nil {
+		return fs.ReadFile(fsys, toFSPath(filename))
+	}
+	return os.ReadFile(filename)
+}
+
+// statFileWithFS checks if a file exists in the given fs.FS, or in the real
+// OS filesystem if fsys is nil.
+func statFileWithFS(fsys fs.FS, filename string) error {
+	if fsys != nil {
+		_, err := fs.Stat(fsys, toFSPath(filename))
+		return err
+	}
+	_, err := os.Stat(filename)
+	return err
+}
+
+// toFSPath normalizes a filesystem path for use with fs.FS:
+// forward slashes, no leading "./" or "/".
+func toFSPath(p string) string {
+	p = filepath.ToSlash(p)
+	for strings.HasPrefix(p, "./") {
+		p = p[2:]
+	}
+	for strings.HasPrefix(p, "/") {
+		p = p[1:]
+	}
+	if p == "" {
+		p = "."
+	}
+	return p
+}
+
+// searchPathWithFS searches pathStr for name, using fsys for file existence
+// checks (or the real OS filesystem if fsys is nil).
+func searchPathWithFS(fsys fs.FS, name, pathStr string) (string, []string) {
 	if pathStr == "" {
 		return "", nil
 	}
-	fname := strings.ReplaceAll(name, ".", string(os.PathSeparator))
+	sep := string(os.PathSeparator)
+	if fsys != nil {
+		sep = "/" // fs.FS always uses forward slashes
+	}
+	fname := strings.ReplaceAll(name, ".", sep)
 	templates := strings.Split(pathStr, ";")
 	var tried []string
 	for _, tmpl := range templates {
@@ -186,12 +232,20 @@ func searchPathForSearcher(name, pathStr string) (string, []string) {
 			continue
 		}
 		candidate := strings.ReplaceAll(tmpl, "?", fname)
-		if _, err := os.Stat(candidate); err == nil {
+		if err := statFileWithFS(fsys, candidate); err == nil {
 			return candidate, nil
 		}
 		tried = append(tried, candidate)
 	}
 	return "", tried
+}
+
+// searchPathForSearcher searches pathStr (semicolon-separated templates) for name.
+// Replaces '.' in name with OS path separator, then '?' in each template with the result.
+// Returns (found_file, tried_list). If found, tried_list is nil.
+// This is the legacy version that always uses the real OS filesystem.
+func searchPathForSearcher(name, pathStr string) (string, []string) {
+	return searchPathWithFS(nil, name, pathStr)
 }
 
 // OpenPackage opens the "package" library for a Lua state.
@@ -257,7 +311,7 @@ func pkgSearchPath(L *luaapi.State) int {
 	templates := strings.Split(path, ";")
 	for _, tmpl := range templates {
 		candidate := strings.ReplaceAll(tmpl, "?", name)
-		if _, err := os.Stat(candidate); err == nil {
+		if err := statFileWithFS(L.FileSystem, candidate); err == nil {
 			L.PushString(candidate)
 			return 1
 		}
