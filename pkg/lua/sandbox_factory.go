@@ -131,15 +131,13 @@ func NewSandboxState(config SandboxConfig) *State {
 	}
 
 	// 3. Remove dangerous globals from the base library.
+	// When AllowPackage is true, keep "require" so modules can be loaded.
 	for _, name := range unsafeBaseGlobals {
+		if name == "require" && config.AllowPackage {
+			continue // keep require when package library is enabled
+		}
 		s.PushNil()
 		s.SetGlobal(name)
-	}
-	// If package library was not loaded, "require" was already removed above,
-	// but remove it again to be safe (it might be set by base lib).
-	if !config.AllowPackage {
-		s.PushNil()
-		s.SetGlobal("require")
 	}
 
 	// 4. Register extra user-provided libraries.
@@ -148,7 +146,10 @@ func NewSandboxState(config SandboxConfig) *State {
 		L.Pop(1)
 	}
 
-	// 5. Apply resource limits.
+	// 5. Install global module registry searcher.
+	L.installGlobalSearcher()
+
+	// 6. Apply resource limits.
 	if config.MemoryLimit > 0 {
 		L.SetMemoryLimit(config.MemoryLimit)
 	}

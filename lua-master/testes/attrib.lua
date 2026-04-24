@@ -61,6 +61,7 @@ do  print"testing 'require' message"
 	no field package.preload['XXX']
 	no file 'XXX.lua'
 	no file 'XXX/XXX'
+	no global Go module 'XXX'
 	no file 'XXX.so'
 	no file 'XXX/init']]
 

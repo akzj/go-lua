@@ -166,7 +166,27 @@ func searcher_Clib(L *luaapi.State) int {
 	return 1
 }
 
-// searcher_Croot — searcher #4: all-in-one C module searcher
+// searcher_GoGlobal — searcher #3: checks Go global module registry.
+// This searcher is inserted between the Lua file searcher and the C lib
+// searcher. It calls back to pkg/lua via the GlobalSearcher function pointer
+// on the api.State (avoiding circular imports).
+func searcher_GoGlobal(L *luaapi.State) int {
+	name := L.CheckString(1)
+	if L.GlobalSearcher == nil {
+		L.PushString("no Go global searcher installed")
+		return 1
+	}
+	opener := L.GlobalSearcher(name)
+	if opener == nil {
+		L.PushString("no global Go module '" + name + "'")
+		return 1
+	}
+	L.PushCFunction(opener)
+	L.PushString(":gomodule:")
+	return 2
+}
+
+// searcher_Croot — searcher #5: all-in-one C module searcher
 // Stub: returns nil (no error message to add).
 func searcher_Croot(L *luaapi.State) int {
 	L.PushNil()
@@ -277,12 +297,13 @@ func OpenPackage(L *luaapi.State) int {
 	L.GetSubTable(luaapi.RegistryIndex, "_PRELOAD")
 	L.SetField(-2, "preload")
 
-	// Create package.searchers table with 4 searcher functions.
-	// Mirrors C Lua's createsearcherstable() in loadlib.c.
-	// Searchers: 1=preload, 2=Lua file, 3=C lib (stub), 4=C root (stub)
+	// Create package.searchers table with 5 searcher functions.
+	// Mirrors C Lua's createsearcherstable() in loadlib.c, plus Go global registry.
+	// Searchers: 1=preload, 2=Lua file, 3=Go global, 4=C lib (stub), 5=C root (stub)
 	searchers := []luaapi.CFunction{
 		searcher_preload,
 		searcher_Lua,
+		searcher_GoGlobal,
 		searcher_Clib,
 		searcher_Croot,
 	}
