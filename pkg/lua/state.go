@@ -1,6 +1,11 @@
 package lua
 
 import (
+	"context"
+	"io"
+	"io/fs"
+	"os"
+
 	"github.com/akzj/go-lua/internal/api"
 	"github.com/akzj/go-lua/internal/stdlib"
 )
@@ -15,6 +20,12 @@ type State struct {
 	cpuLimit         int64 // max instructions (0 = unlimited)
 	cpuCounter       int64 // instructions counted so far
 	cpuCheckInterval int   // hook fires every N instructions (default 1000)
+
+	// Per-State user data storage (for embedding applications)
+	userData map[string]any
+
+	ctx        context.Context // Go context for cancellation/timeout (nil = no context)
+	fileSystem fs.FS           // custom filesystem for require/dofile/loadfile (nil = real OS)
 }
 
 // NewState creates a new Lua state with all standard libraries loaded.
@@ -162,4 +173,54 @@ func (L *State) CloseThread(from *State) int {
 	_ = fromState
 	// Use coroutine close mechanism
 	return L.s.Status()
+}
+
+// ---------------------------------------------------------------------------
+// Per-State user data storage
+// ---------------------------------------------------------------------------
+
+// SetUserValue stores an arbitrary Go value associated with the given key.
+// This allows embedding applications to attach per-State data without global variables.
+// Keys are arbitrary strings. Values can be any Go type.
+func (L *State) SetUserValue(key string, value any) {
+	if L.userData == nil {
+		L.userData = make(map[string]any)
+	}
+	L.userData[key] = value
+}
+
+// UserValue retrieves a previously stored value by key.
+// Returns nil if the key was never set.
+func (L *State) UserValue(key string) any {
+	if L.userData == nil {
+		return nil
+	}
+	return L.userData[key]
+}
+
+// DeleteUserValue removes a stored value by key.
+func (L *State) DeleteUserValue(key string) {
+	if L.userData != nil {
+		delete(L.userData, key)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Output writer redirection
+// ---------------------------------------------------------------------------
+
+// SetWriter sets a custom writer for Lua print() and io.write() output.
+// If w is nil, output reverts to os.Stdout (the default).
+// The writer is stored on the internal api.State so it survives wrapFunction
+// which creates fresh pkg/lua.State wrappers sharing the same api.State.
+func (L *State) SetWriter(w io.Writer) {
+	L.s.Writer = w
+}
+
+// Writer returns the current output writer. Returns os.Stdout if none was set.
+func (L *State) Writer() io.Writer {
+	if L.s.Writer != nil {
+		return L.s.Writer
+	}
+	return os.Stdout
 }

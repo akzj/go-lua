@@ -17,16 +17,22 @@ import (
 // ---------------------------------------------------------------------------
 
 func luaB_print(L *luaapi.State) int {
+	// Use custom writer if set, else os.Stdout
+	w := L.Writer
+	if w == nil {
+		w = os.Stdout
+	}
+
 	n := L.GetTop()
 	for i := 1; i <= n; i++ {
 		s := L.TolString(i)
 		if i > 1 {
-			fmt.Print("\t")
+			fmt.Fprint(w, "\t")
 		}
-		fmt.Print(s)
+		fmt.Fprint(w, s)
 		L.Pop(1) // pop the string pushed by TolString
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 	return 0
 }
 
