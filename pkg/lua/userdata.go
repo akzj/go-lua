@@ -25,6 +25,26 @@ func (L *State) SetUserdataValue(idx int, v any) {
 	}
 }
 
+// PushUserdata creates a new full userdata wrapping a Go value and pushes it
+// onto the stack. This is a convenience wrapper around NewUserdata +
+// SetUserdataValue for the common case of storing a single Go value.
+func (L *State) PushUserdata(value any) {
+	L.NewUserdata(0, 0)
+	L.SetUserdataValue(-1, value)
+}
+
+// CheckUserdata checks that the argument at position n is a userdata (full or
+// light) and returns the Go value stored inside it. Raises a Lua error if the
+// argument is not a userdata.
+func (L *State) CheckUserdata(n int) any {
+	val := L.s.ToUserdata(n)
+	if val == nil {
+		L.ArgError(n, "userdata expected")
+	}
+	return val
+}
+
+
 // GetIUserValue pushes the n-th user value of the userdata at idx onto the stack.
 // Returns the type of the pushed value, or TypeNone if invalid.
 func (L *State) GetIUserValue(idx int, n int) Type {
