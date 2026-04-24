@@ -1,0 +1,798 @@
+package lua
+
+import (
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+)
+
+// ---------------------------------------------------------------------------
+// Future tests
+// ---------------------------------------------------------------------------
+
+func TestFuture_ResolveValue(t *testing.T) {
+	f := NewFuture()
+	f.Resolve(42)
+	if !f.IsDone() {
+		t.Fatal("expected done")
+	}
+	val, err := f.Result()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != 42 {
+		t.Fatalf("expected 42, got %v", val)
+	}
+}
+
+func TestFuture_RejectError(t *testing.T) {
+	f := NewFuture()
+	f.Reject(fmt.Errorf("boom"))
+	if !f.IsDone() {
+		t.Fatal("expected done")
+	}
+	val, err := f.Result()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err.Error() != "boom" {
+		t.Fatalf("expected 'boom', got %v", err)
+	}
+	if val != nil {
+		t.Fatalf("expected nil val, got %v", val)
+	}
+}
+
+func TestFuture_Wait(t *testing.T) {
+	f := NewFuture()
+	ch := f.Wait()
+	select {
+	case <-ch:
+		t.Fatal("should not be done yet")
+	default:
+	}
+	f.Resolve("hello")
+	select {
+	case <-ch:
+		// good
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for future")
+	}
+}
+
+func TestFuture_WaitAlreadyDone(t *testing.T) {
+	f := NewFuture()
+	f.Resolve(99)
+	ch := f.Wait()
+	select {
+	case <-ch:
+		// good — already done
+	default:
+		t.Fatal("Wait() on done future should return closed channel")
+	}
+}
+
+func TestFuture_ConcurrentResolve(t *testing.T) {
+	f := NewFuture()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(v int) {
+			defer wg.Done()
+			f.Resolve(v)
+		}(i)
+	}
+	wg.Wait()
+	if !f.IsDone() {
+		t.Fatal("expected done")
+	}
+	val, _ := f.Result()
+	// Value should be one of 0..99 (first writer wins)
+	v, ok := val.(int)
+	if !ok {
+		t.Fatalf("expected int, got %T", val)
+	}
+	if v < 0 || v >= 100 {
+		t.Fatalf("unexpected value: %d", v)
+	}
+}
+
+func TestFuture_DoubleResolveIgnored(t *testing.T) {
+	f := NewFuture()
+	f.Resolve("first")
+	f.Resolve("second") // should be ignored
+	val, _ := f.Result()
+	if val != "first" {
+		t.Fatalf("expected 'first', got %v", val)
+	}
+}
+
+func TestFuture_ResolveAfterRejectIgnored(t *testing.T) {
+	f := NewFuture()
+	f.Reject(fmt.Errorf("err"))
+	f.Resolve("val") // should be ignored
+	_, err := f.Result()
+	if err == nil || err.Error() != "err" {
+		t.Fatalf("expected error 'err', got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler tests
+// ---------------------------------------------------------------------------
+
+func TestScheduler_SpawnSimple(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	// Load a function that just sets a global
+	err := L.DoString(`
+		result = nil
+		function task()
+			result = 42
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	if err := sched.Spawn(L); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have completed immediately (no yield)
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending, got %d", sched.Pending())
+	}
+
+	// Verify result
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != int64(42) {
+		t.Fatalf("expected 42, got %v (%T)", val, val)
+	}
+}
+
+func TestScheduler_SpawnWithFuture(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	// Create a future in Go
+	future := NewFuture()
+
+	// Register a Go function that returns the future
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	// Load async module
+	err := L.DoString(`
+		local async = require("async")
+		result = nil
+		function task()
+			local f = get_future()
+			local val = async.await(f)
+			result = val
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	if err := sched.Spawn(L); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should be pending (waiting for future)
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending, got %d", sched.Pending())
+	}
+
+	// Resolve the future
+	future.Resolve("hello from go")
+
+	// Tick should resume the coroutine
+	sched.Tick()
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending after tick, got %d", sched.Pending())
+	}
+
+	// Verify result
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != "hello from go" {
+		t.Fatalf("expected 'hello from go', got %v", val)
+	}
+}
+
+func TestScheduler_SpawnWithFutureError(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+	future := NewFuture()
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		result_val = nil
+		result_err = nil
+		function task()
+			local f = get_future()
+			local val, err = async.await(f)
+			result_val = val
+			result_err = err
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	if err := sched.Spawn(L); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reject the future
+	future.Reject(fmt.Errorf("something failed"))
+
+	sched.Tick()
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending, got %d", sched.Pending())
+	}
+
+	// result_val should be nil, result_err should be the error message
+	L.GetGlobal("result_val")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != nil {
+		t.Fatalf("expected nil val, got %v", val)
+	}
+
+	L.GetGlobal("result_err")
+	errVal := L.ToAny(-1)
+	L.Pop(1)
+	if errVal != "something failed" {
+		t.Fatalf("expected 'something failed', got %v", errVal)
+	}
+}
+
+func TestScheduler_MultipleCoroutines(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+	f2 := NewFuture()
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f1)
+		return 1
+	})
+	L.SetGlobal("get_f1")
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f2)
+		return 1
+	})
+	L.SetGlobal("get_f2")
+
+	err := L.DoString(`
+		local async = require("async")
+		r1 = nil
+		r2 = nil
+		function task1()
+			local f = get_f1()
+			r1 = async.await(f)
+		end
+		function task2()
+			local f = get_f2()
+			r2 = async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task1")
+	sched.Spawn(L)
+	L.GetGlobal("task2")
+	sched.Spawn(L)
+
+	if sched.Pending() != 2 {
+		t.Fatalf("expected 2 pending, got %d", sched.Pending())
+	}
+
+	// Resolve f2 first
+	f2.Resolve("two")
+	sched.Tick()
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending, got %d", sched.Pending())
+	}
+
+	// Resolve f1
+	f1.Resolve("one")
+	sched.Tick()
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending, got %d", sched.Pending())
+	}
+
+	L.GetGlobal("r1")
+	v1 := L.ToAny(-1)
+	L.Pop(1)
+	L.GetGlobal("r2")
+	v2 := L.ToAny(-1)
+	L.Pop(1)
+
+	if v1 != "one" {
+		t.Fatalf("expected 'one', got %v", v1)
+	}
+	if v2 != "two" {
+		t.Fatalf("expected 'two', got %v", v2)
+	}
+}
+
+func TestScheduler_NestedAwait(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+	f2 := NewFuture()
+	callCount := 0
+
+	L.PushFunction(func(L *State) int {
+		callCount++
+		if callCount == 1 {
+			L.PushUserdata(f1)
+		} else {
+			L.PushUserdata(f2)
+		}
+		return 1
+	})
+	L.SetGlobal("next_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		result = nil
+		function task()
+			local f1 = next_future()
+			local v1 = async.await(f1)
+			local f2 = next_future()
+			local v2 = async.await(f2)
+			result = v1 .. " " .. v2
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending, got %d", sched.Pending())
+	}
+
+	f1.Resolve("hello")
+	sched.Tick()
+
+	// Should still be pending (waiting for f2)
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending after first resolve, got %d", sched.Pending())
+	}
+
+	f2.Resolve("world")
+	sched.Tick()
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending after second resolve, got %d", sched.Pending())
+	}
+
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != "hello world" {
+		t.Fatalf("expected 'hello world', got %v", val)
+	}
+}
+
+func TestScheduler_WaitAll(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+	future := NewFuture()
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		result = nil
+		function task()
+			local f = get_future()
+			result = async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	// Resolve in background
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		future.Resolve("async result")
+	}()
+
+	if err := sched.WaitAll(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != "async result" {
+		t.Fatalf("expected 'async result', got %v", val)
+	}
+}
+
+func TestScheduler_WaitAllTimeout(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+	future := NewFuture() // never resolved
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		function task()
+			local f = get_future()
+			async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	err = sched.WaitAll(50 * time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// async library tests (Lua-level)
+// ---------------------------------------------------------------------------
+
+func TestAsync_GoString(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	err := L.DoString(`
+		local async = require("async")
+		result = nil
+		function task()
+			local f = async.go("return 42")
+			result = async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	if err := sched.WaitAll(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	// DoString returns int64 for integer values
+	if val != int64(42) {
+		t.Fatalf("expected 42, got %v (%T)", val, val)
+	}
+}
+
+func TestAsync_GoStringError(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	err := L.DoString(`
+		local async = require("async")
+		result_val = nil
+		result_err = nil
+		function task()
+			local f = async.go("error('boom')")
+			local val, err = async.await(f)
+			result_val = val
+			result_err = err
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	if err := sched.WaitAll(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("result_val")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != nil {
+		t.Fatalf("expected nil val, got %v", val)
+	}
+
+	L.GetGlobal("result_err")
+	errVal := L.ToAny(-1)
+	L.Pop(1)
+	errStr, ok := errVal.(string)
+	if !ok {
+		t.Fatalf("expected string error, got %T: %v", errVal, errVal)
+	}
+	if len(errStr) == 0 {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestAsync_Resolve(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	err := L.DoString(`
+		local async = require("async")
+		result = nil
+		function task()
+			local f = async.resolve("immediate")
+			result = async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	// async.resolve creates an already-done future, so await returns immediately
+	// The coroutine should complete without needing a Tick
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending, got %d", sched.Pending())
+	}
+
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != "immediate" {
+		t.Fatalf("expected 'immediate', got %v", val)
+	}
+}
+
+func TestAsync_Reject(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	err := L.DoString(`
+		local async = require("async")
+		result_val = nil
+		result_err = nil
+		function task()
+			local f = async.reject("nope")
+			local val, err = async.await(f)
+			result_val = val
+			result_err = err
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	sched.Spawn(L)
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending, got %d", sched.Pending())
+	}
+
+	L.GetGlobal("result_err")
+	errVal := L.ToAny(-1)
+	L.Pop(1)
+	if errVal != "nope" {
+		t.Fatalf("expected 'nope', got %v", errVal)
+	}
+}
+
+func TestAsync_GoWithFunction(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	// async.go with a function should error (can't move closures across goroutines)
+	err := L.DoString(`
+		local async = require("async")
+		local ok, msg = pcall(function()
+			async.go(function() return 1 end)
+		end)
+		assert(not ok, "expected error for function arg")
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration test: full async flow with goroutine
+// ---------------------------------------------------------------------------
+
+func TestAsync_FullFlow(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	// Register a Go function that does async work
+	L.PushFunction(func(L *State) int {
+		url := L.CheckString(1)
+		future := NewFuture()
+		go func() {
+			// Simulate async work
+			time.Sleep(5 * time.Millisecond)
+			future.Resolve("response from " + url)
+		}()
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("http_get_async")
+
+	err := L.DoString(`
+		local async = require("async")
+		results = {}
+		function fetch_task()
+			local f1 = http_get_async("https://example.com/a")
+			local r1 = async.await(f1)
+			results[1] = r1
+
+			local f2 = http_get_async("https://example.com/b")
+			local r2 = async.await(f2)
+			results[2] = r2
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("fetch_task")
+	sched.Spawn(L)
+
+	if err := sched.WaitAll(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check results
+	L.GetGlobal("results")
+	L.GetField(-1, "1") // Lua arrays are 1-based but stored as fields
+	// Actually, let's use raw get
+	L.Pop(1) // pop the field attempt
+
+	// Use Lua to extract
+	L.Pop(1) // pop results table
+	err = L.DoString(`
+		assert(results[1] == "response from https://example.com/a",
+			"got: " .. tostring(results[1]))
+		assert(results[2] == "response from https://example.com/b",
+			"got: " .. tostring(results[2]))
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAsync_ConcurrentGoroutines(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	// Register an async sleep function
+	L.PushFunction(func(L *State) int {
+		ms := L.CheckInteger(1)
+		val := L.CheckString(2)
+		future := NewFuture()
+		go func() {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+			future.Resolve(val)
+		}()
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("async_sleep")
+
+	err := L.DoString(`
+		local async = require("async")
+		r1 = nil
+		r2 = nil
+		function task1()
+			local f = async_sleep(20, "slow")
+			r1 = async.await(f)
+		end
+		function task2()
+			local f = async_sleep(5, "fast")
+			r2 = async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task1")
+	sched.Spawn(L)
+	L.GetGlobal("task2")
+	sched.Spawn(L)
+
+	if err := sched.WaitAll(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("r1")
+	v1 := L.ToAny(-1)
+	L.Pop(1)
+	L.GetGlobal("r2")
+	v2 := L.ToAny(-1)
+	L.Pop(1)
+
+	if v1 != "slow" {
+		t.Fatalf("expected 'slow', got %v", v1)
+	}
+	if v2 != "fast" {
+		t.Fatalf("expected 'fast', got %v", v2)
+	}
+}
