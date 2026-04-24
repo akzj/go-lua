@@ -35,6 +35,21 @@ import (
 	"strings"
 )
 
+// StackRef references a value on the Lua stack by index.
+// When passed to [State.PushAny], it calls [State.PushValue](ref.Index) to copy
+// the stack value. This allows mixing Go values and Lua stack values in maps
+// passed to [State.NewTableFrom] / [State.SetFields].
+//
+// Example:
+//
+//	L.NewTableFrom(map[string]any{
+//	    "name":  "Select",
+//	    "props": lua.StackRef{Index: 1},  // copies stack index 1
+//	})
+type StackRef struct {
+	Index int
+}
+
 // ---------------------------------------------------------------------------
 // PushAny — Go value → Lua stack
 // ---------------------------------------------------------------------------
@@ -56,6 +71,7 @@ import (
 //	Function             → function
 //	struct               → table (exported fields, using `lua` tag or lowercase name)
 //	*struct              → same as struct (dereferences pointer)
+//	StackRef             → copies stack value at ref.Index (via PushValue)
 //	any other            → light userdata
 //
 // Nested values are handled recursively.
@@ -105,6 +121,8 @@ func (L *State) PushAny(value any) {
 		L.pushMapStringString(v)
 	case []any:
 		L.pushSliceAny(v)
+	case StackRef:
+		L.PushValue(v.Index)
 	default:
 		// Slow path: use reflection for structs, other maps, other slices.
 		L.pushReflect(reflect.ValueOf(value))
