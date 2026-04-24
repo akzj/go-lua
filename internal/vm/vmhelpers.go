@@ -921,11 +921,17 @@ func makeInternedString(L *state.LuaState, s string) object.TValue {
 	return object.MakeString(internString(L, s))
 }
 
-// makeConcatString creates a non-interned (long) string for concat results.
-// Concat results are often ephemeral — skipping interning avoids the hash
-// table lookup + insertion overhead. Long strings still work correctly as
-// table keys (content comparison) and are properly GC-tracked.
+// makeConcatString creates a string TValue from a concat result.
+// Short strings (≤ MaxShortLen) are interned through the string table to
+// maintain pointer identity — this is required for correct table key lookups
+// where the type tag (TagShortStr vs TagLongStr) determines the search path.
+// Long strings are created without interning; they use content comparison.
 func makeConcatString(L *state.LuaState, s string) object.TValue {
+	if len(s) <= luastring.MaxShortLen {
+		// Short strings must be interned for correct table key identity
+		return object.MakeString(internString(L, s))
+	}
+	// Long strings: non-interned, content comparison for equality
 	ls := &object.LuaString{
 		Data:    s,
 		Hash_:   0,     // computed lazily if used as table key
