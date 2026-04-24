@@ -497,6 +497,732 @@ These functions exist for backward compatibility. Use `SetHook`/`GetHook` instea
 
 ---
 
+## Type Bridge (Go ↔ Lua)
+
+High-level type conversion between Go and Lua values, eliminating manual stack operations.
+
+| Go API | Description |
+|--------|-------------|
+| `L.PushAny(value any)` | Push any Go value onto the Lua stack. Auto-selects type: `nil`→nil, `bool`→boolean, `int`/`int8`..`int64`→integer, `uint`→integer or number, `float32`/`float64`→number, `string`→string, `[]byte`→string, `[]T`→table (array), `map[string]T`→table (hash), `Function`→function, `struct`/`*struct`→table, other→light userdata. |
+| `L.ToAny(idx int) any` | Read any Lua value at `idx` into a Go value. nil→`nil`, boolean→`bool`, integer→`int64`, number→`float64`, string→`string`, table→`map[string]any` or `[]any` (depending on keys). |
+| `L.ToStruct(idx int, dest any) error` | Read Lua table at `idx` into a Go struct pointer `dest`. Uses `lua` struct tags or lowercased field names for key mapping. Returns error if `dest` is not a pointer to struct. |
+| `RegisterModule(L *State, name string, funcs map[string]Function)` | Package-level function. Register Go functions as a Lua module loadable via `require(name)`. Adds to `package.preload`. |
+
+### PushAny Example
+
+```go
+// Push a Go struct as a Lua table
+type Point struct {
+    X float64 `lua:"x"`
+    Y float64 `lua:"y"`
+}
+L.PushAny(Point{X: 1.5, Y: 2.5})
+L.SetGlobal("pt")
+// Lua: print(pt.x, pt.y) → 1.5  2.5
+
+// Push a Go map as a Lua table
+L.PushAny(map[string]any{"name": "Alice", "age": 30})
+L.SetGlobal("user")
+```
+
+### ToStruct Example
+
+```go
+type Config struct {
+    Host    string `lua:"host"`
+    Port    int    `lua:"port"`
+    Verbose bool   `lua:"verbose"`
+}
+L.DoString(`return {host="localhost", port=8080, verbose=true}`)
+var cfg Config
+if err := L.ToStruct(-1, &cfg); err != nil {
+    log.Fatal(err)
+}
+// cfg.Host == "localhost", cfg.Port == 8080, cfg.Verbose == true
+```
+
+---
+
+## Convenience APIs
+
+Helper methods that reduce boilerplate for common table access and function call patterns.
+
+| Go API | Description |
+|--------|-------------|
+| `L.GetFieldString(idx int, key string) string` | Read `t[key]` as string. Returns `""` if nil or non-string. |
+| `L.GetFieldInt(idx int, key string) int64` | Read `t[key]` as int64. Returns `0` if nil. |
+| `L.GetFieldNumber(idx int, key string) float64` | Read `t[key]` as float64. Returns `0` if nil. |
+| `L.GetFieldBool(idx int, key string) bool` | Read `t[key]` as bool. Returns `false` if nil. |
+| `L.GetFieldAny(idx int, key string) any` | Read `t[key]` via `ToAny`. Returns `nil` if nil. |
+| `L.SetFields(idx int, fields map[string]any)` | Set multiple fields on table at `idx`. Values pushed via `PushAny`. |
+| `L.NewTableFrom(fields map[string]any)` | Create new table with given fields, push onto stack. |
+| `L.GetFieldRef(idx int, key string) int` | Read `t[key]` as function, store in registry, return reference ID. Returns `RefNil` if not a function. Caller must call `Unref` when done. |
+| `L.CallSafe(nArgs, nResults int) error` | `PCall` wrapper returning Go `error`. Pops error message on failure. Function + args must be on stack. |
+| `L.CallRef(ref int, nArgs, nResults int) error` | Retrieve function from registry by `ref`, call in protected mode. `nArgs` arguments must already be on stack. |
+| `L.ToMap(idx int) (map[string]any, bool)` | Read table at `idx` as `map[string]any`. Returns `(nil, false)` for non-tables or tables with only integer keys. |
+| `L.ForEach(idx int, fn func(*State) bool)` | Iterate table key-value pairs. Callback receives key at `-2`, value at `-1`. Return `false` to stop early. |
+
+### Convenience Example
+
+```go
+L.DoString(`config = {host="localhost", port=8080, debug=true}`)
+L.GetGlobal("config")
+
+host := L.GetFieldString(-1, "host")     // "localhost"
+port := L.GetFieldInt(-1, "port")         // 8080
+debug := L.GetFieldBool(-1, "debug")      // true
+
+// Update multiple fields at once
+L.SetFields(-1, map[string]any{
+    "host":  "0.0.0.0",
+    "port":  9090,
+    "debug": false,
+})
+L.Pop(1) // pop config table
+```
+
+---
+
+## Auto-Binding (Reflection)
+
+Push **any** Go function as a Lua-callable function using reflection-based auto-binding.
+
+| Go API | Description |
+|--------|-------------|
+| `L.PushGoFunc(fn any)` | Push any Go function as a Lua-callable closure. Uses reflection to auto-convert arguments and return values. Supported parameter types: `string`, `bool`, `int`/`int8`..`int64`, `uint`/`uint8`..`uint64`, `float32`/`float64`, `map[string]any`, `[]any`, `any`, structs. If the last return value is `error` and non-nil, raises a Lua error. Missing Lua arguments receive Go zero values. |
+
+### PushGoFunc Example
+
+```go
+// Any Go function signature works — no manual stack manipulation needed
+L.PushGoFunc(func(name string, age int) string {
+    return fmt.Sprintf("Hello %s, age %d", name, age)
+})
+L.SetGlobal("greet")
+// Lua: greet("world", 42) → "Hello world, age 42"
+
+// Error returns become Lua errors
+L.PushGoFunc(func(path string) (string, error) {
+    data, err := os.ReadFile(path)
+    return string(data), err
+})
+L.SetGlobal("readfile")
+// Lua: local ok, err = pcall(readfile, "/bad/path")  -- err = file error message
+```
+
+> **Performance note:** `PushGoFunc` uses reflection on every call. For hot paths, prefer the generic `Wrap*` functions below.
+
+---
+
+## Generic Wrappers (Zero Reflection)
+
+Compile-time type-safe function wrappers using Go generics. **Zero reflection overhead** — types are resolved at compile time.
+
+| Go API | Go Function Signature | Description |
+|--------|-----------------------|-------------|
+| `Wrap0(L, fn)` | `func()` | No args, no return |
+| `Wrap0R[R](L, fn)` | `func() R` | No args, 1 return value |
+| `Wrap0E(L, fn)` | `func() error` | No args, error return (raises Lua error if non-nil) |
+| `Wrap1[A](L, fn)` | `func(A)` | 1 arg, no return |
+| `Wrap1R[A, R](L, fn)` | `func(A) R` | 1 arg, 1 return value |
+| `Wrap1E[A, R](L, fn)` | `func(A) (R, error)` | 1 arg, result + error |
+| `Wrap2[A, B](L, fn)` | `func(A, B)` | 2 args, no return |
+| `Wrap2R[A, B, R](L, fn)` | `func(A, B) R` | 2 args, 1 return value |
+| `Wrap2E[A, B, R](L, fn)` | `func(A, B) (R, error)` | 2 args, result + error |
+| `Wrap3[A, B, C](L, fn)` | `func(A, B, C)` | 3 args, no return |
+| `Wrap3R[A, B, C, R](L, fn)` | `func(A, B, C) R` | 3 args, 1 return value |
+
+**Supported generic types:** `string`, `int`, `int64`, `float64`, `float32`, `bool`, `map[string]any`, `any` (fallback via `ToAny`).
+
+### Wrap Example
+
+```go
+// Type-safe, zero-reflection wrapper
+lua.Wrap2R[string, int, string](L, func(name string, age int) string {
+    return fmt.Sprintf("Hello %s, age %d", name, age)
+})
+L.SetGlobal("greet")
+// Lua: greet("world", 42) → "Hello world, age 42"
+
+// Error-returning variant
+lua.Wrap1E[string, string](L, func(path string) (string, error) {
+    data, err := os.ReadFile(path)
+    return string(data), err
+})
+L.SetGlobal("readfile")
+```
+
+---
+
+## Sandbox
+
+Create restricted Lua states for running untrusted code.
+
+| Go API | Description |
+|--------|-------------|
+| `NewSandboxState(config SandboxConfig) *State` | Create a restricted Lua state. Loads only safe libraries: base (minus `dofile`/`loadfile`/`load`/`require`), `string`, `table`, `math`, `utf8`, `coroutine`. Optional: enable `io`/`os`, `debug`, `package` via config flags. |
+
+```go
+type SandboxConfig struct {
+    MemoryLimit  int64                // max memory in bytes (0 = no limit)
+    CPULimit     int64                // max VM instructions (0 = no limit)
+    AllowIO      bool                 // enable io/os libraries (default: false)
+    AllowDebug   bool                 // enable debug library (default: false)
+    AllowPackage bool                 // enable package/require (default: false)
+    ExtraLibs    map[string]Function  // additional libraries to register
+}
+```
+
+### Sandbox Example
+
+```go
+L := lua.NewSandboxState(lua.SandboxConfig{
+    CPULimit:    1_000_000,  // max 1M instructions
+    MemoryLimit: 10 << 20,   // max 10 MB
+})
+defer L.Close()
+
+err := L.DoString(untrustedCode) // safe — CPU + memory limited, no io/os/debug
+```
+
+---
+
+## CPU Limits
+
+Instruction-level CPU limiting for Lua execution. Uses debug hooks internally.
+
+| Go API | Description |
+|--------|-------------|
+| `L.SetCPULimit(limit int64)` | Set maximum VM instructions. Uses `MaskCount` debug hook. `0` removes the limit. Composable with `SetContext`. |
+| `L.ResetCPUCounter()` | Reset instruction counter to 0. Use when reusing a State across multiple executions. |
+| `L.CPUInstructionsUsed() int64` | Approximate number of instructions executed since last `SetCPULimit` or `ResetCPUCounter`. |
+
+### CPU Limit Example
+
+```go
+L.SetCPULimit(100_000) // max 100K instructions
+err := L.DoString(`while true do end`) // will error: CPU limit exceeded
+fmt.Println(L.CPUInstructionsUsed())    // ~100000
+L.ResetCPUCounter()                     // reset for next execution
+```
+
+---
+
+## Context Integration
+
+Associate a Go `context.Context` with a Lua state for cancellation and timeout support.
+
+| Go API | Description |
+|--------|-------------|
+| `L.SetContext(ctx context.Context)` | Associate a Go context. On cancel/timeout, Lua execution raises error `"context cancelled: <reason>"`. Uses `MaskCount` hook. Pass `nil` to remove. |
+| `L.Context() context.Context` | Returns the associated context, or `context.Background()` if none set. |
+
+### Context Example
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+L.SetContext(ctx)
+err := L.DoString(`while true do end`) // will error after 5s: "context cancelled: ..."
+```
+
+---
+
+## Virtual Filesystem
+
+Plug in a custom `fs.FS` for all Lua file operations (`LoadFile`, `DoFile`, `package.searchers`).
+
+| Go API | Description |
+|--------|-------------|
+| `L.SetFileSystem(fsys fs.FS)` | Set custom `fs.FS` for Lua file operations. `nil` = use real OS filesystem. Works with `embed.FS`. |
+| `L.FileSystem() fs.FS` | Returns current filesystem (`nil` = OS filesystem). |
+
+### Virtual Filesystem Example
+
+```go
+//go:embed lua_scripts
+var scripts embed.FS
+
+L.SetFileSystem(scripts)
+L.DoFile("lua_scripts/main.lua")   // reads from embedded FS
+L.DoString(`require("mymodule")`)  // package.searchers also uses the FS
+```
+
+---
+
+## Global Module Registry
+
+Thread-safe global registry for modules that should be available to all States via `require()`.
+
+| Go API | Description |
+|--------|-------------|
+| `RegisterGlobal(name string, opener ModuleOpener)` | Register a module globally (thread-safe). Any State's `require(name)` will find it. Typically called in `init()`. Package-level function. |
+| `UnregisterGlobal(name string)` | Remove module from global registry (thread-safe). Package-level function. |
+| `GlobalModules() []string` | List all registered global module names (thread-safe). Package-level function. |
+
+```go
+type ModuleOpener func(L *State)  // push module table onto stack
+```
+
+### Global Registry Example
+
+```go
+func init() {
+    lua.RegisterGlobal("mylib", func(L *lua.State) {
+        L.NewLib(map[string]lua.Function{
+            "hello": func(L *lua.State) int {
+                L.PushString("world")
+                return 1
+            },
+        })
+    })
+}
+
+// Later, in any State:
+// Lua: local mylib = require("mylib")
+// Lua: print(mylib.hello()) → "world"
+```
+
+---
+
+## Module Interface
+
+Standard interface for go-lua extension modules. Third-party libraries implement this to be loadable via `LoadModules`.
+
+```go
+type Module interface {
+    Name() string       // module name for require()
+    Open(L *State)      // register module, push module table onto stack
+}
+```
+
+| Go API | Description |
+|--------|-------------|
+| `LoadModules(L *State, modules ...Module)` | Register modules into `package.preload` (per-State, not global). Modules become available via `require(name)`. |
+
+### Module Interface Example
+
+```go
+type MyModule struct{}
+func (m MyModule) Name() string { return "mymod" }
+func (m MyModule) Open(L *lua.State) {
+    L.NewLib(map[string]lua.Function{
+        "greet": func(L *lua.State) int {
+            L.PushString("hello from mymod")
+            return 1
+        },
+    })
+}
+
+L := lua.NewState()
+lua.LoadModules(L, MyModule{})
+L.DoString(`local m = require("mymod"); print(m.greet())`)
+```
+
+---
+
+## State Pool
+
+Reusable pool of Lua States for high-throughput scenarios (e.g., HTTP handlers).
+
+```go
+type PoolConfig struct {
+    MaxStates int              // max pool size (default: 8)
+    InitFunc  func(L *State)   // called on each new State for setup
+    Sandbox   *SandboxConfig   // if non-nil, creates sandboxed States
+}
+
+type PoolStats struct {
+    Available int   // idle States in pool
+    Created   int   // total States created
+    MaxStates int   // configured maximum
+}
+```
+
+| Go API | Description |
+|--------|-------------|
+| `NewStatePool(config PoolConfig) *StatePool` | Create a new State pool. |
+| `pool.Get() *State` | Get a State (creates one if pool is empty). Caller owns until `Put`. |
+| `pool.Put(L *State)` | Return a State to the pool. Closes if pool is full or already closed. |
+| `pool.Close()` | Close all pooled States and prevent further reuse. |
+| `pool.Stats() PoolStats` | Snapshot of pool statistics. |
+
+### State Pool Example
+
+```go
+pool := lua.NewStatePool(lua.PoolConfig{
+    MaxStates: 16,
+    InitFunc: func(L *lua.State) {
+        L.DoString(`function handler(req) return "OK: " .. req end`)
+    },
+})
+defer pool.Close()
+
+// In HTTP handler (concurrent-safe):
+L := pool.Get()
+defer pool.Put(L)
+L.GetGlobal("handler")
+L.PushString(requestBody)
+L.CallSafe(1, 1)
+result, _ := L.ToString(-1)
+L.Pop(1)
+```
+
+---
+
+## Executor (Async Task Runner)
+
+Submit Lua tasks for concurrent execution using a pool of States.
+
+```go
+type ExecutorConfig struct {
+    PoolConfig   PoolConfig  // underlying State pool configuration
+    ResultBuffer int         // results channel buffer size (default: 64)
+}
+
+type Task struct {
+    ID   string                        // correlate with Result
+    Code string                        // Lua source code (mutually exclusive with Func)
+    Func func(L *State) (any, error)   // Go function (mutually exclusive with Code)
+}
+
+type Result struct {
+    ID    string  // matches Task.ID
+    Value any     // return value (from Func, or nil for Code tasks)
+    Error error   // non-nil on failure
+}
+```
+
+| Go API | Description |
+|--------|-------------|
+| `NewExecutor(config ExecutorConfig) *Executor` | Create an executor with a backing State pool. |
+| `e.Submit(task Task) bool` | Submit a task for async execution. Returns `false` if executor is shut down. |
+| `e.Results() <-chan Result` | Channel delivering completed task results. |
+| `e.Pending() int64` | Number of currently executing tasks. |
+| `e.Shutdown()` | Wait for all pending tasks, close pool, close results channel. |
+
+### Executor Example
+
+```go
+exec := lua.NewExecutor(lua.ExecutorConfig{
+    PoolConfig:   lua.PoolConfig{MaxStates: 4},
+    ResultBuffer: 100,
+})
+
+// Submit tasks
+for i := 0; i < 10; i++ {
+    exec.Submit(lua.Task{
+        ID:   fmt.Sprintf("task-%d", i),
+        Code: fmt.Sprintf(`return %d * %d`, i, i),
+    })
+}
+
+// Collect results
+for result := range exec.Results() {
+    fmt.Printf("%s: value=%v err=%v\n", result.ID, result.Value, result.Error)
+}
+exec.Shutdown()
+```
+
+---
+
+## Channel (Go ↔ Lua Communication)
+
+Thread-safe channels for passing values between Go goroutines and Lua coroutines.
+
+| Go API | Description |
+|--------|-------------|
+| `NewChannel(bufSize int) *Channel` | Create a channel. `0` = unbuffered (synchronous). |
+| `ch.Send(value any) error` | Blocking send. Returns `ErrChannelClosed` if channel is closed. |
+| `ch.TrySend(value any) bool` | Non-blocking send. Returns `true` if sent. |
+| `ch.Recv() (any, bool)` | Blocking receive. Returns `(nil, false)` if channel is closed and empty. |
+| `ch.TryRecv() (any, bool, bool)` | Non-blocking receive. Returns `(value, true, true)` if received, `(nil, true, false)` if closed, `(nil, false, true)` if empty. |
+| `ch.RecvTimeout(timeout time.Duration) (any, bool)` | Receive with timeout. Returns `(nil, false)` on timeout or closed. |
+| `ch.Close()` | Close channel (idempotent). Further sends return `ErrChannelClosed`. |
+| `ch.Len() int` | Number of buffered elements. |
+| `ch.IsClosed() bool` | Check if channel is closed. |
+| `ErrChannelClosed` | Sentinel error: `"channel is closed"`. |
+
+### Channel Example (Go side)
+
+```go
+ch := lua.NewChannel(10)
+
+// Producer goroutine
+go func() {
+    for i := 0; i < 5; i++ {
+        ch.Send(i)
+    }
+    ch.Close()
+}()
+
+// Consumer
+for {
+    val, ok := ch.Recv()
+    if !ok {
+        break
+    }
+    fmt.Println(val) // 0, 1, 2, 3, 4
+}
+```
+
+---
+
+## Channel Lua Module
+
+Lua-side API for channels. Auto-registered via `init()`.
+
+```lua
+local channel = require("channel")
+```
+
+| Lua API | Returns | Description |
+|---------|---------|-------------|
+| `channel.new([bufsize])` | channel userdata | Create a new channel. Default `bufsize` = 0 (unbuffered). |
+| `channel.send(ch, value)` | `true` or `false, errmsg` | Blocking send. |
+| `channel.recv(ch)` | `value, true` or `nil, false` | Blocking receive. |
+| `channel.try_send(ch, value)` | `true` or `false` | Non-blocking send. |
+| `channel.try_recv(ch)` | `value, true` or `nil, false [, "closed"]` | Non-blocking receive. |
+| `channel.close(ch)` | — | Close channel. |
+| `channel.len(ch)` | integer | Number of buffered elements. |
+| `channel.is_closed(ch)` | boolean | Check if channel is closed. |
+
+### Channel Lua Example
+
+```lua
+local channel = require("channel")
+local ch = channel.new(5)
+
+channel.send(ch, "hello")
+channel.send(ch, "world")
+
+local val, ok = channel.recv(ch)
+print(val, ok)  -- "hello"  true
+
+channel.close(ch)
+local val2, ok2 = channel.recv(ch)
+print(val2, ok2)  -- "world"  true
+local val3, ok3 = channel.recv(ch)
+print(val3, ok3)  -- nil  false (closed + empty)
+```
+
+---
+
+## Userdata Helpers
+
+Convenience functions for creating and checking userdata values.
+
+| Go API | Description |
+|--------|-------------|
+| `L.PushUserdata(value any)` | Create full userdata wrapping a Go value, push onto stack. Convenience for `NewUserdata(0, 0)` + `SetUserdataValue`. |
+| `L.CheckUserdata(n int) any` | Check that argument `n` is full userdata and return its Go value. Raises Lua error if not userdata. |
+
+> **Note:** `GetIUserValue`, `SetIUserValue`, `GetUpvalue`, and `SetUpvalue` are documented in the [Userdata](#userdata) section above.
+
+### Userdata Helper Example
+
+```go
+// Push a Go object as Lua userdata
+L.PushUserdata(&MyObject{Name: "test"})
+L.SetGlobal("obj")
+
+// In a Lua callback, retrieve it:
+myCheck := func(L *lua.State) int {
+    obj := L.CheckUserdata(1).(*MyObject)
+    L.PushString(obj.Name)
+    return 1
+}
+```
+
+---
+
+## JSON Lua Module
+
+JSON encoding/decoding for Lua. Auto-registered via `init()`.
+
+```lua
+local json = require("json")
+```
+
+| Lua API | Returns | Description |
+|---------|---------|-------------|
+| `json.encode(value)` | string | Encode Lua value to JSON string. Tables become objects/arrays. Integers preserved. Raises error on failure. |
+| `json.decode(str)` | value | Decode JSON string to Lua value. Objects→tables, arrays→tables (1-indexed), numbers→integer if no fractional part, else float. |
+| `json.encode_pretty(value)` | string | Like `encode` but with 2-space indentation. |
+
+### JSON Example
+
+```lua
+local json = require("json")
+
+local data = {name = "Alice", scores = {95, 87, 92}}
+local str = json.encode(data)
+print(str)  -- {"name":"Alice","scores":[95,87,92]}
+
+local pretty = json.encode_pretty(data)
+print(pretty)
+-- {
+--   "name": "Alice",
+--   "scores": [
+--     95,
+--     87,
+--     92
+--   ]
+-- }
+
+local decoded = json.decode('{"x": 1, "y": 2.5}')
+print(decoded.x, type(decoded.x))  -- 1  integer
+print(decoded.y, type(decoded.y))  -- 2.5  float
+```
+
+---
+
+## HTTP Lua Module
+
+HTTP client for Lua. Auto-registered via `init()`.
+
+```lua
+local http = require("http")
+```
+
+| Lua API | Returns | Description |
+|---------|---------|-------------|
+| `http.get(url [, options])` | response or `nil, errmsg` | HTTP GET. Options: `{headers={...}, timeout=seconds}` |
+| `http.post(url, options)` | response or `nil, errmsg` | HTTP POST. Options: `{body="...", headers={...}, timeout=seconds}` |
+| `http.request(options)` | response or `nil, errmsg` | Generic HTTP request. Options: `{method="GET", url="...", body="...", headers={...}, timeout=seconds}` |
+
+**Response table format:**
+
+```lua
+{
+    status      = 200,           -- HTTP status code (integer)
+    status_text = "200 OK",      -- full status string
+    body        = "...",         -- response body (string)
+    headers     = {              -- response headers (lowercase keys)
+        ["content-type"] = "application/json",
+    },
+}
+```
+
+Default timeout: 30 seconds. Max response body: 10 MB. Respects the State's context for cancellation.
+
+### HTTP Example
+
+```lua
+local http = require("http")
+
+-- Simple GET
+local resp, err = http.get("https://api.example.com/data")
+if resp then
+    print(resp.status, resp.body)
+end
+
+-- POST with headers
+local resp, err = http.post("https://api.example.com/submit", {
+    body = '{"key": "value"}',
+    headers = {["Content-Type"] = "application/json"},
+    timeout = 10,
+})
+
+-- Generic request
+local resp, err = http.request({
+    method  = "PUT",
+    url     = "https://api.example.com/resource/1",
+    body    = "updated data",
+    headers = {["Authorization"] = "Bearer token123"},
+})
+```
+
+---
+
+## Async Runtime
+
+Futures, schedulers, and a Lua module for concurrent async programming.
+
+### Go Types
+
+```go
+// Future is a thread-safe async result container.
+type Future struct { ... }
+
+func NewFuture() *Future
+func (f *Future) Resolve(value any)           // Complete with value (first call wins)
+func (f *Future) Reject(err error)            // Complete with error (first call wins)
+func (f *Future) IsDone() bool                // Check if resolved/rejected
+func (f *Future) Wait() <-chan struct{}        // Channel that closes when done
+func (f *Future) Result() (any, error)        // Get result (blocks until done)
+```
+
+```go
+// Scheduler manages async coroutines within a single Lua State.
+type Scheduler struct { ... }
+
+func NewScheduler(L *State) *Scheduler
+func (s *Scheduler) Spawn(L *State) error     // Start coroutine from function at top of stack
+func (s *Scheduler) Tick() int                // Resume ready coroutines, return pending count
+func (s *Scheduler) Pending() int             // Number of pending coroutines
+func (s *Scheduler) WaitAll(timeout time.Duration) error  // Block until all complete or timeout
+```
+
+### Async Lua Module
+
+Auto-registered via `init()`.
+
+```lua
+local async = require("async")
+```
+
+| Lua API | Returns | Description |
+|---------|---------|-------------|
+| `async.go(code_string)` | future (userdata) | Run Lua code in a new goroutine. Returns a `Future`. **Takes a string, not a function** (Lua closures are bound to their parent State). |
+| `async.await(future)` | `value` or `nil, errmsg` | Yield until future resolves. Must be called inside a coroutine managed by a `Scheduler`. |
+| `async.resolve(value)` | future | Create an already-resolved `Future`. |
+| `async.reject(msg)` | future | Create an already-rejected `Future`. |
+
+### Async Example
+
+```lua
+local async = require("async")
+
+-- Fire off concurrent work
+local f1 = async.go('return 1 + 1')
+local f2 = async.go('return 2 + 2')
+
+-- Await results (inside a scheduled coroutine)
+local v1 = async.await(f1)  -- 2
+local v2 = async.await(f2)  -- 4
+print(v1 + v2)              -- 6
+```
+
+### Scheduler Example (Go side)
+
+```go
+L := lua.NewState()
+defer L.Close()
+
+sched := lua.NewScheduler(L)
+
+// Push a coroutine function
+L.DoString(`
+    function main()
+        local async = require("async")
+        local f = async.go('return 42')
+        local v = async.await(f)
+        print("got:", v)
+    end
+`)
+L.GetGlobal("main")
+sched.Spawn(L)
+
+// Drive the scheduler
+for sched.Pending() > 0 {
+    sched.Tick()
+}
+```
+
+---
+
 ## Common Patterns
 
 ### Registering a Module
