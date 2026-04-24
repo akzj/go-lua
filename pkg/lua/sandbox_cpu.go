@@ -46,13 +46,16 @@ func (L *State) SetCPULimit(limit int64) {
 	}
 	L.cpuCheckInterval = interval
 
-	L.SetHook(func(hook *State, event int, _ int) {
+	// Capture L (the original State with CPU fields) in the closure.
+	// The hook parameter is a throwaway wrapper — we must NOT use it for
+	// CPU-limit bookkeeping because it has zero-valued fields.
+	L.SetHook(func(_ *State, event int, _ int) {
 		if event != HookEventCount {
 			return
 		}
-		hook.cpuCounter += int64(hook.cpuCheckInterval)
-		if hook.cpuLimit > 0 && hook.cpuCounter >= hook.cpuLimit {
-			hook.Errorf("CPU limit exceeded: %d instructions", hook.cpuLimit)
+		L.cpuCounter += int64(L.cpuCheckInterval)
+		if L.cpuLimit > 0 && L.cpuCounter >= L.cpuLimit {
+			L.Errorf("CPU limit exceeded: %d instructions", L.cpuLimit)
 		}
 	}, MaskCount, interval)
 }
