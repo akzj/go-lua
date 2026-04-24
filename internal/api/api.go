@@ -9,6 +9,9 @@
 package api
 
 import (
+	"io"
+	"io/fs"
+
 	"github.com/akzj/go-lua/internal/object"
 )
 
@@ -22,6 +25,18 @@ type State struct {
 	// Internal fields set during construction — not exported.
 	// The implementation file will define these.
 	Internal any // *state.LuaState (avoids circular import)
+
+	// Writer is the custom output writer for print() and related functions.
+	// If nil, os.Stdout is used. Set by pkg/lua.State.SetWriter().
+	// Stored here (not on pkg/lua.State) so it survives wrapFunction which
+	// creates fresh pkg/lua.State wrappers sharing the same api.State.
+	Writer io.Writer
+
+	// FileSystem is the custom filesystem for file loading (require, dofile,
+	// loadfile). If nil, the real OS filesystem is used.
+	// Stored here (not on pkg/lua.State) so it survives wrapFunction which
+	// creates fresh pkg/lua.State wrappers sharing the same api.State.
+	FileSystem fs.FS
 }
 
 // --- Pseudo-Indices ---
