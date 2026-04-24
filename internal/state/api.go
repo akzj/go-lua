@@ -240,6 +240,11 @@ type GlobalState struct {
 	// API string cache (typed in luastring module)
 	StringCache any
 
+	// MemoryLimit is the maximum number of bytes Lua objects may use.
+	// 0 means no limit. When GCTotalBytes exceeds this after a full GC,
+	// further allocations panic with StatusErrMem ("not enough memory").
+	MemoryLimit int64
+
 	// GCTotalBytes tracks total Lua-level object allocations (bytes).
 	// Mirrors C Lua's gettotalbytes(g) for collectgarbage("count").
 	// Incremented on allocation, decremented by V5 GC sweep when dead
