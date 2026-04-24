@@ -1,6 +1,7 @@
 package lua_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/akzj/go-lua/pkg/lua"
@@ -979,4 +980,94 @@ func TestForEachArrayTable(t *testing.T) {
 	if L.GetTop() != 1 {
 		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Runnable Examples (godoc)
+// ---------------------------------------------------------------------------
+
+func ExampleState_GetFieldString() {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.DoString(`person = {name = "Alice", city = "Tokyo"}`)
+	L.GetGlobal("person")
+
+	name := L.GetFieldString(-1, "name")
+	city := L.GetFieldString(-1, "city")
+	fmt.Println(name, "lives in", city)
+	L.Pop(1)
+	// Output:
+	// Alice lives in Tokyo
+}
+
+func ExampleState_NewTableFrom() {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.NewTableFrom(map[string]any{
+		"host": "localhost",
+		"port": 8080,
+	})
+	L.SetGlobal("config")
+
+	L.DoString(`print(config.host .. ":" .. config.port)`)
+	// Output:
+	// localhost:8080
+}
+
+func ExampleState_CallSafe() {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.DoString(`
+		function divide(a, b)
+			if b == 0 then error("division by zero") end
+			return a / b
+		end
+	`)
+
+	// Successful call.
+	L.GetGlobal("divide")
+	L.PushInteger(10)
+	L.PushInteger(2)
+	err := L.CallSafe(2, 1)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	val, _ := L.ToNumber(-1)
+	L.Pop(1)
+	fmt.Printf("result: %g\n", val)
+
+	// Failing call — error is returned as a Go error.
+	L.GetGlobal("divide")
+	L.PushInteger(10)
+	L.PushInteger(0)
+	err = L.CallSafe(2, 1)
+	fmt.Println("caught error:", err != nil)
+	// Output:
+	// result: 5
+	// caught error: true
+}
+
+func ExampleState_ForEach() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// ForEach works well with ordered integer-keyed tables.
+	L.DoString(`items = {"apple", "banana", "cherry"}`)
+	L.GetGlobal("items")
+
+	L.ForEach(-1, func(L *lua.State) bool {
+		idx, _ := L.ToInteger(-2)
+		val, _ := L.ToString(-1)
+		fmt.Printf("%d: %s\n", idx, val)
+		return true // continue iteration
+	})
+	L.Pop(1)
+	// Output:
+	// 1: apple
+	// 2: banana
+	// 3: cherry
 }
