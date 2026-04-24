@@ -1018,3 +1018,97 @@ func ExampleState_ToStruct() {
 	// Output:
 	// localhost 8080
 }
+
+// ---------------------------------------------------------------------------
+// StackRef tests
+// ---------------------------------------------------------------------------
+
+func TestPushAny_StackRef(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Push a table at index 1.
+	L.NewTable()
+	L.PushString("hello")
+	L.SetField(-2, "key")
+	// Stack: [table{key="hello"}]
+
+	// PushAny with StackRef should copy the table reference.
+	L.PushAny(lua.StackRef{Index: 1})
+	// Stack: [table, table_copy]
+
+	// Verify it's the same table (Lua tables are reference types).
+	L.GetField(-1, "key")
+	s, ok := L.ToString(-1)
+	if !ok || s != "hello" {
+		t.Fatalf("expected 'hello', got %q (ok=%v)", s, ok)
+	}
+	L.Pop(2) // pop string and copied table
+	L.Pop(1) // pop original table
+}
+
+func TestNewTableFrom_WithStackRef(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Push a props table at index 1.
+	L.NewTable()
+	L.PushString("world")
+	L.SetField(-2, "greeting")
+	// Stack: [props_table]
+
+	// Create a new table that references the props table.
+	L.NewTableFrom(map[string]any{
+		"name":  "MyComponent",
+		"id":    int64(42),
+		"props": lua.StackRef{Index: 1}, // reference stack index 1
+	})
+	// Stack: [props_table, new_table]
+
+	// Verify "name".
+	L.GetField(-1, "name")
+	name, _ := L.ToString(-1)
+	L.Pop(1)
+	if name != "MyComponent" {
+		t.Fatalf("expected 'MyComponent', got %q", name)
+	}
+
+	// Verify "props" is the same table.
+	L.GetField(-1, "props")
+	L.GetField(-1, "greeting")
+	greeting, _ := L.ToString(-1)
+	L.Pop(2) // pop greeting + props
+	if greeting != "world" {
+		t.Fatalf("expected 'world', got %q", greeting)
+	}
+
+	L.Pop(2) // cleanup
+}
+
+func TestSetFields_WithStackRef(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Push a value at index 1.
+	L.PushString("stack_value")
+	// Stack: ["stack_value"]
+
+	// Create target table.
+	L.NewTable()
+	// Stack: ["stack_value", target_table]
+
+	L.SetFields(-1, map[string]any{
+		"name": "test",
+		"ref":  lua.StackRef{Index: 1}, // reference the string at index 1
+	})
+
+	// Verify.
+	L.GetField(-1, "ref")
+	val, _ := L.ToString(-1)
+	L.Pop(1)
+	if val != "stack_value" {
+		t.Fatalf("expected 'stack_value', got %q", val)
+	}
+
+	L.Pop(2) // cleanup
+}
