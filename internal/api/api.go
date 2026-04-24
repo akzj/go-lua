@@ -49,6 +49,11 @@ type State struct {
 	// It receives a module name and returns a CFunction loader, or nil if not found.
 	// This indirection avoids circular imports between pkg/lua and internal/stdlib.
 	GlobalSearcher func(name string) CFunction
+
+	// UserData stores arbitrary Go values associated with string keys.
+	// Stored here (not on pkg/lua.State) so it survives wrapFunction which
+	// creates fresh pkg/lua.State wrappers sharing the same api.State.
+	UserData map[string]any
 }
 
 // --- Pseudo-Indices ---
