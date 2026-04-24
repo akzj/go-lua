@@ -21,9 +21,6 @@ type State struct {
 	cpuCounter       int64 // instructions counted so far
 	cpuCheckInterval int   // hook fires every N instructions (default 1000)
 
-	// Per-State user data storage (for embedding applications)
-	userData map[string]any
-
 	ctx        context.Context // Go context for cancellation/timeout (nil = no context)
 	fileSystem fs.FS           // custom filesystem for require/dofile/loadfile (nil = real OS)
 }
@@ -184,26 +181,27 @@ func (L *State) CloseThread(from *State) int {
 // SetUserValue stores an arbitrary Go value associated with the given key.
 // This allows embedding applications to attach per-State data without global variables.
 // Keys are arbitrary strings. Values can be any Go type.
+// The value is stored on the internal State and survives wrapFunction.
 func (L *State) SetUserValue(key string, value any) {
-	if L.userData == nil {
-		L.userData = make(map[string]any)
+	if L.s.UserData == nil {
+		L.s.UserData = make(map[string]any)
 	}
-	L.userData[key] = value
+	L.s.UserData[key] = value
 }
 
-// UserValue retrieves a previously stored value by key.
+// UserValue retrieves a Go value previously stored with SetUserValue.
 // Returns nil if the key was never set.
 func (L *State) UserValue(key string) any {
-	if L.userData == nil {
+	if L.s.UserData == nil {
 		return nil
 	}
-	return L.userData[key]
+	return L.s.UserData[key]
 }
 
-// DeleteUserValue removes a stored value by key.
+// DeleteUserValue removes a previously stored user value.
 func (L *State) DeleteUserValue(key string) {
-	if L.userData != nil {
-		delete(L.userData, key)
+	if L.s.UserData != nil {
+		delete(L.s.UserData, key)
 	}
 }
 
