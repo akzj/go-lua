@@ -9,6 +9,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"io/fs"
 
@@ -37,6 +38,12 @@ type State struct {
 	// Stored here (not on pkg/lua.State) so it survives wrapFunction which
 	// creates fresh pkg/lua.State wrappers sharing the same api.State.
 	FileSystem fs.FS
+
+	// Ctx is the Go context for cancellation/timeout.
+	// Stored here (not on pkg/lua.State) so it survives wrapFunction which
+	// creates fresh pkg/lua.State wrappers sharing the same api.State.
+	// If nil, context.Background() should be assumed by callers.
+	Ctx context.Context
 
 	// GlobalSearcher is set by pkg/lua to enable global module registry lookup.
 	// It receives a module name and returns a CFunction loader, or nil if not found.
