@@ -10,6 +10,11 @@ import (
 type State struct {
 	s      *api.State
 	goHook HookFunc // Go hook callback set via SetHook (nil if unset)
+
+	// CPU limit fields (managed by sandbox_cpu.go)
+	cpuLimit         int64 // max instructions (0 = unlimited)
+	cpuCounter       int64 // instructions counted so far
+	cpuCheckInterval int   // hook fires every N instructions (default 1000)
 }
 
 // NewState creates a new Lua state with all standard libraries loaded.

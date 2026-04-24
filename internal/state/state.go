@@ -399,9 +399,34 @@ func (g *GlobalState) LinkGC(obj object.GCObject) {
 // TrackAllocation increments GCTotalBytes and decrements GCDebt by n bytes.
 // Used for debt-based GC pacing: when GCDebt reaches 0, a GC step triggers.
 // Lua is single-threaded so no atomics needed.
+//
+// If a MemoryLimit is set and GCTotalBytes exceeds it, a full GC is attempted
+// (via GCDrainFn). If still over limit after GC, panics with StatusErrMem.
 func (g *GlobalState) TrackAllocation(n int64) {
 	g.GCTotalBytes += n
 	g.GCDebt -= n
+	if g.MemoryLimit > 0 && g.GCTotalBytes > g.MemoryLimit {
+		g.checkMemoryLimit()
+	}
+}
+
+// checkMemoryLimit is the slow path for memory limit enforcement.
+// Separated from TrackAllocation to keep the fast path inlineable.
+//
+//go:noinline
+func (g *GlobalState) checkMemoryLimit() {
+	// Try a full GC to reclaim memory before erroring.
+	// Use GCDrainFn (lightweight GC) to avoid re-entrancy issues.
+	if g.GCDrainFn != nil && !g.GCRunning && g.MainThread != nil {
+		g.GCDrainFn(g.MainThread)
+	}
+	// After GC, check again
+	if g.GCTotalBytes > g.MemoryLimit {
+		panic(LuaError{
+			Status:  StatusErrMem,
+			Message: object.MakeString(g.MemErrMsg),
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

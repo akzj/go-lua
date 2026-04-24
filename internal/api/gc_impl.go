@@ -31,6 +31,22 @@ func (L *State) TrackAlloc(n int64) {
 	L.ls().Global.GCTotalBytes += n
 }
 
+// SetMemoryLimit sets the maximum memory (in bytes) that Lua objects can use.
+// 0 means no limit. Returns the previous limit.
+// When the limit is exceeded, TrackAllocation attempts a GC cycle and then
+// panics with StatusErrMem if still over limit.
+func (L *State) SetMemoryLimit(limit int64) int64 {
+	g := L.ls().Global
+	prev := g.MemoryLimit
+	g.MemoryLimit = limit
+	return prev
+}
+
+// MemoryLimit returns the current memory limit (0 = no limit).
+func (L *State) MemoryLimit() int64 {
+	return L.ls().Global.MemoryLimit
+}
+
 // GetGCMode returns the current GC mode string ("incremental" or "generational").
 // Defaults to "incremental" if not set.
 func (L *State) GetGCMode() string {

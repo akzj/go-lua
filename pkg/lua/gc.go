@@ -60,3 +60,20 @@ func (L *State) GetGCParam(name string) int64 {
 func (L *State) SetGCParam(name string, value int64) int64 {
 	return L.s.SetGCParam(name, value)
 }
+
+// ---------------------------------------------------------------------------
+// Memory limit (sandbox support)
+// ---------------------------------------------------------------------------
+
+// SetMemoryLimit sets the maximum memory (in bytes) that Lua objects can use.
+// 0 means no limit. Returns the previous limit.
+// When the limit is exceeded, Lua code receives an "out of memory" error
+// that can be caught by pcall/xpcall.
+func (L *State) SetMemoryLimit(limit int64) int64 {
+	return L.s.SetMemoryLimit(limit)
+}
+
+// MemoryUsed returns the current Lua-level memory usage in bytes.
+func (L *State) MemoryUsed() int64 {
+	return L.s.GCTotalBytes()
+}
