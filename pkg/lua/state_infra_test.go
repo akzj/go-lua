@@ -242,3 +242,59 @@ func TestSetWriterFromCallback(t *testing.T) {
 		t.Errorf("expected 'from_callback\\n', got %q", got)
 	}
 }
+
+func TestUserValue_SurvivesWrapFunction(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Set a user value on the outer State
+	L.SetUserValue("mykey", "myvalue")
+
+	// Register a Go function that checks UserValue from inside a Lua call
+	var foundValue any
+	L.PushFunction(func(innerL *lua.State) int {
+		// innerL is a DIFFERENT wrapper than L, but same internal state
+		foundValue = innerL.UserValue("mykey")
+		return 0
+	})
+	L.SetGlobal("checkUserValue")
+
+	// Call from Lua — this goes through wrapFunction
+	err := L.DoString("checkUserValue()")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if foundValue != "myvalue" {
+		t.Fatalf("UserValue lost through wrapFunction: got %v, want 'myvalue'", foundValue)
+	}
+}
+
+func TestUserValue_DeleteSurvivesWrapFunction(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.SetUserValue("key1", "val1")
+	L.SetUserValue("key2", "val2")
+	L.DeleteUserValue("key1")
+
+	var found1, found2 any
+	L.PushFunction(func(innerL *lua.State) int {
+		found1 = innerL.UserValue("key1")
+		found2 = innerL.UserValue("key2")
+		return 0
+	})
+	L.SetGlobal("check")
+
+	err := L.DoString("check()")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if found1 != nil {
+		t.Fatalf("deleted key should be nil, got %v", found1)
+	}
+	if found2 != "val2" {
+		t.Fatalf("key2 should be 'val2', got %v", found2)
+	}
+}
