@@ -23,12 +23,17 @@ import "context"
 //	err := L.DoString(`while true do end`) // will error after ~5 seconds
 func (L *State) SetContext(ctx context.Context) {
 	L.ctx = ctx
+	L.s.Ctx = ctx // also store on api.State so wrapFunction wrappers can access it
 	L.installCombinedHook()
 }
 
 // Context returns the associated [context.Context], or [context.Background]
-// if none was set.
+// if none was set. Reads from the internal api.State so the context is
+// accessible even from wrapFunction-created State wrappers.
 func (L *State) Context() context.Context {
+	if L.s.Ctx != nil {
+		return L.s.Ctx
+	}
 	if L.ctx != nil {
 		return L.ctx
 	}
