@@ -1,6 +1,7 @@
 package lua_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -962,4 +963,58 @@ func TestPushAnyToStructRoundTrip(t *testing.T) {
 	if got != original {
 		t.Fatalf("round trip mismatch: %+v != %+v", got, original)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Runnable Examples (godoc)
+// ---------------------------------------------------------------------------
+
+func ExampleState_PushAny() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Push a Go map as a Lua table.
+	L.PushAny(map[string]any{
+		"name": "Alice",
+		"age":  30,
+	})
+	L.SetGlobal("user")
+
+	L.DoString(`print(user.name, user.age)`)
+	// Output:
+	// Alice	30
+}
+
+func ExampleState_ToAny() {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.DoString(`t = {name = "Bob", score = 95}`)
+	L.GetGlobal("t")
+	val := L.ToAny(-1)
+	m := val.(map[string]any)
+	fmt.Println(m["name"], m["score"])
+	L.Pop(1)
+	// Output:
+	// Bob 95
+}
+
+func ExampleState_ToStruct() {
+	L := lua.NewState()
+	defer L.Close()
+
+	type Config struct {
+		Host string `lua:"host"`
+		Port int    `lua:"port"`
+	}
+
+	L.DoString(`config = {host = "localhost", port = 8080}`)
+	L.GetGlobal("config")
+
+	var cfg Config
+	L.ToStruct(-1, &cfg)
+	fmt.Println(cfg.Host, cfg.Port)
+	L.Pop(1)
+	// Output:
+	// localhost 8080
 }
