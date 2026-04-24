@@ -149,14 +149,12 @@ func NewSandboxState(config SandboxConfig) *State {
 	}
 
 	// 5. Apply resource limits.
+	if config.MemoryLimit > 0 {
+		L.SetMemoryLimit(config.MemoryLimit)
+	}
 	if config.CPULimit > 0 {
 		L.SetCPULimit(config.CPULimit)
 	}
-	// MemoryLimit is a placeholder — the memory limit builder will add
-	// SetMemoryLimit to the State. When available, uncomment:
-	// if config.MemoryLimit > 0 {
-	//     L.SetMemoryLimit(config.MemoryLimit)
-	// }
 
 	return L
 }
