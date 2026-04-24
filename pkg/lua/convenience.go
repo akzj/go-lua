@@ -68,3 +68,16 @@ func (L *State) NewTableFrom(fields map[string]any) {
 		L.SetField(-2, k)
 	}
 }
+
+// GetFieldRef reads t[key] and if it's a function, stores it in the Lua
+// registry and returns the reference ID. Returns RefNil if the field is
+// not a function. The caller is responsible for calling
+// L.Unref(RegistryIndex, ref) when the reference is no longer needed.
+func (L *State) GetFieldRef(idx int, key string) int {
+	L.GetField(idx, key)
+	if L.Type(-1) != TypeFunction {
+		L.Pop(1)
+		return RefNil
+	}
+	return L.Ref(RegistryIndex) // pops the function, stores in registry
+}

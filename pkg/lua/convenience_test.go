@@ -345,3 +345,264 @@ func TestNewTableFromEmpty(t *testing.T) {
 		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ToStruct — recursive struct pointer slices
+// ---------------------------------------------------------------------------
+
+type testVNode struct {
+	Type     string       `lua:"type"`
+	Content  string       `lua:"content"`
+	Children []*testVNode `lua:"children"`
+	Focused  bool         `lua:"_focused"`
+}
+
+func TestToStructRecursiveSlicePtr(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`
+		node = {
+			type    = "box",
+			content = "hello",
+			_focused = true,
+			children = {
+				{ type = "text", content = "world", _focused = false },
+				{ type = "span", content = "!", children = {
+					{ type = "leaf", content = "nested" },
+				}},
+			},
+		}
+	`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("node")
+	var vn testVNode
+	if err := L.ToStruct(-1, &vn); err != nil {
+		t.Fatalf("ToStruct: %v", err)
+	}
+
+	// Top-level fields.
+	if vn.Type != "box" {
+		t.Fatalf("expected type=\"box\", got %q", vn.Type)
+	}
+	if vn.Content != "hello" {
+		t.Fatalf("expected content=\"hello\", got %q", vn.Content)
+	}
+	if !vn.Focused {
+		t.Fatal("expected _focused=true")
+	}
+
+	// Children.
+	if len(vn.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(vn.Children))
+	}
+	c0 := vn.Children[0]
+	if c0 == nil {
+		t.Fatal("children[0] is nil")
+	}
+	if c0.Type != "text" {
+		t.Fatalf("expected children[0].type=\"text\", got %q", c0.Type)
+	}
+	if c0.Content != "world" {
+		t.Fatalf("expected children[0].content=\"world\", got %q", c0.Content)
+	}
+	if c0.Focused {
+		t.Fatal("expected children[0]._focused=false")
+	}
+
+	// Nested children (depth 2).
+	c1 := vn.Children[1]
+	if c1 == nil {
+		t.Fatal("children[1] is nil")
+	}
+	if c1.Type != "span" {
+		t.Fatalf("expected children[1].type=\"span\", got %q", c1.Type)
+	}
+	if len(c1.Children) != 1 {
+		t.Fatalf("expected children[1] to have 1 child, got %d", len(c1.Children))
+	}
+	gc := c1.Children[0]
+	if gc == nil {
+		t.Fatal("grandchild is nil")
+	}
+	if gc.Type != "leaf" {
+		t.Fatalf("expected grandchild.type=\"leaf\", got %q", gc.Type)
+	}
+	if gc.Content != "nested" {
+		t.Fatalf("expected grandchild.content=\"nested\", got %q", gc.Content)
+	}
+
+	// Stack unchanged.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
+
+// Non-pointer struct slice: []testSimple
+type testSimple struct {
+	Name  string `lua:"name"`
+	Value int64  `lua:"value"`
+}
+
+type testContainer struct {
+	Items []testSimple `lua:"items"`
+}
+
+func TestToStructRecursiveSliceValue(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`
+		container = {
+			items = {
+				{ name = "a", value = 1 },
+				{ name = "b", value = 2 },
+				{ name = "c", value = 3 },
+			},
+		}
+	`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("container")
+	var c testContainer
+	if err := L.ToStruct(-1, &c); err != nil {
+		t.Fatalf("ToStruct: %v", err)
+	}
+
+	if len(c.Items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(c.Items))
+	}
+	if c.Items[0].Name != "a" || c.Items[0].Value != 1 {
+		t.Fatalf("items[0] = %+v, want {a, 1}", c.Items[0])
+	}
+	if c.Items[2].Name != "c" || c.Items[2].Value != 3 {
+		t.Fatalf("items[2] = %+v, want {c, 3}", c.Items[2])
+	}
+
+	// Stack unchanged.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
+
+func TestToStructEmptyChildren(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`node = { type = "leaf", content = "x", children = {} }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("node")
+	var vn testVNode
+	if err := L.ToStruct(-1, &vn); err != nil {
+		t.Fatalf("ToStruct: %v", err)
+	}
+
+	if vn.Type != "leaf" {
+		t.Fatalf("expected type=\"leaf\", got %q", vn.Type)
+	}
+	if vn.Children == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(vn.Children) != 0 {
+		t.Fatalf("expected 0 children, got %d", len(vn.Children))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetFieldRef
+// ---------------------------------------------------------------------------
+
+func TestGetFieldRef(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create a table with a function field.
+	err := L.DoString(`
+		myTable = {
+			greet = function() return "hello" end,
+			name  = "test",
+		}
+	`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("myTable")
+
+	// Get ref to function field.
+	ref := L.GetFieldRef(-1, "greet")
+	if ref == lua.RefNil {
+		t.Fatal("expected valid ref, got RefNil")
+	}
+
+	// Retrieve the function from registry and verify it's a function.
+	L.RawGetI(lua.RegistryIndex, int64(ref))
+	if !L.IsFunction(-1) {
+		t.Fatalf("expected function from registry, got %s", L.TypeName(L.Type(-1)))
+	}
+	L.Pop(1)
+
+	// Non-function field → RefNil.
+	ref2 := L.GetFieldRef(-1, "name")
+	if ref2 != lua.RefNil {
+		t.Fatalf("expected RefNil for string field, got %d", ref2)
+	}
+
+	// Missing field → RefNil.
+	ref3 := L.GetFieldRef(-1, "nonexistent")
+	if ref3 != lua.RefNil {
+		t.Fatalf("expected RefNil for missing field, got %d", ref3)
+	}
+
+	// Clean up ref.
+	L.Unref(lua.RegistryIndex, ref)
+
+	// Stack: just the table.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
+
+func TestGetFieldRefCallFunction(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`
+		myTable = {
+			add = function(a, b) return a + b end,
+		}
+	`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("myTable")
+	ref := L.GetFieldRef(-1, "add")
+	if ref == lua.RefNil {
+		t.Fatal("expected valid ref")
+	}
+
+	// Push function from registry, call it.
+	L.RawGetI(lua.RegistryIndex, int64(ref))
+	L.PushInteger(10)
+	L.PushInteger(32)
+	if status := L.PCall(2, 1, 0); status != lua.OK {
+		msg, _ := L.ToString(-1)
+		t.Fatalf("PCall failed (status %d): %s", status, msg)
+	}
+	result, ok := L.ToInteger(-1)
+	if !ok || result != 42 {
+		t.Fatalf("expected 42, got %d (ok=%v)", result, ok)
+	}
+	L.Pop(1)
+
+	L.Unref(lua.RegistryIndex, ref)
+}

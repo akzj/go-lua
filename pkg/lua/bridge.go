@@ -442,7 +442,45 @@ func setStructField(L *State, fv reflect.Value, idx int) {
 		if v, ok := L.ToNumber(idx); ok {
 			fv.SetFloat(v)
 		}
-	case reflect.Slice, reflect.Map, reflect.Interface:
+	case reflect.Slice:
+		if L.IsTable(idx) {
+			elemType := fv.Type().Elem()
+			isStructSlice := elemType.Kind() == reflect.Struct ||
+				(elemType.Kind() == reflect.Ptr && elemType.Elem().Kind() == reflect.Struct)
+			if isStructSlice {
+				// Struct or *struct slice — iterate Lua array, recursively ToStruct each element.
+				absIdx := L.AbsIndex(idx)
+				n := int(L.RawLen(absIdx))
+				slice := reflect.MakeSlice(fv.Type(), 0, n)
+				for i := 1; i <= n; i++ {
+					L.GetI(absIdx, int64(i))
+					if L.IsTable(-1) {
+						var elem reflect.Value
+						if elemType.Kind() == reflect.Ptr {
+							elem = reflect.New(elemType.Elem())
+							_ = L.ToStruct(-1, elem.Interface())
+						} else {
+							elem = reflect.New(elemType)
+							_ = L.ToStruct(-1, elem.Interface())
+							elem = elem.Elem()
+						}
+						slice = reflect.Append(slice, elem)
+					}
+					L.Pop(1)
+				}
+				fv.Set(slice)
+			} else {
+				// Non-struct slices: fall back to ToAny conversion.
+				val := L.ToAny(idx)
+				if val != nil {
+					rval := reflect.ValueOf(val)
+					if rval.Type().AssignableTo(fv.Type()) {
+						fv.Set(rval)
+					}
+				}
+			}
+		}
+	case reflect.Map, reflect.Interface:
 		if L.IsTable(idx) {
 			val := L.ToAny(idx)
 			if val != nil {
