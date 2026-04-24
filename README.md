@@ -98,6 +98,15 @@ func main() {
 }
 ```
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [API Reference](docs/API_REFERENCE.md) | Complete Go API with C Lua equivalents |
+| [Capabilities](docs/CAPABILITIES.md) | Standard library completeness, language features |
+| [Cookbook](docs/COOKBOOK.md) | 25 task-driven recipes for common tasks |
+| [Embedding Guide](docs/embedding-guide.md) | Getting started with go-lua |
+
 ## Standard Libraries
 
 | Library | Highlights |
