@@ -332,7 +332,129 @@ If you know Lua 5.1 or 5.2, these are the key differences in 5.5:
 
 ---
 
+## Go-Lua Extensions (Beyond Standard Lua)
+
+go-lua provides a rich set of APIs that go **beyond** the standard Lua 5.5 C API. These are Go-native features designed for safe, productive embedding. For full API signatures and examples, see [API_REFERENCE.md](API_REFERENCE.md). For usage recipes, see [COOKBOOK.md](COOKBOOK.md).
+
+### Type Bridge (Go ↔ Lua)
+
+Automatic conversion between Go and Lua types — no manual stack manipulation required.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `PushAny(value any)` | ✅ | Auto-convert any Go type → Lua (nil, bool, ints, floats, string, []byte, slices, maps, structs, Function) |
+| `ToAny(idx int) any` | ✅ | Auto-convert any Lua value → Go (tables → `map[string]any` or `[]any`) |
+| `ToStruct(idx int, dest any) error` | ✅ | Lua table → Go struct (via `lua` tags or lowercased field names) |
+| `PushGoFunc(fn any)` | ✅ | Auto-bind ANY Go function via reflection (params + returns auto-converted) |
+| Generic Wrappers (`Wrap0`..`Wrap3R`) | ✅ | Compile-time type-safe function wrapping, no reflection overhead |
+
+### Convenience APIs
+
+Reduce boilerplate for the most common embedding patterns.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `GetFieldString/Int/Number/Bool/Any` | ✅ | One-call table field access (no manual GetField+Pop) |
+| `SetFields(idx, map)` | ✅ | Set multiple table fields at once |
+| `NewTableFrom(map)` | ✅ | Create + fill table in one call |
+| `ForEach(idx, callback)` | ✅ | Safe table iteration with callback |
+| `CallSafe(nArgs, nResults) error` | ✅ | PCall returning Go error |
+| `CallRef(ref, nArgs, nResults) error` | ✅ | Call function from registry reference |
+| `ToMap(idx) (map, bool)` | ✅ | Type-safe table → map conversion |
+| `GetFieldRef(idx, key) int` | ✅ | Store table field function in registry |
+
+### Sandboxing
+
+Run untrusted Lua code with configurable resource limits and library restrictions.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `NewSandboxState(SandboxConfig)` | ✅ | Create restricted state with configurable library access |
+| CPU instruction limits | ✅ | `SetCPULimit(n)` — max VM instructions, raises Lua error when exceeded |
+| CPU counter management | ✅ | `ResetCPUCounter()`, `CPUInstructionsUsed()` |
+| Memory limits | ✅ | `SetMemoryLimit(bytes)` via SandboxConfig |
+| Library whitelisting | ✅ | AllowIO, AllowDebug, AllowPackage flags |
+| Dangerous global removal | ✅ | `dofile`, `loadfile`, `load`, `require` removed by default |
+
+### Context Integration
+
+Bridge Go's `context.Context` into Lua execution for cancellation and timeouts.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `SetContext(ctx)` | ✅ | Associate Go `context.Context` — cancellation/timeout → Lua error |
+| `Context()` | ✅ | Retrieve associated context |
+| Combined hooks | ✅ | CPU limit + context share single efficient hook |
+
+### Virtual Filesystem
+
+Replace the real filesystem with any `fs.FS` implementation for sandboxed file access.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `SetFileSystem(fs.FS)` | ✅ | Custom filesystem for LoadFile, DoFile, package.searchers |
+| `embed.FS` support | ✅ | Load Lua scripts from Go's embedded filesystem |
+
+### Module System
+
+Register reusable modules at the process level or per-State.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `RegisterGlobal(name, opener)` | ✅ | Process-wide module registry (thread-safe, use in `init()`) |
+| `UnregisterGlobal(name)` | ✅ | Remove from global registry |
+| `GlobalModules()` | ✅ | List registered global modules |
+| `Module` interface | ✅ | Standard interface for reusable modules (`Name()` + `Open()`) |
+| `LoadModules(L, ...Module)` | ✅ | Register modules per-State via `package.preload` |
+| `RegisterModule(L, name, funcs)` | ✅ | Register function map as `require()`-able module |
+
+### Concurrency Infrastructure
+
+Safe patterns for using Lua across goroutines — State pools, executors, and channels.
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `NewStatePool(PoolConfig)` | ✅ | Thread-safe pool of reusable Lua States |
+| Pool: Get/Put/Close/Stats | ✅ | Exclusive ownership model, auto-creates States |
+| Pool: Sandbox support | ✅ | `PoolConfig.Sandbox` creates sandboxed States |
+| `NewExecutor(ExecutorConfig)` | ✅ | Async task runner with goroutine-per-task model |
+| Executor: Submit/Results/Pending/Shutdown | ✅ | Fire-and-forget Lua execution with result collection |
+| `NewChannel(bufSize)` | ✅ | Thread-safe Go ↔ Lua communication channel |
+| Channel: Send/Recv/TrySend/TryRecv | ✅ | Blocking and non-blocking variants |
+| Channel: RecvTimeout | ✅ | Receive with deadline |
+
+### Built-in Lua Modules (via require())
+
+These modules are auto-registered globally via `init()` and available in any State via `require()`:
+
+| Module | Functions | Description |
+|--------|-----------|-------------|
+| `require("json")` | `encode`, `decode`, `encode_pretty` | JSON serialization. Preserves int64 precision. Tables → objects/arrays. |
+| `require("http")` | `get`, `post`, `request` | HTTP client. Returns `{status, status_text, body, headers}`. 30s default timeout, 10MB max body. Respects State's context. |
+| `require("channel")` | `new`, `send`, `recv`, `try_send`, `try_recv`, `close`, `len`, `is_closed` | Inter-goroutine communication from Lua. |
+| `require("async")` | `go`, `await`, `resolve`, `reject` | Async execution with Futures. `async.go(code_string)` runs in goroutine. `async.await(future)` yields coroutine until resolved. |
+
+### Async Runtime (Go Types)
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `Future` | ✅ | Thread-safe async result container (Resolve/Reject/Wait/IsDone/Result) |
+| `Scheduler` | ✅ | Manages async coroutines within single State (Spawn/Tick/WaitAll/Pending) |
+
+> **Note about `async.go`**: Takes a CODE STRING, not a Lua function. Lua closures are bound to their parent State and cannot be safely moved to another goroutine.
+
+### Userdata Helpers
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `PushUserdata(value any)` | ✅ | One-call userdata creation (NewUserdata + SetUserdataValue) |
+| `CheckUserdata(n int) any` | ✅ | Arg validation for userdata parameters |
+
+---
+
 ## Go Embedding API
+
+> **Note**: This section shows the core embedding API. For the full API including type bridge, convenience methods, sandboxing, concurrency, and built-in modules, see [API_REFERENCE.md](API_REFERENCE.md).
 
 The public API is in `pkg/lua/`. Key types and functions:
 
@@ -390,6 +512,43 @@ L.CheckInteger(1)
 L.CheckNumber(1)
 L.OptString(1, "default")
 L.OptInteger(1, 0)
+
+// --- go-lua Extensions (see API_REFERENCE.md for full details) ---
+
+// Type Bridge
+L.PushAny(myGoValue)          // auto-convert Go → Lua
+val := L.ToAny(-1)            // auto-convert Lua → Go
+L.ToStruct(-1, &myStruct)     // Lua table → Go struct
+
+// Auto-bind Go functions
+L.PushGoFunc(myGoFunction)    // reflection-based
+lua.Wrap2R[string, int, string](L, myFunc) // generic, no reflection
+
+// Convenience
+host := L.GetFieldString(-1, "host")
+L.NewTableFrom(map[string]any{"key": "value"})
+err := L.CallSafe(1, 1)
+
+// Sandboxing
+L := lua.NewSandboxState(lua.SandboxConfig{CPULimit: 1_000_000})
+
+// Context
+L.SetContext(ctx)
+
+// Virtual Filesystem
+L.SetFileSystem(embedFS)
+
+// Module Registry
+lua.RegisterGlobal("mymod", opener)
+lua.LoadModules(L, MyModule{})
+
+// State Pool
+pool := lua.NewStatePool(lua.PoolConfig{MaxStates: 16})
+L := pool.Get()
+defer pool.Put(L)
+
+// Built-in Lua modules
+// require("json"), require("http"), require("channel"), require("async")
 ```
 
 ---
