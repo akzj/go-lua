@@ -3,6 +3,7 @@ package api
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,11 +147,52 @@ func (L *State) DoString(code string) error {
 	return nil
 }
 
+// readFile reads a file from the custom FileSystem if set, otherwise from the
+// real OS filesystem. Paths for fs.FS are normalized to forward-slash, no
+// leading slash (as required by io/fs).
+func (L *State) readFile(filename string) ([]byte, error) {
+	if L.FileSystem != nil {
+		name := toFSPath(filename)
+		return fs.ReadFile(L.FileSystem, name)
+	}
+	return os.ReadFile(filename)
+}
+
+// statFile checks if a file exists. Uses the custom FileSystem if set.
+func (L *State) statFile(filename string) error {
+	if L.FileSystem != nil {
+		name := toFSPath(filename)
+		_, err := fs.Stat(L.FileSystem, name)
+		return err
+	}
+	_, err := os.Stat(filename)
+	return err
+}
+
+// toFSPath normalizes a filesystem path for use with fs.FS:
+// forward slashes, no leading "./" or "/".
+func toFSPath(p string) string {
+	// fs.FS requires forward slashes and no leading slash.
+	p = filepath.ToSlash(p)
+	// Strip leading "./"
+	for strings.HasPrefix(p, "./") {
+		p = p[2:]
+	}
+	// Strip leading "/"
+	for strings.HasPrefix(p, "/") {
+		p = p[1:]
+	}
+	if p == "" {
+		p = "."
+	}
+	return p
+}
+
 // LoadFile loads a Lua file without executing it.
 // Pushes the compiled chunk as a function on success.
 // Returns a status code (StatusOK on success, or an error code).
 func (L *State) LoadFile(filename string, mode string) int {
-	data, err := os.ReadFile(filename)
+	data, err := L.readFile(filename)
 	if err != nil {
 		L.PushString(fmt.Sprintf("cannot open %s: %v", filename, err))
 		return StatusErrFile
@@ -183,7 +225,7 @@ func (L *State) LoadFile(filename string, mode string) int {
 
 // DoFile loads and executes a file.
 func (L *State) DoFile(filename string) error {
-	data, err := os.ReadFile(filename)
+	data, err := L.readFile(filename)
 	if err != nil {
 		return fmt.Errorf("cannot open %s: %v", filename, err)
 	}
