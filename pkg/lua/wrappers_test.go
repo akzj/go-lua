@@ -271,3 +271,31 @@ func TestWrap2R_MixedTypes(t *testing.T) {
 		t.Fatalf("DoString failed: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Runnable Examples (godoc)
+// ---------------------------------------------------------------------------
+
+func ExampleWrap1R() {
+	L := lua.NewState()
+	defer L.Close()
+
+	lua.Wrap1R(L, func(n int) int { return n * n })
+	L.SetGlobal("square")
+
+	L.DoString(`print(square(7))`)
+	// Output:
+	// 49
+}
+
+func ExampleWrap2R() {
+	L := lua.NewState()
+	defer L.Close()
+
+	lua.Wrap2R(L, func(a, b int) int { return a + b })
+	L.SetGlobal("add")
+
+	L.DoString(`print(add(3, 4))`)
+	// Output:
+	// 7
+}
