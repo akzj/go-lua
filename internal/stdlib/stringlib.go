@@ -1756,26 +1756,140 @@ func str_arith_div(L *luaapi.State) int  { return strArith(L, luaapi.OpDiv, "__d
 func str_arith_idiv(L *luaapi.State) int { return strArith(L, luaapi.OpIDiv, "__idiv") }
 func str_arith_unm(L *luaapi.State) int  { return strArith(L, luaapi.OpUnm, "__unm") }
 
+// ---------------------------------------------------------------------------
+// String utility extensions: split, trim, ltrim, rtrim, startswith, endswith
+// ---------------------------------------------------------------------------
+
+// str_split implements string.split(s, sep [, maxsplit]) -> table.
+// Splits string s by separator sep and returns an array of parts.
+// If maxsplit is given, at most maxsplit splits are performed (resulting in
+// at most maxsplit+1 parts). Empty parts are preserved.
+//
+// Lua: string.split("a,b,c", ",")     --> {"a", "b", "c"}
+// Lua: string.split("a,b,c", ",", 1)  --> {"a", "b,c"}
+// Lua: "a,b,c":split(",")             --> {"a", "b", "c"}
+func str_split(L *luaapi.State) int {
+	s := L.CheckString(1)
+	sep := L.CheckString(2)
+	maxsplit := int(L.OptInteger(3, -1))
+
+	var parts []string
+	if maxsplit < 0 {
+		parts = strings.Split(s, sep)
+	} else {
+		// strings.SplitN with n = maxsplit+1 gives at most maxsplit+1 parts
+		parts = strings.SplitN(s, sep, maxsplit+1)
+	}
+
+	L.CreateTable(len(parts), 0)
+	for i, part := range parts {
+		L.PushString(part)
+		L.SetI(-2, int64(i+1))
+	}
+	return 1
+}
+
+// str_trim implements string.trim(s [, chars]) -> string.
+// Removes leading and trailing characters from s.
+// If chars is omitted, removes whitespace. If chars is given, removes any
+// characters in that string from both ends.
+//
+// Lua: string.trim("  hello  ")       --> "hello"
+// Lua: string.trim("--hello--", "-")  --> "hello"
+// Lua: "  hello  ":trim()             --> "hello"
+func str_trim(L *luaapi.State) int {
+	s := L.CheckString(1)
+	if L.IsNoneOrNil(2) {
+		L.PushString(strings.TrimSpace(s))
+	} else {
+		chars := L.CheckString(2)
+		L.PushString(strings.Trim(s, chars))
+	}
+	return 1
+}
+
+// str_ltrim implements string.ltrim(s [, chars]) -> string.
+// Removes leading characters from s (left side only).
+//
+// Lua: string.ltrim("  hello  ")       --> "hello  "
+// Lua: string.ltrim("xxhello", "x")    --> "hello"
+func str_ltrim(L *luaapi.State) int {
+	s := L.CheckString(1)
+	if L.IsNoneOrNil(2) {
+		L.PushString(strings.TrimLeft(s, " \t\n\r\f\v"))
+	} else {
+		chars := L.CheckString(2)
+		L.PushString(strings.TrimLeft(s, chars))
+	}
+	return 1
+}
+
+// str_rtrim implements string.rtrim(s [, chars]) -> string.
+// Removes trailing characters from s (right side only).
+//
+// Lua: string.rtrim("  hello  ")       --> "  hello"
+// Lua: string.rtrim("helloxx", "x")    --> "hello"
+func str_rtrim(L *luaapi.State) int {
+	s := L.CheckString(1)
+	if L.IsNoneOrNil(2) {
+		L.PushString(strings.TrimRight(s, " \t\n\r\f\v"))
+	} else {
+		chars := L.CheckString(2)
+		L.PushString(strings.TrimRight(s, chars))
+	}
+	return 1
+}
+
+// str_startswith implements string.startswith(s, prefix) -> boolean.
+// Returns true if s starts with prefix.
+//
+// Lua: string.startswith("hello world", "hello") --> true
+// Lua: "hello":startswith("he")                  --> true
+func str_startswith(L *luaapi.State) int {
+	s := L.CheckString(1)
+	prefix := L.CheckString(2)
+	L.PushBoolean(strings.HasPrefix(s, prefix))
+	return 1
+}
+
+// str_endswith implements string.endswith(s, suffix) -> boolean.
+// Returns true if s ends with suffix.
+//
+// Lua: string.endswith("hello world", "world") --> true
+// Lua: "hello":endswith("lo")                  --> true
+func str_endswith(L *luaapi.State) int {
+	s := L.CheckString(1)
+	suffix := L.CheckString(2)
+	L.PushBoolean(strings.HasSuffix(s, suffix))
+	return 1
+}
+
 // OpenString opens the string library.
 func OpenString(L *luaapi.State) int {
 	strFuncs := map[string]luaapi.CFunction{
-		"byte":     str_byte,
-		"char":     str_char,
-		"dump":     str_dump,
-		"find":     str_find,
-		"format":   str_format,
-		"gmatch":   str_gmatch,
-		"gsub":     str_gsub,
-		"len":      str_len,
-		"lower":    str_lower,
-		"match":    str_match,
-		"pack":     str_pack,
-		"packsize": str_packsize,
-		"rep":      str_rep,
-		"reverse":  str_reverse,
-		"sub":      str_sub,
-		"unpack":   str_unpack,
-		"upper":    str_upper,
+		"byte":       str_byte,
+		"char":       str_char,
+		"dump":       str_dump,
+		"find":       str_find,
+		"format":     str_format,
+		"gmatch":     str_gmatch,
+		"gsub":       str_gsub,
+		"len":        str_len,
+		"lower":      str_lower,
+		"match":      str_match,
+		"pack":       str_pack,
+		"packsize":   str_packsize,
+		"rep":        str_rep,
+		"reverse":    str_reverse,
+		"sub":        str_sub,
+		"unpack":     str_unpack,
+		"upper":      str_upper,
+		"split":      str_split,
+		"trim":       str_trim,
+		"ltrim":      str_ltrim,
+		"rtrim":      str_rtrim,
+		"startswith": str_startswith,
+		"endswith":   str_endswith,
 	}
 	L.NewLib(strFuncs)
 
