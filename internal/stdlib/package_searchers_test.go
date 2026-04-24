@@ -16,7 +16,7 @@ func TestPackageSearchersTable(t *testing.T) {
 	code := `
 		assert(type(package.searchers) == "table", "package.searchers should be a table")
 		assert(#package.searchers >= 2, "should have at least 2 searchers, got " .. #package.searchers)
-		assert(#package.searchers == 4, "should have exactly 4 searchers, got " .. #package.searchers)
+		assert(#package.searchers == 5, "should have exactly 5 searchers, got " .. #package.searchers)
 		for i = 1, #package.searchers do
 			assert(type(package.searchers[i]) == "function",
 				"searcher " .. i .. " should be a function, got " .. type(package.searchers[i]))

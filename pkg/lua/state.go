@@ -32,7 +32,9 @@ type State struct {
 func NewState() *State {
 	s := api.NewState()
 	stdlib.OpenAll(s)
-	return &State{s: s}
+	st := &State{s: s}
+	st.installGlobalSearcher()
+	return st
 }
 
 // NewBareState creates a new Lua state without loading standard libraries.
