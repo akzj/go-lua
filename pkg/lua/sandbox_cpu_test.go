@@ -1,6 +1,7 @@
 package lua_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -370,4 +371,31 @@ func TestNewSandboxState_ExtraLibs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extra lib should work: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Runnable Examples (godoc)
+// ---------------------------------------------------------------------------
+
+func ExampleNewSandboxState() {
+	L := lua.NewSandboxState(lua.SandboxConfig{
+		MemoryLimit: 10 * 1024 * 1024, // 10MB
+		CPULimit:    100_000,           // 100K instructions
+	})
+	defer L.Close()
+
+	// Safe to execute untrusted code — io/os/debug are blocked.
+	err := L.DoString(`print("Hello from sandbox!")`)
+	if err != nil {
+		fmt.Println("Error:", err)
+	}
+
+	// Dangerous functions are removed.
+	err = L.DoString(`io.open("secret.txt")`)
+	if err != nil {
+		fmt.Println("io blocked:", err != nil)
+	}
+	// Output:
+	// Hello from sandbox!
+	// io blocked: true
 }
