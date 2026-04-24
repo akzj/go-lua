@@ -606,3 +606,377 @@ func TestGetFieldRefCallFunction(t *testing.T) {
 
 	L.Unref(lua.RegistryIndex, ref)
 }
+
+// ---------------------------------------------------------------------------
+// CallSafe
+// ---------------------------------------------------------------------------
+
+func TestCallSafeSuccess(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Load a function that returns a value.
+	err := L.DoString(`function add(a, b) return a + b end`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("add")
+	L.PushInteger(10)
+	L.PushInteger(32)
+	if err := L.CallSafe(2, 1); err != nil {
+		t.Fatalf("CallSafe: %v", err)
+	}
+
+	result, ok := L.ToInteger(-1)
+	if !ok || result != 42 {
+		t.Fatalf("expected 42, got %d (ok=%v)", result, ok)
+	}
+	L.Pop(1)
+
+	// Stack should be clean.
+	if L.GetTop() != 0 {
+		t.Fatalf("stack leak: expected top=0, got %d", L.GetTop())
+	}
+}
+
+func TestCallSafeError(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Load a function that errors.
+	err := L.DoString(`function boom() error("kaboom") end`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("boom")
+	callErr := L.CallSafe(0, 0)
+	if callErr == nil {
+		t.Fatal("expected error from CallSafe, got nil")
+	}
+
+	// Error message should contain "kaboom".
+	if got := callErr.Error(); got == "" {
+		t.Fatal("expected non-empty error message")
+	}
+
+	// Stack should be clean (error message was popped by CallSafe).
+	if L.GetTop() != 0 {
+		t.Fatalf("stack leak after error: expected top=0, got %d", L.GetTop())
+	}
+}
+
+func TestCallSafeMultipleResults(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`function multi() return 1, "two", true end`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("multi")
+	if err := L.CallSafe(0, 3); err != nil {
+		t.Fatalf("CallSafe: %v", err)
+	}
+
+	// Results: 1 at -3, "two" at -2, true at -1.
+	v1, _ := L.ToInteger(-3)
+	v2, _ := L.ToString(-2)
+	v3 := L.ToBoolean(-1)
+	if v1 != 1 || v2 != "two" || !v3 {
+		t.Fatalf("expected (1, \"two\", true), got (%d, %q, %v)", v1, v2, v3)
+	}
+	L.Pop(3)
+}
+
+// ---------------------------------------------------------------------------
+// ToMap
+// ---------------------------------------------------------------------------
+
+func TestToMapNormalTable(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`myMap = { host = "localhost", port = 8080 }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("myMap")
+	m, ok := L.ToMap(-1)
+	if !ok {
+		t.Fatal("expected ok=true for normal table")
+	}
+	if m["host"] != "localhost" {
+		t.Fatalf("expected host=localhost, got %v", m["host"])
+	}
+	if m["port"] != int64(8080) {
+		t.Fatalf("expected port=8080, got %v", m["port"])
+	}
+	L.Pop(1)
+}
+
+func TestToMapPureArray(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`myArr = { 10, 20, 30 }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("myArr")
+	m, ok := L.ToMap(-1)
+	// Pure array tables → ToAny returns []any, not map[string]any.
+	if ok {
+		t.Fatalf("expected ok=false for pure array, got map: %v", m)
+	}
+	if m != nil {
+		t.Fatalf("expected nil map, got %v", m)
+	}
+	L.Pop(1)
+}
+
+func TestToMapNonTable(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.PushString("not a table")
+	m, ok := L.ToMap(-1)
+	if ok || m != nil {
+		t.Fatalf("expected (nil, false) for string, got (%v, %v)", m, ok)
+	}
+	L.Pop(1)
+}
+
+func TestToMapMixedTable(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Table with both string keys and integer keys.
+	err := L.DoString(`mixed = { name = "test", [1] = "first" }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("mixed")
+	m, ok := L.ToMap(-1)
+	// Mixed tables have string keys, so ToAny should return map[string]any.
+	if !ok {
+		t.Fatal("expected ok=true for mixed table")
+	}
+	if m["name"] != "test" {
+		t.Fatalf("expected name=test, got %v", m["name"])
+	}
+	L.Pop(1)
+}
+
+// ---------------------------------------------------------------------------
+// CallRef
+// ---------------------------------------------------------------------------
+
+func TestCallRefSuccess(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Register a function in the registry.
+	err := L.DoString(`function double(x) return x * 2 end`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("double")
+	ref := L.Ref(lua.RegistryIndex)
+
+	// Call via ref.
+	L.PushInteger(21)
+	if err := L.CallRef(ref, 1, 1); err != nil {
+		t.Fatalf("CallRef: %v", err)
+	}
+
+	result, ok := L.ToInteger(-1)
+	if !ok || result != 42 {
+		t.Fatalf("expected 42, got %d (ok=%v)", result, ok)
+	}
+	L.Pop(1)
+
+	L.Unref(lua.RegistryIndex, ref)
+
+	if L.GetTop() != 0 {
+		t.Fatalf("stack leak: expected top=0, got %d", L.GetTop())
+	}
+}
+
+func TestCallRefInvalidRef(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Use NoRef — should not be a function.
+	err := L.CallRef(lua.NoRef, 0, 0)
+	if err == nil {
+		t.Fatal("expected error for invalid ref")
+	}
+
+	if L.GetTop() != 0 {
+		t.Fatalf("stack leak: expected top=0, got %d", L.GetTop())
+	}
+}
+
+func TestCallRefNonFunction(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Store a string in the registry.
+	L.PushString("not a function")
+	ref := L.Ref(lua.RegistryIndex)
+
+	// Push an arg that should be cleaned up on error.
+	L.PushInteger(99)
+	err := L.CallRef(ref, 1, 0)
+	if err == nil {
+		t.Fatal("expected error for non-function ref")
+	}
+
+	L.Unref(lua.RegistryIndex, ref)
+
+	// Stack should be clean — both the pushed arg and the non-function
+	// should have been popped.
+	if L.GetTop() != 0 {
+		t.Fatalf("stack leak: expected top=0, got %d", L.GetTop())
+	}
+}
+
+func TestCallRefWithError(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`function fail() error("oops") end`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("fail")
+	ref := L.Ref(lua.RegistryIndex)
+
+	callErr := L.CallRef(ref, 0, 0)
+	if callErr == nil {
+		t.Fatal("expected error from failing function")
+	}
+
+	L.Unref(lua.RegistryIndex, ref)
+
+	if L.GetTop() != 0 {
+		t.Fatalf("stack leak: expected top=0, got %d", L.GetTop())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ForEach
+// ---------------------------------------------------------------------------
+
+func TestForEachAll(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`t = { a = 1, b = 2, c = 3 }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("t")
+	collected := make(map[string]int64)
+	L.ForEach(-1, func(L *lua.State) bool {
+		k, _ := L.ToString(-2)
+		v, _ := L.ToInteger(-1)
+		collected[k] = v
+		return true
+	})
+
+	if len(collected) != 3 {
+		t.Fatalf("expected 3 pairs, got %d: %v", len(collected), collected)
+	}
+	if collected["a"] != 1 || collected["b"] != 2 || collected["c"] != 3 {
+		t.Fatalf("unexpected values: %v", collected)
+	}
+
+	// Stack: just the table.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
+
+func TestForEachEarlyStop(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`t = { a = 1, b = 2, c = 3, d = 4, e = 5 }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("t")
+	count := 0
+	L.ForEach(-1, func(L *lua.State) bool {
+		count++
+		return count < 2 // stop after 2nd iteration
+	})
+
+	if count != 2 {
+		t.Fatalf("expected 2 iterations, got %d", count)
+	}
+
+	// Stack: just the table.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
+
+func TestForEachEmpty(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.NewTable()
+	count := 0
+	L.ForEach(-1, func(L *lua.State) bool {
+		count++
+		return true
+	})
+
+	if count != 0 {
+		t.Fatalf("expected 0 iterations for empty table, got %d", count)
+	}
+
+	// Stack: just the table.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
+
+func TestForEachArrayTable(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`arr = { 10, 20, 30 }`)
+	if err != nil {
+		t.Fatalf("DoString: %v", err)
+	}
+
+	L.GetGlobal("arr")
+	var values []int64
+	L.ForEach(-1, func(L *lua.State) bool {
+		v, _ := L.ToInteger(-1)
+		values = append(values, v)
+		return true
+	})
+
+	if len(values) != 3 {
+		t.Fatalf("expected 3 values, got %d", len(values))
+	}
+
+	// Stack: just the table.
+	if L.GetTop() != 1 {
+		t.Fatalf("stack leak: expected top=1, got %d", L.GetTop())
+	}
+}
