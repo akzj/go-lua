@@ -326,17 +326,211 @@ func swapI(L *luaapi.State, i, j int64) {
 	L.SetI(1, j)
 }
 
+// ---------------------------------------------------------------------------
+// Functional utilities: filter, map, reduce, keys, values, contains, slice, merge
+// ---------------------------------------------------------------------------
+
+// tabFilter implements table.filter(t, func(v, i) -> bool) -> table.
+// Returns a new array containing only elements for which the callback returns true.
+// Callback receives (value, index).
+func tabFilter(L *luaapi.State) int {
+	n := auxGetN(L, 1, tabR)
+	L.CheckType(2, object.TypeFunction)
+	L.CreateTable(int(n), 0) // result table at stack index 3
+	resIdx := L.GetTop()
+	var j int64 = 1 // result array index
+	for i := int64(1); i <= n; i++ {
+		L.PushValue(2) // push callback
+		L.GetI(1, i)   // push t[i] (value)
+		L.PushInteger(i) // push index
+		L.Call(2, 1)     // call callback(value, index) -> result
+		keep := L.ToBoolean(-1)
+		L.Pop(1) // pop result
+		if keep {
+			L.GetI(1, i)      // push t[i]
+			L.SetI(resIdx, j) // result[j] = t[i]
+			j++
+		}
+	}
+	L.PushValue(resIdx) // push result table
+	return 1
+}
+
+// tabMap implements table.map(t, func(v, i) -> v2) -> table.
+// Returns a new array with each element transformed by the callback.
+// Callback receives (value, index) and should return one value.
+func tabMap(L *luaapi.State) int {
+	n := auxGetN(L, 1, tabR)
+	L.CheckType(2, object.TypeFunction)
+	L.CreateTable(int(n), 0) // result table at stack index 3
+	resIdx := L.GetTop()
+	for i := int64(1); i <= n; i++ {
+		L.PushValue(2)   // push callback
+		L.GetI(1, i)     // push t[i] (value)
+		L.PushInteger(i) // push index
+		L.Call(2, 1)     // call callback(value, index) -> result
+		L.SetI(resIdx, i) // result[i] = callback result
+	}
+	L.PushValue(resIdx)
+	return 1
+}
+
+// tabReduce implements table.reduce(t, func(acc, v, i) -> acc, init) -> value.
+// Folds the array into a single value using the callback.
+// Callback receives (accumulator, value, index).
+func tabReduce(L *luaapi.State) int {
+	n := auxGetN(L, 1, tabR)
+	L.CheckType(2, object.TypeFunction)
+	L.CheckAny(3) // initial value
+	// Copy initial accumulator to top of stack (slot 4)
+	L.PushValue(3)
+	accIdx := L.GetTop()
+	for i := int64(1); i <= n; i++ {
+		L.PushValue(2)      // push callback
+		L.PushValue(accIdx) // push current accumulator
+		L.GetI(1, i)        // push t[i] (value)
+		L.PushInteger(i)    // push index
+		L.Call(3, 1)        // call callback(acc, value, index) -> new acc
+		L.Replace(accIdx)   // replace accumulator with result
+	}
+	L.PushValue(accIdx)
+	return 1
+}
+
+// tabKeys implements table.keys(t) -> table.
+// Returns a new array of all keys in the table (order not guaranteed).
+func tabKeys(L *luaapi.State) int {
+	checktab(L, 1, tabR)
+	L.CreateTable(0, 0) // result table at stack index 2
+	resIdx := L.GetTop()
+	var j int64 = 1
+	L.PushNil() // initial key
+	for L.Next(1) {
+		// stack: ..., key, value
+		L.Pop(1)               // pop value, keep key
+		L.PushValue(-1)        // copy key (Next needs the original)
+		L.SetI(resIdx, j)      // result[j] = key
+		j++
+	}
+	L.PushValue(resIdx)
+	return 1
+}
+
+// tabValues implements table.values(t) -> table.
+// Returns a new array of all values in the table (order not guaranteed).
+func tabValues(L *luaapi.State) int {
+	checktab(L, 1, tabR)
+	L.CreateTable(0, 0) // result table at stack index 2
+	resIdx := L.GetTop()
+	var j int64 = 1
+	L.PushNil() // initial key
+	for L.Next(1) {
+		// stack: ..., key, value
+		L.SetI(resIdx, j) // result[j] = value (pops value)
+		j++
+		// key remains for Next
+	}
+	L.PushValue(resIdx)
+	return 1
+}
+
+// tabContains implements table.contains(t, value) -> bool.
+// Returns true if any element in the array equals the given value.
+// Uses raw equality for comparison.
+func tabContains(L *luaapi.State) int {
+	n := auxGetN(L, 1, tabR)
+	L.CheckAny(2) // value to find
+	for i := int64(1); i <= n; i++ {
+		L.GetI(1, i) // push t[i]
+		if L.RawEqual(-1, 2) {
+			L.Pop(1)
+			L.PushBoolean(true)
+			return 1
+		}
+		L.Pop(1)
+	}
+	L.PushBoolean(false)
+	return 1
+}
+
+// tabSlice implements table.slice(t, i [, j]) -> table.
+// Returns a new array containing elements t[i] through t[j] (inclusive, 1-based).
+// If j is omitted, defaults to #t. Negative indices count from end.
+func tabSlice(L *luaapi.State) int {
+	n := auxGetN(L, 1, tabR)
+	i := L.CheckInteger(2)
+	j := L.OptInteger(3, n)
+	// Handle negative indices
+	if i < 0 {
+		i = n + i + 1
+	}
+	if j < 0 {
+		j = n + j + 1
+	}
+	// Clamp to valid range
+	if i < 1 {
+		i = 1
+	}
+	if j > n {
+		j = n
+	}
+	var count int
+	if j >= i {
+		count = int(j - i + 1)
+	}
+	L.CreateTable(count, 0) // result table
+	resIdx := L.GetTop()
+	var k int64 = 1
+	for idx := i; idx <= j; idx++ {
+		L.GetI(1, idx)
+		L.SetI(resIdx, k)
+		k++
+	}
+	L.PushValue(resIdx)
+	return 1
+}
+
+// tabMerge implements table.merge(t1, t2, ...) -> table.
+// Returns a new table that is a shallow merge of all input tables.
+// Later tables override earlier ones for duplicate keys.
+func tabMerge(L *luaapi.State) int {
+	nArgs := L.GetTop()
+	L.CreateTable(0, 0) // result table
+	resIdx := L.GetTop()
+	for arg := 1; arg <= nArgs; arg++ {
+		checktab(L, arg, tabR)
+		L.PushNil() // initial key for Next
+		for L.Next(arg) {
+			// stack: ..., key, value
+			L.PushValue(-2)        // copy key
+			L.PushValue(-2)        // copy value
+			L.SetTable(resIdx)     // result[key] = value
+			L.Pop(1)               // pop value, keep key for Next
+		}
+	}
+	L.PushValue(resIdx)
+	return 1
+}
+
 // OpenTable opens the table library.
 func OpenTable(L *luaapi.State) int {
 	tabFuncs := map[string]luaapi.CFunction{
-		"create":  tabCreate,
-		"insert":  tabInsert,
-		"remove":  tabRemove,
-		"move":    tabMove,
-		"concat":  tabConcat,
-		"pack":    tabPack,
-		"unpack":  tabUnpack,
-		"sort":    tabSort,
+		"create":   tabCreate,
+		"insert":   tabInsert,
+		"remove":   tabRemove,
+		"move":     tabMove,
+		"concat":   tabConcat,
+		"pack":     tabPack,
+		"unpack":   tabUnpack,
+		"sort":     tabSort,
+		"filter":   tabFilter,
+		"map":      tabMap,
+		"reduce":   tabReduce,
+		"keys":     tabKeys,
+		"values":   tabValues,
+		"contains": tabContains,
+		"slice":    tabSlice,
+		"merge":    tabMerge,
 	}
 	L.NewLib(tabFuncs)
 	return 1
