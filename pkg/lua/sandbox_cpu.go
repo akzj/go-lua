@@ -10,11 +10,15 @@ const defaultCPUCheckInterval = 1000
 // a Lua error: "CPU limit exceeded: <limit> instructions".
 //
 // Set limit=0 to remove the CPU limit and clear the count hook installed by
-// a previous call.
+// a previous call (unless a context is still active via [State.SetContext],
+// in which case the context-only hook remains).
 //
 // Internally this uses the debug hook mechanism with [MaskCount].  Setting a
 // CPU limit will override any previously set count hook.  Line and call hooks
 // set via [State.SetHook] are NOT affected — only the count component changes.
+//
+// When used together with [State.SetContext], both checks are combined into a
+// single hook for efficiency.
 //
 // Example:
 //
@@ -25,14 +29,10 @@ func (L *State) SetCPULimit(limit int64) {
 	L.cpuCounter = 0
 
 	if limit <= 0 {
-		// Remove CPU-limit hook.  We clear the count portion only;
-		// if the user had a line/call hook via SetHook, we leave it alone
-		// by calling SetHook(nil, 0, 0) which clears everything.
-		// In practice, CPU-limit and user hooks don't coexist well,
-		// so clearing is the safe default.
 		L.cpuLimit = 0
-		L.cpuCheckInterval = 0
-		L.SetHook(nil, 0, 0)
+		// Reinstall combined hook — will remove hook entirely if no
+		// context is active, or keep a context-only hook if one is set.
+		L.installCombinedHook()
 		return
 	}
 
@@ -46,18 +46,8 @@ func (L *State) SetCPULimit(limit int64) {
 	}
 	L.cpuCheckInterval = interval
 
-	// Capture L (the original State with CPU fields) in the closure.
-	// The hook parameter is a throwaway wrapper — we must NOT use it for
-	// CPU-limit bookkeeping because it has zero-valued fields.
-	L.SetHook(func(_ *State, event int, _ int) {
-		if event != HookEventCount {
-			return
-		}
-		L.cpuCounter += int64(L.cpuCheckInterval)
-		if L.cpuLimit > 0 && L.cpuCounter >= L.cpuLimit {
-			L.Errorf("CPU limit exceeded: %d instructions", L.cpuLimit)
-		}
-	}, MaskCount, interval)
+	// Install the combined hook that checks both CPU limit and context.
+	L.installCombinedHook()
 }
 
 // ResetCPUCounter resets the instruction counter to 0 without changing the

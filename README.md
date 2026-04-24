@@ -10,6 +10,8 @@
 
 A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go — no CGo, no external dependencies. Passes **all 29 official Lua 5.5.1 test suites** (including the C-API test suite and generational GC tests) with a **2.86× geometric mean** vs C Lua on computation benchmarks.
 
+**Lua 5.5 compatible. Go-native.**
+
 ---
 
 ## Features
@@ -18,11 +20,121 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 - **10 standard libraries** — base, string, table, math, io, os, coroutine, debug, utf8, package
 - **Lua 5.5 additions** — to-be-closed variables (`<close>`), generational GC, integer/float types, bitwise operators, floor division (`//`)
 - **Coroutine yield across metamethods** — full support for yielding inside `__index`, `__newindex`, `__call`, etc.
+- **Go-native API** — auto-bind Go functions with `PushGoFunc`, push any Go value with `PushAny`, type-safe generics with `Wrap2R`
+- **Built-in sandbox** — `NewSandboxState` with CPU limits, memory limits, and library restrictions
+- **Context integration** — `SetContext(ctx)` for deadline/cancellation via standard Go `context.Context`
+- **Virtual filesystem** — `SetFileSystem(fs.FS)` for `go:embed` and custom file sources
 - **Mark-and-sweep GC** with generational mode, integrated with Go's garbage collector
 - **String interning** via `weak.Pointer` for memory-efficient string handling
 - **testC testing library** — 97 C-API-level instructions with multi-state testing (`newstate`/`closestate`/`doremote`)
 - **Public embedding API** — clean `pkg/lua/` package for external use
 - **~31,500 lines of source** across 13 internal packages, with **~10,800 lines of tests**
+
+## Why go-lua?
+
+Most Lua-in-Go libraries expose a raw C-style stack API. go-lua gives you that *and* a Go-native layer on top:
+
+| | C-style Lua bindings | go-lua |
+|---|---|---|
+| Register a Go function | 8 lines of stack manipulation | `L.PushGoFunc(myFunc)` — 1 line |
+| Pass a struct to Lua | Manual Push+SetField per field | `L.PushAny(myStruct)` — 1 line |
+| Read a Lua table | GetField+ToString+Pop per field | `L.GetFieldString(idx, "key")` — 1 line |
+| Safe function call | PCall + manual error extraction | `L.CallSafe(nArgs, nResults)` → Go error |
+| Execute untrusted code | Build your own sandbox | `lua.NewSandboxState(config)` — built-in |
+| Timeout control | Not possible | `L.SetContext(ctx)` — standard Go context |
+| Load embedded files | Not possible | `L.SetFileSystem(embedFS)` — Go embed support |
+
+## Quick Start
+
+```go
+package main
+
+import (
+    "fmt"
+    lua "github.com/akzj/go-lua/pkg/lua"
+)
+
+func main() {
+    L := lua.NewState()
+    defer L.Close()
+
+    // Execute Lua code
+    L.DoString(`print("Hello from Go-Lua!")`)
+
+    // Register Go functions — no stack manipulation needed
+    L.PushGoFunc(func(name string, age int) string {
+        return fmt.Sprintf("Hello %s, you are %d!", name, age)
+    })
+    L.SetGlobal("greet")
+
+    L.DoString(`print(greet("World", 42))`)
+    // Output: Hello World, you are 42!
+}
+```
+
+## Three API Layers
+
+go-lua provides three ways to register Go functions, from simplest to most flexible:
+
+### Layer 1: Auto-binding (recommended for most cases)
+
+```go
+// Reflect-based — works with any Go function signature
+L.PushGoFunc(func(name string, count int) (string, error) {
+    if count < 0 {
+        return "", fmt.Errorf("count must be positive")
+    }
+    return strings.Repeat(name, count), nil
+})
+L.SetGlobal("repeat_str")
+// Lua: repeat_str("ha", 3) → "hahaha"
+// Lua: repeat_str("x", -1) → raises Lua error
+```
+
+### Layer 2: Type-safe generics (zero reflection overhead)
+
+```go
+// For performance-sensitive paths — no reflect, just generics
+lua.Wrap2R(L, func(a, b int) int { return a + b })
+L.SetGlobal("add")
+// Lua: add(10, 20) → 30
+```
+
+### Layer 3: Raw stack API (full control)
+
+```go
+// When you need direct Lua stack access
+L.PushFunction(func(L *lua.State) int {
+    n := L.GetTop() // number of arguments
+    sum := 0.0
+    for i := 1; i <= n; i++ {
+        v, _ := L.ToNumber(i)
+        sum += v
+    }
+    L.PushNumber(sum)
+    return 1 // one return value
+})
+L.SetGlobal("sum")
+// Lua: sum(1, 2, 3, 4) → 10.0
+```
+
+## Built-in Sandbox
+
+Execute untrusted Lua code safely with CPU limits, memory limits, and restricted library access:
+
+```go
+L := lua.NewSandboxState(lua.SandboxConfig{
+    MemoryLimit: 10 * 1024 * 1024,  // 10MB
+    CPULimit:    1_000_000,          // 1M VM instructions
+    AllowIO:     false,              // block io/os libraries
+    AllowDebug:  false,              // block debug library
+})
+defer L.Close()
+
+err := L.DoString(untrustedCode) // safe!
+```
+
+The sandbox disables `dofile`, `loadfile`, `load`, and `require` by default. Only safe libraries (base, string, table, math, utf8, coroutine) are loaded. Enable `AllowIO`, `AllowDebug`, or `AllowPackage` selectively as needed.
 
 ## Performance
 
@@ -66,37 +178,6 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 - **Non-interned concat strings** — Skip string interning for concat results, reducing hash table pressure.
 - **Direct GetStr lookups** — OP_GETFIELD/GETTABUP/SELF use `GetStr` to skip type dispatch on string keys.
 - **OP_POW fast paths** — x², x³, √x computed directly without `math.Pow`.
-
-## Quick Start
-
-```go
-package main
-
-import (
-    "fmt"
-    lua "github.com/akzj/go-lua/pkg/lua"
-)
-
-func main() {
-    L := lua.NewState()  // Opens all standard libraries
-    defer L.Close()
-
-    // Execute Lua code
-    if err := L.DoString(`print("Hello from Go-Lua!")`); err != nil {
-        fmt.Println("Error:", err)
-    }
-
-    // Register a Go function and call it from Lua
-    L.PushFunction(func(L *lua.State) int {
-        name := L.CheckString(1)
-        L.PushString(fmt.Sprintf("Hello, %s!", name))
-        return 1
-    })
-    L.SetGlobal("greet")
-
-    L.DoString(`print(greet("World"))`)
-}
-```
 
 ## Documentation
 
