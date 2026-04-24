@@ -34,6 +34,25 @@ Find what you want to do → copy the code.
 23. [Require a Go Module](#23-require-a-go-module)
 24. [Error Handling in Go Functions](#24-error-handling-in-go-functions)
 25. [User Values on Userdata](#25-user-values-on-userdata)
+26. [Push Any Go Value to Lua](#26-push-any-go-value-to-lua)
+27. [Read Lua Values to Go (ToAny / ToStruct)](#27-read-lua-values-to-go-toany--tostruct)
+28. [Convenience Table Access](#28-convenience-table-access)
+29. [Safe Table Iteration (ForEach)](#29-safe-table-iteration-foreach)
+30. [Auto-Bind Any Go Function (PushGoFunc)](#30-auto-bind-any-go-function-pushgofunc)
+31. [Generic Wrappers (Type-Safe, No Reflection)](#31-generic-wrappers-type-safe-no-reflection)
+32. [Sandbox — Run Untrusted Code](#32-sandbox--run-untrusted-code)
+33. [CPU Instruction Limits](#33-cpu-instruction-limits)
+34. [Context Cancellation / Timeout](#34-context-cancellation--timeout)
+35. [Virtual Filesystem (embed.FS)](#35-virtual-filesystem-embedfs)
+36. [Global Module Registry](#36-global-module-registry)
+37. [Module Interface Pattern](#37-module-interface-pattern)
+38. [State Pool for Concurrent Requests](#38-state-pool-for-concurrent-requests)
+39. [Async Task Executor](#39-async-task-executor)
+40. [Channels — Go ↔ Lua Communication](#40-channels--go--lua-communication)
+41. [JSON — Encode and Decode](#41-json--encode-and-decode)
+42. [HTTP Requests from Lua](#42-http-requests-from-lua)
+43. [Async/Await with Futures](#43-asyncawait-with-futures)
+44. [CallSafe and CallRef — Protected Calls](#44-callsafe-and-callref--protected-calls)
 
 ---
 
@@ -769,6 +788,539 @@ L.Pop(1)  // pop the user value
 ```
 
 > The first argument to `NewUserdata(size, nuvalue)`: `size` is for C-style memory (use 0 in Go). `nuvalue` is the number of user value slots.
+
+---
+
+## 26. Push Any Go Value to Lua
+
+Convert any Go value to its Lua equivalent automatically with `PushAny`.
+
+```go
+L.PushAny(42)                    // → Lua integer
+L.PushAny(3.14)                  // → Lua number
+L.PushAny("hello")               // → Lua string
+L.PushAny(true)                  // → Lua boolean
+L.PushAny(nil)                   // → Lua nil
+L.PushAny([]any{1, "two", 3.0}) // → Lua table {1, "two", 3.0}
+L.PushAny(map[string]any{        // → Lua table {name="Alice", age=30}
+    "name": "Alice",
+    "age":  30,
+})
+
+// Structs too:
+type Config struct {
+    Host string `lua:"host"`
+    Port int    `lua:"port"`
+}
+L.PushAny(Config{Host: "localhost", Port: 8080})
+// → Lua table {host="localhost", port=8080}
+```
+
+---
+
+## 27. Read Lua Values to Go (ToAny / ToStruct)
+
+`ToAny` converts any Lua value to a Go `any`. `ToStruct` maps a Lua table to a typed Go struct.
+
+```go
+// ToAny — generic conversion
+L.DoString(`config = {host = "localhost", port = 8080, debug = true}`)
+L.GetGlobal("config")
+val := L.ToAny(-1) // → map[string]any{"host":"localhost", "port":int64(8080), "debug":true}
+L.Pop(1)
+
+// ToStruct — typed mapping
+type Config struct {
+    Host  string `lua:"host"`
+    Port  int64  `lua:"port"`
+    Debug bool   `lua:"debug"`
+}
+L.GetGlobal("config")
+var cfg Config
+err := L.ToStruct(-1, &cfg) // cfg.Host="localhost", cfg.Port=8080, cfg.Debug=true
+L.Pop(1)
+```
+
+---
+
+## 28. Convenience Table Access
+
+Read and write table fields without manual stack management.
+
+```go
+// Read fields directly
+L.GetGlobal("config")
+host := L.GetFieldString(-1, "host")   // "localhost"
+port := L.GetFieldInt(-1, "port")      // 8080
+debug := L.GetFieldBool(-1, "debug")   // true
+L.Pop(1)
+
+// Set multiple fields at once
+L.GetGlobal("config")
+L.SetFields(-1, map[string]any{
+    "host":  "0.0.0.0",
+    "port":  9090,
+    "debug": false,
+})
+L.Pop(1)
+
+// Create a table in one call
+L.NewTableFrom(map[string]any{
+    "name":    "myapp",
+    "version": "1.0",
+})
+L.SetGlobal("app")
+```
+
+---
+
+## 29. Safe Table Iteration (ForEach)
+
+`ForEach` iterates all key-value pairs, handling the stack automatically.
+
+```go
+L.GetGlobal("config")
+L.ForEach(-1, func(L *lua.State) bool {
+    key := L.TolString(-2)
+    val := L.ToAny(-1)
+    fmt.Printf("%s = %v\n", key, val)
+    return true // continue iterating (false = stop early)
+})
+L.Pop(1)
+```
+
+---
+
+## 30. Auto-Bind Any Go Function (PushGoFunc)
+
+`PushGoFunc` uses reflection to bind **any** Go function signature — no manual stack operations needed.
+
+```go
+// Simple function
+L.PushGoFunc(func(name string, age int) string {
+    return fmt.Sprintf("Hello %s, age %d", name, age)
+})
+L.SetGlobal("greet")
+// Lua: greet("Alice", 30) → "Hello Alice, age 30"
+
+// Error returns become Lua errors automatically
+L.PushGoFunc(func(path string) (string, error) {
+    data, err := os.ReadFile(path)
+    return string(data), err
+})
+L.SetGlobal("read_file")
+// Lua: local content = read_file("test.txt")  -- errors raise Lua error
+
+// Variadic functions work too
+L.PushGoFunc(func(prefix string, items ...any) string {
+    return fmt.Sprintf("%s: %v", prefix, items)
+})
+L.SetGlobal("log_items")
+```
+
+---
+
+## 31. Generic Wrappers (Type-Safe, No Reflection)
+
+`Wrap0R`, `Wrap1R`, `Wrap2R`, etc. use Go generics for compile-time type safety with zero reflection overhead.
+
+```go
+// Wrap2R: 2 args, 1 return — type-safe, zero reflection
+lua.Wrap2R[string, int, string](L, func(name string, age int) string {
+    return fmt.Sprintf("Hello %s, age %d", name, age)
+})
+L.SetGlobal("greet")
+
+// Wrap1E: 1 arg, result + error
+lua.Wrap1E[string, string](L, func(path string) (string, error) {
+    data, err := os.ReadFile(path)
+    return string(data), err
+})
+L.SetGlobal("read_file")
+
+// Wrap0R: no args, 1 return
+lua.Wrap0R[string](L, func() string {
+    return time.Now().Format(time.RFC3339)
+})
+L.SetGlobal("now")
+```
+
+> **PushGoFunc vs Wrap**: `PushGoFunc` uses reflection (flexible, any signature). `Wrap` uses generics (faster, compile-time type safety, limited to 0–3 args).
+
+---
+
+## 32. Sandbox — Run Untrusted Code
+
+`NewSandboxState` creates a restricted Lua state with configurable limits.
+
+```go
+L := lua.NewSandboxState(lua.SandboxConfig{
+    CPULimit:     1_000_000, // max 1M VM instructions
+    AllowIO:      false,     // no file/network access
+    AllowDebug:   false,     // no debug library
+    AllowPackage: false,     // no require()
+})
+defer L.Close()
+
+// Safe libraries available: base (restricted), string, table, math, utf8, coroutine
+// Removed from base: dofile, loadfile, load, require
+
+err := L.DoString(untrustedCode)
+if err != nil {
+    fmt.Println("Script error:", err) // includes CPU limit exceeded
+}
+```
+
+---
+
+## 33. CPU Instruction Limits
+
+Fine-grained CPU control on any state with `SetCPULimit`, `ResetCPUCounter`, `CPUInstructionsUsed`.
+
+```go
+L := lua.NewState()
+defer L.Close()
+
+L.SetCPULimit(500_000) // 500K instructions max
+
+err := L.DoString(`while true do end`) // will error: "CPU limit exceeded"
+
+// Reset for next execution
+L.ResetCPUCounter()
+err = L.DoString(`return 1 + 1`) // fresh budget
+
+// Check usage
+fmt.Println("Instructions used:", L.CPUInstructionsUsed())
+```
+
+---
+
+## 34. Context Cancellation / Timeout
+
+Attach a Go `context.Context` to a Lua state for cancellation and deadlines.
+
+```go
+L := lua.NewState()
+defer L.Close()
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+L.SetContext(ctx)
+
+err := L.DoString(`while true do end`)
+// err: "context cancelled: context deadline exceeded"
+
+// Remove context
+L.SetContext(nil)
+```
+
+---
+
+## 35. Virtual Filesystem (embed.FS)
+
+Use Go's `embed.FS` or any `fs.FS` as the Lua file system for `DoFile`, `require`, and `dofile`.
+
+```go
+//go:embed lua/*
+var luaFS embed.FS
+
+func main() {
+    L := lua.NewState()
+    defer L.Close()
+
+    sub, _ := fs.Sub(luaFS, "lua")
+    L.SetFileSystem(sub)
+
+    // All file operations now use the embedded FS
+    L.DoFile("init.lua")                 // reads from embed.FS
+    L.DoString(`require("mymodule")`)    // searchers use embed.FS
+    L.DoString(`dofile("config.lua")`)   // dofile uses embed.FS
+}
+```
+
+---
+
+## 36. Global Module Registry
+
+Register modules process-wide so every `State` can `require` them.
+
+```go
+// In package init() — available to ALL Lua States
+func init() {
+    lua.RegisterGlobal("mylib", func(L *lua.State) {
+        L.NewLib(map[string]lua.Function{
+            "hello": func(L *lua.State) int {
+                L.PushString("hello from mylib!")
+                return 1
+            },
+        })
+    })
+}
+
+// Any State can now require it
+L := lua.NewState()
+defer L.Close()
+L.DoString(`local m = require("mylib"); print(m.hello())`)
+```
+
+---
+
+## 37. Module Interface Pattern
+
+Implement the `Module` interface for reusable, self-contained library packages.
+
+```go
+// Define a module
+type MathExtModule struct{}
+
+func (MathExtModule) Name() string { return "mathext" }
+
+func (MathExtModule) Open(L *lua.State) {
+    L.NewLib(map[string]lua.Function{
+        "clamp": func(L *lua.State) int {
+            val := L.CheckNumber(1)
+            min := L.CheckNumber(2)
+            max := L.CheckNumber(3)
+            if val < min { val = min }
+            if val > max { val = max }
+            L.PushNumber(val)
+            return 1
+        },
+    })
+}
+
+// Load into specific States (not global)
+L := lua.NewState()
+lua.LoadModules(L, MathExtModule{})
+L.DoString(`local m = require("mathext"); print(m.clamp(150, 0, 100))`) // 100
+```
+
+---
+
+## 38. State Pool for Concurrent Requests
+
+Reuse Lua states across goroutines with `StatePool` — ideal for HTTP servers.
+
+```go
+pool := lua.NewStatePool(lua.PoolConfig{
+    MaxStates: 16,
+    InitFunc: func(L *lua.State) {
+        // Each State gets the same setup
+        lua.LoadModules(L, MyModule{})
+        L.DoString(`handler = require("handler")`)
+    },
+})
+defer pool.Close()
+
+http.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+    L := pool.Get()
+    defer pool.Put(L)
+
+    L.GetGlobal("handler")
+    L.GetField(-1, "process")
+    L.PushString(r.URL.Path)
+    if err := L.CallSafe(1, 1); err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+    result, _ := L.ToString(-1)
+    L.Pop(2) // pop result + handler table
+    fmt.Fprint(w, result)
+})
+```
+
+---
+
+## 39. Async Task Executor
+
+`Executor` runs Lua tasks in background goroutines with pooled states.
+
+```go
+exec := lua.NewExecutor(lua.ExecutorConfig{
+    PoolConfig:   lua.PoolConfig{MaxStates: 4},
+    ResultBuffer: 100,
+})
+defer exec.Shutdown()
+
+// Submit tasks
+exec.Submit(lua.Task{ID: "task1", Code: `return 40 + 2`})
+exec.Submit(lua.Task{ID: "task2", Func: func(L *lua.State) (any, error) {
+    L.DoString(`x = 0; for i=1,1000 do x = x + i end`)
+    n, _ := L.ToInteger(-1)
+    return n, nil
+}})
+
+// Collect results
+for result := range exec.Results() {
+    fmt.Printf("Task %s: value=%v, err=%v\n", result.ID, result.Value, result.Error)
+}
+```
+
+---
+
+## 40. Channels — Go ↔ Lua Communication
+
+`Channel` provides a typed, buffered channel for passing values between Go goroutines and Lua scripts.
+
+```go
+ch := lua.NewChannel(10) // buffered channel
+
+// Go producer goroutine
+go func() {
+    for i := 0; i < 5; i++ {
+        ch.Send(fmt.Sprintf("message-%d", i))
+    }
+    ch.Close()
+}()
+
+// Lua consumer
+L := lua.NewState()
+defer L.Close()
+L.PushUserdata(ch)
+L.SetGlobal("ch")
+
+L.DoString(`
+    local channel = require("channel")
+    while true do
+        local val, ok = channel.recv(ch)
+        if not ok then break end
+        print("Got:", val)
+    end
+`)
+```
+
+---
+
+## 41. JSON — Encode and Decode
+
+Built-in JSON module, available via `require("json")`.
+
+```go
+L := lua.NewState()
+defer L.Close()
+
+L.DoString(`
+    local json = require("json")
+
+    -- Encode
+    local data = {name = "Alice", scores = {95, 87, 92}}
+    local s = json.encode(data)
+    print(s)  -- {"name":"Alice","scores":[95,87,92]}
+
+    -- Pretty print
+    print(json.encode_pretty(data))
+
+    -- Decode
+    local t = json.decode('{"x":1,"y":2}')
+    print(t.x, t.y)  -- 1  2
+`)
+```
+
+---
+
+## 42. HTTP Requests from Lua
+
+Built-in HTTP module for GET, POST, and generic requests.
+
+```go
+L := lua.NewState()
+defer L.Close()
+
+L.DoString(`
+    local http = require("http")
+
+    -- Simple GET
+    local resp = http.get("https://httpbin.org/get")
+    print(resp.status, resp.body)
+
+    -- POST with JSON body
+    local json = require("json")
+    local resp = http.post("https://httpbin.org/post", {
+        body = json.encode({name = "Alice"}),
+        headers = {["Content-Type"] = "application/json"},
+        timeout = 10,  -- seconds
+    })
+
+    -- Generic request
+    local resp = http.request({
+        method = "PUT",
+        url = "https://httpbin.org/put",
+        body = "hello",
+        headers = {["X-Custom"] = "value"},
+        timeout = 30,
+    })
+    if resp then
+        print(resp.status, resp.headers["content-type"])
+    end
+`)
+```
+
+> Response table: `{status=200, status_text="200 OK", body="...", headers={...}}`
+> On error: returns `nil, error_string`.
+> Default timeout: 30s. Max response body: 10MB. Respects State's context for cancellation.
+
+---
+
+## 43. Async/Await with Futures
+
+Cooperative async using `Scheduler`, coroutines, and `Future` objects.
+
+```go
+L := lua.NewState()
+defer L.Close()
+
+sched := lua.NewScheduler(L)
+
+// Define an async worker
+L.DoString(`
+    local async = require("async")
+
+    function worker()
+        local f1 = async.go("return 40 + 2")
+        local f2 = async.go("return 'hello'")
+
+        local v1 = async.await(f1)  -- yields until f1 resolves
+        local v2 = async.await(f2)
+
+        print(v1, v2)  -- 42  hello
+    end
+`)
+L.GetGlobal("worker")
+sched.Spawn(L)
+
+// Drive the scheduler until all coroutines complete
+sched.WaitAll(5 * time.Second)
+```
+
+> **Important**: `async.go` takes a **code string**, not a function. Lua closures are bound to their parent State and cannot safely run in another goroutine.
+
+---
+
+## 44. CallSafe and CallRef — Protected Calls
+
+Convenience wrappers that return Go `error` instead of status codes.
+
+```go
+// CallSafe — PCall that returns a Go error
+L.GetGlobal("process")
+L.PushAny(inputData)
+err := L.CallSafe(1, 1) // returns Go error instead of status code
+if err != nil {
+    log.Println("Lua error:", err)
+}
+
+// GetFieldRef — store a function reference for later calls
+L.GetGlobal("callbacks")
+ref := L.GetFieldRef(-1, "on_event") // stores function in registry, returns ref int
+L.Pop(1)
+
+// CallRef — call a stored function reference
+L.PushAny(eventData)
+err = L.CallRef(ref, 1, 0) // pushes ref'd function, calls with 1 arg, 0 results
+
+// Clean up when done
+L.Unref(lua.RegistryIndex, ref)
+```
 
 ---
 
