@@ -202,3 +202,44 @@ func TestPushGoFunc_Float64Return(t *testing.T) {
 		t.Fatalf("DoString failed: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Runnable Examples (godoc)
+// ---------------------------------------------------------------------------
+
+func ExampleState_PushGoFunc() {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Register a Go function — no manual stack manipulation needed.
+	L.PushGoFunc(func(name string, times int) string {
+		return strings.Repeat(name+" ", times)
+	})
+	L.SetGlobal("repeat_name")
+
+	L.DoString(`print(repeat_name("hello", 3))`)
+	// Output:
+	// hello hello hello 
+}
+
+func ExampleState_PushGoFunc_error() {
+	L := lua.NewState()
+	defer L.Close()
+
+	L.PushGoFunc(func(n int) (int, error) {
+		if n < 0 {
+			return 0, fmt.Errorf("negative number: %d", n)
+		}
+		return n * n, nil
+	})
+	L.SetGlobal("square")
+
+	L.DoString(`
+		print(square(5))
+		local ok, err = pcall(square, -3)
+		print(ok, err)
+	`)
+	// Output:
+	// 25
+	// false	negative number: -3
+}
