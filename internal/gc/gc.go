@@ -236,40 +236,38 @@ func propagateMark(g *state.GlobalState) int64 {
 	obj := g.Gray[n-1]
 	g.Gray[n-1] = nil // clear reference to help Go GC
 	g.Gray = g.Gray[:n-1]
-	h := obj.GC()
 
 	var work int64
 
 	switch v := obj.(type) {
 	case *table.Table:
-		// Tables may NOT be marked black — weak tables link to special lists.
+		// Tables are the most common case — avoid interface dispatch for GC().
 		// traverseTable handles marking black for strong tables.
-		// genlink is called inside traverseTable for strong tables.
 		traverseTable(g, v)
 		work = int64(len(v.Array) + len(v.Nodes) + 1)
 	case *object.Userdata:
-		markBlack(h)
+		markBlack(&v.GCHeader) // direct field access, no interface dispatch
 		traverseUserdata(g, v)
 		genlink(g, obj)
 		work = int64(len(v.UserVals) + 1)
 	case *closure.LClosure:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseLClosure(g, v)
 		work = int64(len(v.UpVals) + 1)
 	case *closure.CClosure:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseCClosure(g, v)
 		work = int64(len(v.UpVals) + 1)
 	case *object.Proto:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseProto(g, v)
 		work = int64(len(v.Constants) + len(v.Protos) + len(v.Upvalues) + len(v.LocVars) + 1)
 	case *state.LuaState:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseThread(g, v)
 		work = int64(len(v.Stack) + 1)
 	default:
-		markBlack(h)
+		markBlack(obj.GC()) // fallback — only for unknown types
 		work = 1
 	}
 	return work
