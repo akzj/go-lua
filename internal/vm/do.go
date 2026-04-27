@@ -274,18 +274,10 @@ func getFunc(L *state.LuaState, funcIdx int) object.TValue {
 	return L.Stack[funcIdx].Val
 }
 
-// nextCI returns the next CallInfo, allocating if needed.
-func nextCI(L *state.LuaState) *state.CallInfo {
-	if L.CI.Next != nil {
-		return L.CI.Next
-	}
-	return state.NewCI(L)
-}
-
 // prepCallInfo allocates and initializes a new CallInfo.
 func prepCallInfo(L *state.LuaState, funcIdx int, status uint32, top int) *state.CallInfo {
-	ci := nextCI(L)
-	L.CI = ci
+	// Inline nextCI: state.NewCI already handles reuse + allocation and sets L.CI.
+	ci := state.NewCI(L)
 	ci.Func = funcIdx
 	ci.CallStatus = status
 	ci.Top = top
