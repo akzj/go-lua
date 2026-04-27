@@ -57,6 +57,13 @@ func FastGC(obj GCObject) *GCHeader {
 	return (*GCHeader)((*iface)(unsafe.Pointer(&obj)).data)
 }
 
+// FastGCFromAny extracts *GCHeader from an `any` value without type assertion.
+// The any value MUST contain a pointer to a struct with GCHeader as first field.
+// Used in markValue to check IsWhite() before the expensive GCObject type assertion.
+func FastGCFromAny(obj any) *GCHeader {
+	return (*GCHeader)(unsafe.Pointer((*eface)(unsafe.Pointer(&obj)).data))
+}
+
 // GC color/mark bit constants.
 const (
 	WhiteBit0    byte = 1 << 0 // white bit 0
