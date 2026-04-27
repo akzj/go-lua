@@ -194,11 +194,17 @@ func (s *loadState) loadConstants(p *object.Proto) {
 	n := s.loadInt()
 	p.Constants = make([]object.TValue, n)
 	for i := 0; i < n; i++ {
-		t := s.loadByte()
+		rawTag := s.loadByte()
 		if s.err != nil {
 			return
 		}
-		switch object.Tag(t) {
+		// Bytecode format omits BIT_ISCOLLECTABLE — restore it for string types.
+		// Raw bytecode tags: 0x04 (short str), 0x14 (long str) → add 0x40.
+		tag := object.Tag(rawTag)
+		if rawTag == 0x04 || rawTag == 0x14 {
+			tag |= object.BIT_ISCOLLECTABLE
+		}
+		switch tag {
 		case object.TagNil:
 			p.Constants[i] = object.Nil
 		case object.TagFalse:

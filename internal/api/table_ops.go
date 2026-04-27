@@ -271,10 +271,8 @@ func (L *State) RawSetP(idx int, p uintptr) {
 // CreateTable pushes a new table with pre-allocated space.
 func (L *State) CreateTable(nArr, nRec int) {
 	t := table.New(nArr, nRec)
-	L.ls().Global.LinkGC(t) // V5: register in allgc chain
-	size := t.EstimateBytes()
-	t.GCHeader.ObjSize = size
-	L.TrackAlloc(size)
+	t.GCHeader.ObjSize = t.EstimateBytes() // set accurate size before LinkGC
+	L.ls().Global.LinkGC(t)                // tracks ObjSize in both GCTotalBytes and GCDebt
 	L.push(object.TValue{Tt: object.TagTable, Obj: t})
 
 	// V5 GC sweep handles dealloc accounting — no AddCleanup needed.
