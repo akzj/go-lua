@@ -387,7 +387,7 @@ func NewThread(L *LuaState) *LuaState {
 // Must be called for every new collectable object immediately after creation.
 // ---------------------------------------------------------------------------
 func (g *GlobalState) LinkGC(obj object.GCObject) {
-	h := obj.GC()
+	h := object.FastGC(obj)
 	h.Marked = g.CurrentWhite
 	h.Next = g.Allgc
 	g.Allgc = obj
