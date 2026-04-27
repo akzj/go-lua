@@ -218,13 +218,26 @@ startfunc:
 		// ===== Upvalues =====
 
 		case opcode.OP_GETUPVAL:
-			b := opcode.GetArgB(inst)
-			L.Stack[ra].Val = cl.UpVals[b].Get(L.Stack)
+			uv := cl.UpVals[opcode.GetArgB(inst)]
+			if uv.StackIdx < 0 {
+				L.Stack[ra].Val = uv.Own
+			} else if uv.Stack != nil {
+				L.Stack[ra].Val = (*uv.Stack)[uv.StackIdx].Val
+			} else {
+				L.Stack[ra].Val = L.Stack[uv.StackIdx].Val
+			}
 
 		case opcode.OP_SETUPVAL:
-			b := opcode.GetArgB(inst)
-			uv := cl.UpVals[b]
-			uv.Set(L.Stack, L.Stack[ra].Val)
+			uv := cl.UpVals[opcode.GetArgB(inst)]
+			if uv.StackIdx >= 0 {
+				if uv.Stack != nil {
+					(*uv.Stack)[uv.StackIdx].Val = L.Stack[ra].Val
+				} else {
+					L.Stack[uv.StackIdx].Val = L.Stack[ra].Val
+				}
+			} else {
+				uv.Own = L.Stack[ra].Val
+			}
 			gc.BarrierValue(L.Global, uv, L.Stack[ra].Val) // GC write barrier: upvalue set
 
 		case opcode.OP_CLOSE:
@@ -238,8 +251,15 @@ startfunc:
 		// ===== Table access =====
 
 		case opcode.OP_GETTABUP:
-			b := opcode.GetArgB(inst)
-			upval := cl.UpVals[b].Get(L.Stack)
+			uv := cl.UpVals[opcode.GetArgB(inst)]
+			var upval object.TValue
+			if uv.StackIdx < 0 {
+				upval = uv.Own
+			} else if uv.Stack != nil {
+				upval = (*uv.Stack)[uv.StackIdx].Val
+			} else {
+				upval = L.Stack[uv.StackIdx].Val
+			}
 			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
 				h := upval.Obj.(*table.Table)
@@ -313,7 +333,15 @@ startfunc:
 
 		case opcode.OP_SETTABUP:
 			b := opcode.GetArgB(inst)
-			upval := cl.UpVals[opcode.GetArgA(inst)].Get(L.Stack)
+			uvs := cl.UpVals[opcode.GetArgA(inst)]
+			var upval object.TValue
+			if uvs.StackIdx < 0 {
+				upval = uvs.Own
+			} else if uvs.Stack != nil {
+				upval = (*uvs.Stack)[uvs.StackIdx].Val
+			} else {
+				upval = L.Stack[uvs.StackIdx].Val
+			}
 			rb := k[b]
 			var rc object.TValue
 			if opcode.GetArgK(inst) != 0 {
