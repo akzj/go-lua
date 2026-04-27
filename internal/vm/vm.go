@@ -149,13 +149,14 @@ startfunc:
 	k := cl.Proto.Constants
 	code := cl.Proto.Code
 	base := ci.Func + 1
+	trap := ci.Trap // local trap flag — avoids checking L.HookMask every instruction
 
 	// Mirrors: luaG_tracecall in ldebug.c — fire call hook at function entry.
 	// For tail calls, preTailCall sets CISTTail and savedpc=0, then jumps here.
 	// The call hook for non-tail calls is already fired by preCall (non-vararg)
 	// or OP_VARARGPREP (vararg). Only tail calls need this path.
 	// For vararg tail calls, defer to OP_VARARGPREP.
-	if L.HookMask != 0 && ci.CallStatus&state.CISTTail != 0 &&
+	if trap && ci.CallStatus&state.CISTTail != 0 &&
 		ci.SavedPC == 0 && !cl.Proto.IsVararg() {
 		callHook(L, ci)
 	}
@@ -165,13 +166,13 @@ startfunc:
 		ci.SavedPC++ // increment BEFORE hook check — mirrors C Lua vmfetch
 
 		// Hook dispatch: fire line/count hooks if active.
-		// Skip for OP_VARARGPREP — C Lua's luaG_tracecall returns 0 (trap=0)
-		// for vararg functions, so traceexec is not called for instruction 0.
-		// The call hook and OldPC adjustment happen inside OP_VARARGPREP instead.
+		// traceExec does NOT check AllowHook or OP_VARARGPREP, so we
+		// must keep those guards here.
 		// Mirrors: vmfetch trap check in lvm.c + luaG_tracecall in ldebug.c
-		if L.HookMask&(state.MaskLine|state.MaskCount) != 0 && L.AllowHook &&
-			opcode.GetOpCode(inst) != opcode.OP_VARARGPREP {
-			traceExec(L, ci)
+		if trap {
+			if L.AllowHook && opcode.GetOpCode(inst) != opcode.OP_VARARGPREP {
+				trap = traceExec(L, ci)
+			}
 		}
 		op := opcode.GetOpCode(inst)
 		ra := base + opcode.GetArgA(inst)
@@ -217,13 +218,26 @@ startfunc:
 		// ===== Upvalues =====
 
 		case opcode.OP_GETUPVAL:
-			b := opcode.GetArgB(inst)
-			L.Stack[ra].Val = cl.UpVals[b].Get(L.Stack)
+			uv := cl.UpVals[opcode.GetArgB(inst)]
+			if uv.StackIdx < 0 {
+				L.Stack[ra].Val = uv.Own
+			} else if uv.Stack != nil {
+				L.Stack[ra].Val = (*uv.Stack)[uv.StackIdx].Val
+			} else {
+				L.Stack[ra].Val = L.Stack[uv.StackIdx].Val
+			}
 
 		case opcode.OP_SETUPVAL:
-			b := opcode.GetArgB(inst)
-			uv := cl.UpVals[b]
-			uv.Set(L.Stack, L.Stack[ra].Val)
+			uv := cl.UpVals[opcode.GetArgB(inst)]
+			if uv.StackIdx >= 0 {
+				if uv.Stack != nil {
+					(*uv.Stack)[uv.StackIdx].Val = L.Stack[ra].Val
+				} else {
+					L.Stack[uv.StackIdx].Val = L.Stack[ra].Val
+				}
+			} else {
+				uv.Own = L.Stack[ra].Val
+			}
 			gc.BarrierValue(L.Global, uv, L.Stack[ra].Val) // GC write barrier: upvalue set
 
 		case opcode.OP_CLOSE:
@@ -237,8 +251,15 @@ startfunc:
 		// ===== Table access =====
 
 		case opcode.OP_GETTABUP:
-			b := opcode.GetArgB(inst)
-			upval := cl.UpVals[b].Get(L.Stack)
+			uv := cl.UpVals[opcode.GetArgB(inst)]
+			var upval object.TValue
+			if uv.StackIdx < 0 {
+				upval = uv.Own
+			} else if uv.Stack != nil {
+				upval = (*uv.Stack)[uv.StackIdx].Val
+			} else {
+				upval = L.Stack[uv.StackIdx].Val
+			}
 			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
 				h := upval.Obj.(*table.Table)
@@ -312,7 +333,15 @@ startfunc:
 
 		case opcode.OP_SETTABUP:
 			b := opcode.GetArgB(inst)
-			upval := cl.UpVals[opcode.GetArgA(inst)].Get(L.Stack)
+			uvs := cl.UpVals[opcode.GetArgA(inst)]
+			var upval object.TValue
+			if uvs.StackIdx < 0 {
+				upval = uvs.Own
+			} else if uvs.Stack != nil {
+				upval = (*uvs.Stack)[uvs.StackIdx].Val
+			} else {
+				upval = L.Stack[uvs.StackIdx].Val
+			}
 			rb := k[b]
 			var rc object.TValue
 			if opcode.GetArgK(inst) != 0 {
@@ -1019,6 +1048,7 @@ startfunc:
 
 		case opcode.OP_JMP:
 			ci.SavedPC += opcode.GetArgSJ(inst)
+			trap = ci.Trap // refresh after jump (hooks may have changed)
 
 		// ===== For loops =====
 
@@ -1078,7 +1108,8 @@ startfunc:
 				ci = newci
 				goto startfunc
 			}
-			// C function already executed
+			// C function already executed — refresh trap (C func may have set hooks)
+			trap = ci.Trap
 
 		case opcode.OP_TAILCALL:
 			b := opcode.GetArgB(inst)
