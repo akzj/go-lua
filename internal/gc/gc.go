@@ -577,6 +577,7 @@ func markRoots(g *state.GlobalState) {
 	g.Weak = g.Weak[:0]
 	g.AllWeak = g.AllWeak[:0]
 	g.Ephemeron = g.Ephemeron[:0]
+	g.EphemeronDone = g.EphemeronDone[:0]
 
 	// Mark main thread
 	if g.MainThread != nil {
@@ -824,19 +825,15 @@ func Udata2Finalize(g *state.GlobalState) object.GCObject {
 // Weak table clearing functions
 // ---------------------------------------------------------------------------
 
-// clearDeadKeysAllEphemerons walks allgc and finobj lists to find ALL tables
-// with WeakKey mode and clears their dead key entries. This is needed because
-// convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
-// so clearByKeys(g, g.Ephemeron) would operate on an empty list.
-//
-// Optimization: if no ephemeron tables were encountered during mark phase
-// (EphemeronCount == 0), skip the expensive full-chain walk entirely.
+// clearDeadKeysAllEphemerons clears dead key entries from all ephemeron tables
+// that were processed during convergeEphemerons. Uses the EphemeronDone list
+// (populated during convergence) instead of walking the entire allgc chain.
 func clearDeadKeysAllEphemerons(g *state.GlobalState) {
 	if g.EphemeronCount == 0 {
 		return // no weak-key tables this cycle — nothing to clear
 	}
-	clearDeadKeysInList(g, g.Allgc)
-	clearDeadKeysInList(g, g.FinObj)
+	clearByKeys(g, g.EphemeronDone)
+	g.EphemeronDone = g.EphemeronDone[:0]
 }
 
 // clearDeadKeysInList walks a GC object list and clears dead keys from any
@@ -941,6 +938,7 @@ func convergeEphemerons(g *state.GlobalState) {
 			t := obj.(*table.Table)
 			// Mark black temporarily (out of list)
 			markBlack(&t.GCHeader)
+			g.EphemeronDone = append(g.EphemeronDone, obj) // track for clearByKeys
 			if traverseEphemeron(g, t, dir) {
 				propagateAll(g) // propagate new marks
 				changed = true
@@ -1044,8 +1042,9 @@ func entersweep(g *state.GlobalState) {
 func SingleStep(g *state.GlobalState, L *state.LuaState) int64 {
 	switch g.GCState {
 	case object.GCSpause:
-		// Reset ephemeron counter for this cycle
+		// Reset ephemeron counter and done list for this cycle
 		g.EphemeronCount = 0
+		g.EphemeronDone = g.EphemeronDone[:0]
 		// C Lua's restartcollection does NOT flip white here.
 		// The only white flip happens at the end of atomic().
 		// Mark roots, enter propagate
@@ -1088,6 +1087,7 @@ func SingleStep(g *state.GlobalState, L *state.LuaState) int64 {
 		g.Weak = g.Weak[:0]
 		g.AllWeak = g.AllWeak[:0]
 		g.Ephemeron = g.Ephemeron[:0]
+		g.EphemeronDone = g.EphemeronDone[:0]
 		g.GCState = object.GCScallfin
 		return 0
 

@@ -318,7 +318,8 @@ type GlobalState struct {
 	GrayAgain []object.GCObject // barrier-back objects (re-traverse in atomic)
 	Weak      []object.GCObject // weak-value tables to clear after mark
 	AllWeak   []object.GCObject // all-weak (kv) tables
-	Ephemeron []object.GCObject // ephemeron tables (weak-key)
+	Ephemeron     []object.GCObject // ephemeron tables (weak-key) — pending convergence
+	EphemeronDone []object.GCObject // ephemeron tables already converged (for clearByKeys)
 
 	// EphemeronCount tracks how many weak-key (ephemeron) tables were
 	// encountered during the current GC mark phase. When zero, the
