@@ -92,8 +92,15 @@ func linkGray(g *state.GlobalState, obj object.GCObject) {
 // markValue marks the value inside a TValue if it's a collectable object.
 func markValue(g *state.GlobalState, tv object.TValue) {
 	if tv.Tt&object.BIT_ISCOLLECTABLE == 0 {
-		return // not a GC-collectable type — skip interface assertion
+		return // not collectable
 	}
+	// Fast check: if already marked (not white), skip the expensive type assertion.
+	// FastGCFromAny extracts *GCHeader directly from the any interface data pointer.
+	h := object.FastGCFromAny(tv.Obj)
+	if !h.IsWhite() {
+		return // already marked — avoid type assertion entirely
+	}
+	// Slow path: white object needs marking — type assertion required for gray list
 	if obj, ok := tv.Obj.(object.GCObject); ok {
 		markObject(g, obj)
 	}
@@ -349,8 +356,11 @@ func traverseStrongTable(g *state.GlobalState, t *table.Table) {
 		if n.Val.Tt != object.TagEmpty && n.Val.Tt != object.TagNil {
 			markValue(g, n.Val)
 			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
-				if obj, ok := n.KeyVal.(object.GCObject); ok {
-					markObject(g, obj)
+				kh := object.FastGCFromAny(n.KeyVal)
+				if kh.IsWhite() {
+					if obj, ok := n.KeyVal.(object.GCObject); ok {
+						markObject(g, obj)
+					}
 				}
 			}
 		}
