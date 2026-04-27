@@ -44,7 +44,7 @@ func markObject(g *state.GlobalState, obj object.GCObject) {
 	if obj == nil {
 		return
 	}
-	h := obj.GC()
+	h := object.FastGC(obj)
 	if !h.IsWhite() {
 		return // already marked
 	}
@@ -83,7 +83,7 @@ func markObject(g *state.GlobalState, obj object.GCObject) {
 
 // linkGray adds an object to the gray list for later traversal.
 func linkGray(g *state.GlobalState, obj object.GCObject) {
-	h := obj.GC()
+	h := object.FastGC(obj)
 	// Clear white bits (now gray — neither white nor black)
 	h.Marked &^= (object.WhiteBits | object.BlackBit)
 	g.Gray = append(g.Gray, obj)
@@ -113,7 +113,7 @@ func genlink(g *state.GlobalState, obj object.GCObject) {
 	if g.GCKind == object.KGC_INC {
 		return // no-op in incremental mode
 	}
-	h := obj.GC()
+	h := object.FastGC(obj)
 	if h.Age == object.G_TOUCHED1 {
 		// Touched in this cycle — link back to grayagain for next cycle
 		g.GrayAgain = append(g.GrayAgain, obj)
@@ -137,8 +137,8 @@ func Barrier(g *state.GlobalState, parent, child object.GCObject) {
 	if parent == nil || child == nil {
 		return
 	}
-	ph := parent.GC()
-	ch := child.GC()
+	ph := object.FastGC(parent)
+	ch := object.FastGC(child)
 	// Fast path: most objects aren't black during mutator execution
 	if ph.Marked&object.BlackBit == 0 || ch.Marked&object.WhiteBits == 0 {
 		return
@@ -161,7 +161,7 @@ func BarrierBack(g *state.GlobalState, parent object.GCObject) {
 	if parent == nil {
 		return
 	}
-	ph := parent.GC()
+	ph := object.FastGC(parent)
 	// Fast path: not black → nothing to do
 	if ph.Marked&object.BlackBit == 0 {
 		return
@@ -270,7 +270,7 @@ func propagateMark(g *state.GlobalState) int64 {
 		traverseThread(g, v)
 		work = int64(len(v.Stack) + 1)
 	default:
-		markBlack(obj.GC()) // fallback — only for unknown types
+		markBlack(object.FastGC(obj)) // fallback — only for unknown types
 		work = 1
 	}
 	return work
@@ -293,7 +293,7 @@ func isCleared(g *state.GlobalState, obj object.GCObject) bool {
 	if _, ok := obj.(*object.LuaString); ok {
 		return false
 	}
-	return obj.GC().IsWhite()
+	return object.FastGC(obj).IsWhite()
 }
 
 // linkGCList appends a table to a GC slice (weak, ephemeron, allweak, grayagain).
@@ -529,7 +529,7 @@ func traverseThread(g *state.GlobalState, th *state.LuaState) {
 	// might point to young objects. In inc mode, threads must be revisited
 	// in the atomic phase. Put thread back on grayagain in these cases.
 	// Mirrors C Lua's traversethread (lgc.c:697-698).
-	h := th.GC()
+	h := object.FastGC(th)
 	if h.IsOld() || g.GCState == object.GCSpropagate {
 		g.GrayAgain = append(g.GrayAgain, th)
 	}
@@ -616,7 +616,7 @@ func markRoots(g *state.GlobalState) {
 	}
 
 	// Mark objects being finalized (tobefnz list)
-	for obj := g.TobeFnz; obj != nil; obj = obj.GC().Next {
+	for obj := g.TobeFnz; obj != nil; obj = object.FastGC(obj).Next {
 		markObject(g, obj)
 	}
 }
@@ -638,7 +638,7 @@ func sweepList(g *state.GlobalState, p *object.GCObject) int {
 
 	for *p != nil {
 		obj := *p
-		h := obj.GC()
+		h := object.FastGC(obj)
 		marked := h.Marked
 
 		if isDeadMark(otherwhite, marked) {
@@ -689,7 +689,7 @@ func sweepStep(g *state.GlobalState, list *object.GCObject, nextState byte) int6
 
 	for count < SWEEPMAX && *g.SweepGC != nil {
 		obj := *g.SweepGC
-		h := obj.GC()
+		h := object.FastGC(obj)
 		marked := h.Marked
 
 		if isDeadMark(otherwhite, marked) {
@@ -758,12 +758,12 @@ func separateTobeFnz(g *state.GlobalState) {
 	// Find the tail of tobefnz list (to append, not prepend)
 	lastnext := &g.TobeFnz
 	for *lastnext != nil {
-		lastnext = &(*lastnext).GC().Next
+		lastnext = &object.FastGC(*lastnext).Next
 	}
 	p := &g.FinObj
 	for *p != nil {
 		obj := *p
-		h := obj.GC()
+		h := object.FastGC(obj)
 		if h.IsWhite() {
 			// Dead (white = not marked) — move to end of tobefnz
 			*p = h.Next
@@ -783,7 +783,7 @@ func separateTobeFnz(g *state.GlobalState) {
 // The hasFinalizer parameter indicates whether the object has __gc;
 // the caller (API layer) is responsible for checking the metatable.
 func CheckFinalizer(g *state.GlobalState, obj object.GCObject) {
-	h := obj.GC()
+	h := object.FastGC(obj)
 	// Already marked as having a finalizer? Skip.
 	if h.Marked&object.FinalizedBit != 0 {
 		return
@@ -795,7 +795,7 @@ func CheckFinalizer(g *state.GlobalState, obj object.GCObject) {
 			*p = h.Next
 			break
 		}
-		p = &(*p).GC().Next
+		p = &object.FastGC(*p).Next
 	}
 	// Link into finobj list
 	h.Next = g.FinObj
@@ -817,7 +817,7 @@ func Udata2Finalize(g *state.GlobalState) object.GCObject {
 	if o == nil {
 		return nil
 	}
-	h := o.GC()
+	h := object.FastGC(o)
 	// Remove from tobefnz
 	g.TobeFnz = h.Next
 	// Link back into allgc (resurrection)
@@ -848,7 +848,7 @@ func clearDeadKeysAllEphemerons(g *state.GlobalState) {
 // clearDeadKeysInList walks a GC object list and clears dead keys from any
 // table with WeakKey mode set.
 func clearDeadKeysInList(g *state.GlobalState, list object.GCObject) {
-	for obj := list; obj != nil; obj = obj.GC().Next {
+	for obj := list; obj != nil; obj = object.FastGC(obj).Next {
 		t, ok := obj.(*table.Table)
 		if !ok || t.WeakMode&table.WeakKey == 0 {
 			continue
@@ -973,7 +973,7 @@ func convergeEphemerons(g *state.GlobalState) {
 // must survive this GC cycle (resurrection).
 // Mirrors C Lua's markbeingfnz.
 func markBeingFnz(g *state.GlobalState) {
-	for obj := g.TobeFnz; obj != nil; obj = obj.GC().Next {
+	for obj := g.TobeFnz; obj != nil; obj = object.FastGC(obj).Next {
 		markObject(g, obj)
 	}
 }
