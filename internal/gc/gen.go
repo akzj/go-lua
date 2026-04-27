@@ -409,6 +409,8 @@ func runTilState(g *state.GlobalState, L *state.LuaState, target byte) {
 
 func minor2inc(g *state.GlobalState, L *state.LuaState, kind byte) {
 	g.GCKind = kind
+	// Save baseline for next gen cycle (matches C Lua: g->GCmajorminor = g->GCmarked)
+	g.GCMajorMinor = g.GCTotalBytes
 	g.Survival = nil
 	g.Old1 = nil
 	g.ReallyOld = nil
