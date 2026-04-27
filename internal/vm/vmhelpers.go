@@ -1399,10 +1399,8 @@ func adjustVarargs(L *state.LuaState, ci *state.CallInfo, p *object.Proto) {
 		// Mirrors: luaT_adjustvarargs + createvarargtab in ltm.c
 		CheckStack(L, int(p.MaxStackSize)+1)
 		t := table.New(nextra, 1)
-		L.Global.LinkGC(t) // V5: register in allgc chain
-		size := t.EstimateBytes()
-		t.GCHeader.ObjSize = size
-		L.Global.GCTotalBytes += size
+		t.GCHeader.ObjSize = t.EstimateBytes() // set accurate size before LinkGC
+		L.Global.LinkGC(t)                     // tracks ObjSize in both GCTotalBytes and GCDebt
 		// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 		// Set t.n = nextra
 		st := L.Global.StringTable.(*luastring.StringTable)

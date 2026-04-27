@@ -21,10 +21,9 @@ func (L *State) NewUserdata(size int, nUV int) *object.Userdata {
 	for i := range ud.UserVals {
 		ud.UserVals[i] = object.Nil
 	}
-	L.ls().Global.LinkGC(ud) // V5: register in allgc chain
-	// Track allocation: base Userdata struct (~80 bytes) + UserVals slice
-	estimateSize := int64(80 + nUV*24)
-	L.TrackAlloc(estimateSize)
+	// Set accurate size before LinkGC so TrackAllocation uses the real estimate
+	ud.GCHeader.ObjSize = int64(80 + nUV*24) // base Userdata struct + UserVals slice
+	L.ls().Global.LinkGC(ud)                 // tracks ObjSize in both GCTotalBytes and GCDebt
 	L.push(object.TValue{Tt: object.TagUserdata, Obj: ud})
 	return ud
 }
