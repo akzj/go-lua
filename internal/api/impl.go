@@ -200,12 +200,6 @@ func NewState() *State {
 		}
 	}
 
-	// Switch to generational GC mode (default for better performance).
-	// Instead of calling gc.ChangeMode (which runs a full GC cycle via EnterGen),
-	// we directly set up gen mode. Mark all existing objects as OLD and set
-	// gen boundaries so new allocations will be young (collected cheaply).
-	gc.InitGenMode(ls.Global)
-
 	return L
 }
 

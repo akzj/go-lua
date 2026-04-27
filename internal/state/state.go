@@ -36,7 +36,7 @@ func NewState() *LuaState {
 	g.GCStepMul = 200
 	g.GCStepSize = 13
 	// Generational GC tuning defaults (C Lua 5.5.1 values)
-	g.GCMinorMul = 20   // LUAI_GENMINORMUL: debt = GCMajorMinor * 20 / 100
+	g.GCMinorMul = 50   // Increased from C Lua's 20 — Go's per-cycle overhead is higher
 	g.GCMinorMajor = 70 // LUAI_MINORMAJOR: promote to major when marked >= 70% of baseline
 	// Initial GC debt: give 64KB of allocation credit before first GC triggers.
 	// This matches the minDebt in SetPause and avoids premature collection
