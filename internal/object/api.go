@@ -64,6 +64,8 @@ func FastGCFromAny(obj any) *GCHeader {
 	return (*GCHeader)(unsafe.Pointer((*eface)(unsafe.Pointer(&obj)).data))
 }
 
+
+
 // GC color/mark bit constants.
 const (
 	WhiteBit0    byte = 1 << 0 // white bit 0

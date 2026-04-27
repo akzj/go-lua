@@ -16,6 +16,8 @@
 package gc
 
 import (
+	"unsafe"
+
 	"github.com/akzj/go-lua/internal/closure"
 	"github.com/akzj/go-lua/internal/object"
 	"github.com/akzj/go-lua/internal/state"
@@ -89,20 +91,26 @@ func linkGray(g *state.GlobalState, obj object.GCObject) {
 	g.Gray = append(g.Gray, obj)
 }
 
-// markValue marks the value inside a TValue if it's a collectable object.
+// markValue marks the value inside a TValue if it's a collectable, white object.
+// The fast path checks BIT_ISCOLLECTABLE and IsWhite via unsafe pointer extraction,
+// deferring the expensive GCObject type assertion to markValueSlow (cold path).
 func markValue(g *state.GlobalState, tv object.TValue) {
 	if tv.Tt&object.BIT_ISCOLLECTABLE == 0 {
-		return // not collectable
+		return
 	}
-	// Fast check: if already marked (not white), skip the expensive type assertion.
-	// FastGCFromAny extracts *GCHeader directly from the any interface data pointer.
-	h := object.FastGCFromAny(tv.Obj)
-	if !h.IsWhite() {
-		return // already marked — avoid type assertion entirely
+	if (*object.GCHeader)((*[2]unsafe.Pointer)(unsafe.Pointer(&tv.Obj))[1]).Marked&object.WhiteBits == 0 {
+		return
 	}
-	// Slow path: white object needs marking — type assertion required for gray list
-	if obj, ok := tv.Obj.(object.GCObject); ok {
-		markObject(g, obj)
+	markValueSlow(g, tv.Obj)
+}
+
+// markValueSlow is the cold path of markValue — only called for white collectable objects.
+// Separated to keep markValue inlineable (cost < 80).
+//
+//go:noinline
+func markValueSlow(g *state.GlobalState, obj any) {
+	if gc, ok := obj.(object.GCObject); ok {
+		markObject(g, gc)
 	}
 }
 
