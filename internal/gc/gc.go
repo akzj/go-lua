@@ -91,6 +91,9 @@ func linkGray(g *state.GlobalState, obj object.GCObject) {
 
 // markValue marks the value inside a TValue if it's a collectable object.
 func markValue(g *state.GlobalState, tv object.TValue) {
+	if tv.Tt&object.BIT_ISCOLLECTABLE == 0 {
+		return // not a GC-collectable type — skip interface assertion
+	}
 	if obj, ok := tv.Obj.(object.GCObject); ok {
 		markObject(g, obj)
 	}
@@ -236,40 +239,38 @@ func propagateMark(g *state.GlobalState) int64 {
 	obj := g.Gray[n-1]
 	g.Gray[n-1] = nil // clear reference to help Go GC
 	g.Gray = g.Gray[:n-1]
-	h := obj.GC()
 
 	var work int64
 
 	switch v := obj.(type) {
 	case *table.Table:
-		// Tables may NOT be marked black — weak tables link to special lists.
+		// Tables are the most common case — avoid interface dispatch for GC().
 		// traverseTable handles marking black for strong tables.
-		// genlink is called inside traverseTable for strong tables.
 		traverseTable(g, v)
 		work = int64(len(v.Array) + len(v.Nodes) + 1)
 	case *object.Userdata:
-		markBlack(h)
+		markBlack(&v.GCHeader) // direct field access, no interface dispatch
 		traverseUserdata(g, v)
 		genlink(g, obj)
 		work = int64(len(v.UserVals) + 1)
 	case *closure.LClosure:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseLClosure(g, v)
 		work = int64(len(v.UpVals) + 1)
 	case *closure.CClosure:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseCClosure(g, v)
 		work = int64(len(v.UpVals) + 1)
 	case *object.Proto:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseProto(g, v)
 		work = int64(len(v.Constants) + len(v.Protos) + len(v.Upvalues) + len(v.LocVars) + 1)
 	case *state.LuaState:
-		markBlack(h)
+		markBlack(&v.GCHeader)
 		traverseThread(g, v)
 		work = int64(len(v.Stack) + 1)
 	default:
-		markBlack(h)
+		markBlack(obj.GC()) // fallback — only for unknown types
 		work = 1
 	}
 	return work
@@ -347,8 +348,10 @@ func traverseStrongTable(g *state.GlobalState, t *table.Table) {
 		n := &nodes[i]
 		if n.Val.Tt != object.TagEmpty && n.Val.Tt != object.TagNil {
 			markValue(g, n.Val)
-			if obj, ok := n.KeyVal.(object.GCObject); ok {
-				markObject(g, obj)
+			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+				if obj, ok := n.KeyVal.(object.GCObject); ok {
+					markObject(g, obj)
+				}
 			}
 		}
 	}
@@ -366,8 +369,10 @@ func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 			continue // empty slot
 		}
 		// Mark key (strong)
-		if obj, ok := n.KeyVal.(object.GCObject); ok {
-			markObject(g, obj)
+		if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+			if obj, ok := n.KeyVal.(object.GCObject); ok {
+				markObject(g, obj)
+			}
 		}
 		// Check if value is white (don't mark it — it's weak)
 		if !hasClears {
@@ -420,7 +425,11 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 			continue // empty slot
 		}
 		// Check if key is marked
-		keyObj, keyIsGC := n.KeyVal.(object.GCObject)
+		var keyObj object.GCObject
+		var keyIsGC bool
+		if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+			keyObj, keyIsGC = n.KeyVal.(object.GCObject)
+		}
 		keyIsWhite := keyIsGC && isCleared(g, keyObj)
 		if keyIsWhite {
 			hasClears = true
@@ -577,6 +586,7 @@ func markRoots(g *state.GlobalState) {
 	g.Weak = g.Weak[:0]
 	g.AllWeak = g.AllWeak[:0]
 	g.Ephemeron = g.Ephemeron[:0]
+	g.EphemeronDone = g.EphemeronDone[:0]
 
 	// Mark main thread
 	if g.MainThread != nil {
@@ -824,19 +834,15 @@ func Udata2Finalize(g *state.GlobalState) object.GCObject {
 // Weak table clearing functions
 // ---------------------------------------------------------------------------
 
-// clearDeadKeysAllEphemerons walks allgc and finobj lists to find ALL tables
-// with WeakKey mode and clears their dead key entries. This is needed because
-// convergeEphemerons empties g.Ephemeron (marks tables black and removes them),
-// so clearByKeys(g, g.Ephemeron) would operate on an empty list.
-//
-// Optimization: if no ephemeron tables were encountered during mark phase
-// (EphemeronCount == 0), skip the expensive full-chain walk entirely.
+// clearDeadKeysAllEphemerons clears dead key entries from all ephemeron tables
+// that were processed during convergeEphemerons. Uses the EphemeronDone list
+// (populated during convergence) instead of walking the entire allgc chain.
 func clearDeadKeysAllEphemerons(g *state.GlobalState) {
 	if g.EphemeronCount == 0 {
 		return // no weak-key tables this cycle — nothing to clear
 	}
-	clearDeadKeysInList(g, g.Allgc)
-	clearDeadKeysInList(g, g.FinObj)
+	clearByKeys(g, g.EphemeronDone)
+	g.EphemeronDone = g.EphemeronDone[:0]
 }
 
 // clearDeadKeysInList walks a GC object list and clears dead keys from any
@@ -853,10 +859,12 @@ func clearDeadKeysInList(g *state.GlobalState, list object.GCObject) {
 			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if keyObj, ok := n.KeyVal.(object.GCObject); ok {
-				if isCleared(g, keyObj) {
-					n.KeyTT = object.TagDeadKey
-					n.Val = object.Nil
+			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+				if keyObj, ok := n.KeyVal.(object.GCObject); ok {
+					if isCleared(g, keyObj) {
+						n.KeyTT = object.TagDeadKey
+						n.Val = object.Nil
+					}
 				}
 			}
 		}
@@ -873,12 +881,14 @@ func clearByKeys(g *state.GlobalState, list []object.GCObject) {
 				continue
 			}
 			// Check if key is a dead GC object
-			if keyObj, ok := n.KeyVal.(object.GCObject); ok {
-				if isCleared(g, keyObj) {
-					// Dead key — mark as dead and clear value
-					// Mirrors C Lua's setdeadkey(n)
-					n.KeyTT = object.TagDeadKey
-					n.Val = object.Nil
+			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+				if keyObj, ok := n.KeyVal.(object.GCObject); ok {
+					if isCleared(g, keyObj) {
+						// Dead key — mark as dead and clear value
+						// Mirrors C Lua's setdeadkey(n)
+						n.KeyTT = object.TagDeadKey
+						n.Val = object.Nil
+					}
 				}
 			}
 		}
@@ -894,9 +904,11 @@ func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
 
 		// Clear array part
 		for i := range t.Array {
-			if vObj, ok := t.Array[i].Obj.(object.GCObject); ok {
-				if isCleared(g, vObj) {
-					t.Array[i] = object.Nil
+			if t.Array[i].Tt&object.BIT_ISCOLLECTABLE != 0 {
+				if vObj, ok := t.Array[i].Obj.(object.GCObject); ok {
+					if isCleared(g, vObj) {
+						t.Array[i] = object.Nil
+					}
 				}
 			}
 		}
@@ -907,12 +919,14 @@ func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
 			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if vObj, ok := n.Val.Obj.(object.GCObject); ok {
-				if isCleared(g, vObj) {
-					// Dead value — mark key as dead and clear value.
-					// Must NOT nil KeyVal — hash chain probing depends on it.
-					n.KeyTT = object.TagDeadKey
-					n.Val = object.Nil
+			if n.Val.Tt&object.BIT_ISCOLLECTABLE != 0 {
+				if vObj, ok := n.Val.Obj.(object.GCObject); ok {
+					if isCleared(g, vObj) {
+						// Dead value — mark key as dead and clear value.
+						// Must NOT nil KeyVal — hash chain probing depends on it.
+						n.KeyTT = object.TagDeadKey
+						n.Val = object.Nil
+					}
 				}
 			}
 		}
@@ -941,6 +955,7 @@ func convergeEphemerons(g *state.GlobalState) {
 			t := obj.(*table.Table)
 			// Mark black temporarily (out of list)
 			markBlack(&t.GCHeader)
+			g.EphemeronDone = append(g.EphemeronDone, obj) // track for clearByKeys
 			if traverseEphemeron(g, t, dir) {
 				propagateAll(g) // propagate new marks
 				changed = true
@@ -1044,8 +1059,9 @@ func entersweep(g *state.GlobalState) {
 func SingleStep(g *state.GlobalState, L *state.LuaState) int64 {
 	switch g.GCState {
 	case object.GCSpause:
-		// Reset ephemeron counter for this cycle
+		// Reset ephemeron counter and done list for this cycle
 		g.EphemeronCount = 0
+		g.EphemeronDone = g.EphemeronDone[:0]
 		// C Lua's restartcollection does NOT flip white here.
 		// The only white flip happens at the end of atomic().
 		// Mark roots, enter propagate
@@ -1088,6 +1104,7 @@ func SingleStep(g *state.GlobalState, L *state.LuaState) int64 {
 		g.Weak = g.Weak[:0]
 		g.AllWeak = g.AllWeak[:0]
 		g.Ephemeron = g.Ephemeron[:0]
+		g.EphemeronDone = g.EphemeronDone[:0]
 		g.GCState = object.GCScallfin
 		return 0
 

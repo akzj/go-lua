@@ -416,10 +416,8 @@ startfunc:
 			}
 			ci.SavedPC++ // skip extra arg
 			t := table.New(c, b)
-			L.Global.LinkGC(t) // V5: register in allgc chain
-			size := t.EstimateBytes()
-			t.GCHeader.ObjSize = size
-			L.Global.GCTotalBytes += size
+			t.GCHeader.ObjSize = t.EstimateBytes() // set accurate size before LinkGC
+			L.Global.LinkGC(t)                     // tracks ObjSize in both GCTotalBytes and GCDebt
 			// V5 GC sweep handles dealloc accounting — no AddCleanup needed
 			L.Stack[ra].Val = object.TValue{Tt: object.TagTable, Obj: t}
 

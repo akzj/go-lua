@@ -8,6 +8,43 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// InitGenMode — lightweight initialization of generational GC mode.
+// Used by NewState to set up gen mode without running a full GC cycle.
+// Marks all existing objects as OLD and sets gen boundaries so that
+// new allocations will be young (collected cheaply by YoungCollection).
+// ---------------------------------------------------------------------------
+
+func InitGenMode(g *state.GlobalState) {
+	// Mark all existing objects as OLD
+	for obj := g.Allgc; obj != nil; obj = obj.GC().Next {
+		obj.GC().Age = object.G_OLD
+	}
+	for obj := g.FinObj; obj != nil; obj = obj.GC().Next {
+		obj.GC().Age = object.G_OLD
+	}
+	for obj := g.TobeFnz; obj != nil; obj = obj.GC().Next {
+		obj.GC().Age = object.G_OLD
+	}
+
+	// Set gen mode state
+	g.GCKind = object.KGC_GENMINOR
+	g.GCState = object.GCSpropagate
+
+	// Set gen boundaries: everything is old
+	g.Survival = g.Allgc
+	g.Old1 = g.Allgc
+	g.ReallyOld = g.Allgc
+	g.FirstOld1 = nil
+	g.FinObjSur = g.FinObj
+	g.FinObjOld1 = g.FinObj
+	g.FinObjROld = g.FinObj
+
+	// Set baseline for minor→major promotion
+	g.GCMajorMinor = g.GCTotalBytes
+	g.GCMarked = 0
+}
+
+// ---------------------------------------------------------------------------
 // sweep2old — sweep list, mark all alive objects as OLD.
 // Used when entering gen mode: everything alive becomes old.
 // Dead objects (other-white) are unlinked. Threads go to grayagain.
@@ -202,6 +239,36 @@ func finishgencycle(g *state.GlobalState, L *state.LuaState) {
 }
 
 // ---------------------------------------------------------------------------
+// checkminormajor — check whether minor collection should shift to major.
+// Returns true if bytes becoming old exceed GCMinorMajor% of the baseline
+// (GCMajorMinor = bytes marked in last major collection).
+// Mirrors C Lua's checkminormajor (lgc.c:1323).
+// ---------------------------------------------------------------------------
+
+func checkminormajor(g *state.GlobalState) bool {
+	if g.GCMinorMajor == 0 {
+		return false // special case: 0 disables major promotion
+	}
+	limit := g.GCMajorMinor * int64(g.GCMinorMajor) / 100
+	return g.GCMarked >= limit
+}
+
+// ---------------------------------------------------------------------------
+// SetMinorDebt — set GC debt after a minor (young) collection.
+// debt = GCMajorMinor * GCMinorMul / 100
+// Mirrors C Lua's setminordebt (lgc.c:1417).
+// ---------------------------------------------------------------------------
+
+func SetMinorDebt(g *state.GlobalState) {
+	debt := g.GCMajorMinor * int64(g.GCMinorMul) / 100
+	const minDebt int64 = 64 * 1024 // minimum to avoid thrashing
+	if debt < minDebt {
+		debt = minDebt
+	}
+	g.GCDebt = debt
+}
+
+// ---------------------------------------------------------------------------
 // youngcollection — the core minor (young) collection.
 // Only scans new/survival objects. Old objects are skipped.
 // Mirrors C Lua's youngcollection (lgc.c:1335).
@@ -246,8 +313,16 @@ func YoungCollection(g *state.GlobalState, L *state.LuaState) {
 	// 5. Sweep tobefnz
 	sweepgen(g, &g.TobeFnz, nil, &dummy, &addedold1)
 
-	// 6. Finish cycle (always stay in minor mode for now — skip checkminormajor)
-	finishgencycle(g, L)
+	// 6. Track bytes becoming old (for minor→major promotion check)
+	g.GCMarked += addedold1
+
+	// 7. Decide whether to shift to major mode
+	if checkminormajor(g) {
+		minor2inc(g, L, object.KGC_GENMAJOR) // go to major mode
+		g.GCMarked = 0                        // avoid pause in first major cycle
+	} else {
+		finishgencycle(g, L) // still in minor mode
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +367,12 @@ func atomic2gen(g *state.GlobalState, L *state.LuaState) {
 
 	g.GCKind = object.KGC_GENMINOR
 	g.GCState = object.GCSpropagate // skip restart
+
+	// Set baseline for minor→major promotion: total bytes after major collection.
+	// Mirrors C Lua's g->GCmajorminor = g->GCmarked (lgc.c:1405).
+	g.GCMajorMinor = g.GCTotalBytes
+	g.GCMarked = 0 // reset accumulated old bytes
+
 	finishgencycle(g, L)
 }
 
@@ -328,6 +409,8 @@ func runTilState(g *state.GlobalState, L *state.LuaState, target byte) {
 
 func minor2inc(g *state.GlobalState, L *state.LuaState, kind byte) {
 	g.GCKind = kind
+	// Save baseline for next gen cycle (matches C Lua: g->GCmajorminor = g->GCmarked)
+	g.GCMajorMinor = g.GCTotalBytes
 	g.Survival = nil
 	g.Old1 = nil
 	g.ReallyOld = nil

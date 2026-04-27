@@ -318,7 +318,8 @@ type GlobalState struct {
 	GrayAgain []object.GCObject // barrier-back objects (re-traverse in atomic)
 	Weak      []object.GCObject // weak-value tables to clear after mark
 	AllWeak   []object.GCObject // all-weak (kv) tables
-	Ephemeron []object.GCObject // ephemeron tables (weak-key)
+	Ephemeron     []object.GCObject // ephemeron tables (weak-key) — pending convergence
+	EphemeronDone []object.GCObject // ephemeron tables already converged (for clearByKeys)
 
 	// EphemeronCount tracks how many weak-key (ephemeron) tables were
 	// encountered during the current GC mark phase. When zero, the
@@ -352,8 +353,21 @@ type GlobalState struct {
 	FinObjROld object.GCObject // really-old boundary in finobj
 
 	// GCMinorMul is the generational minor collection multiplier.
-	// Controls when minor GC switches to major (% of live memory growth).
-	GCMinorMul int // default 25 (LUAI_GENMINORMUL)
+	// Controls debt after minor collections: debt = GCMajorMinor * GCMinorMul / 100.
+	GCMinorMul int // default 20 (LUAI_GENMINORMUL)
+
+	// GCMinorMajor controls when minor collections shift to major.
+	// A major collection triggers when bytes-becoming-old exceed
+	// GCMajorMinor * GCMinorMajor / 100. 0 = never promote.
+	GCMinorMajor int // default 70 (LUAI_MINORMAJOR)
+
+	// GCMajorMinor tracks bytes marked in the last major collection.
+	// Used as the baseline for minor→major promotion decisions.
+	GCMajorMinor int64
+
+	// GCMarked tracks bytes that became old since the last major collection.
+	// In minor mode, this accumulates addedold1 from each YoungCollection.
+	GCMarked int64
 
 	// =================================================================
 	// Warning system — mirrors C Lua's lua_setwarnf / lua_warning
