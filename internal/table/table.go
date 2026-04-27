@@ -183,6 +183,7 @@ func (t *Table) setHash(key, value object.TValue) {
 				// Live key match — update or delete
 				if value.Tt.IsNil() {
 					nd.Val = object.Nil
+					nd.KeyOldTT = nd.KeyTT
 					nd.KeyTT = object.TagDeadKey
 				} else {
 					nd.Val = value
