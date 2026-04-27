@@ -134,7 +134,14 @@ var TypeNames = [NumTypes]string{
 // Bit layout: [7:unused][6:collectable][5:variant1][4:variant0][3:0:base_type]
 type Tag byte
 
-// Nil variants (4 kinds in Lua 5.5)
+// BIT_ISCOLLECTABLE marks a tag as a GC-collectable type.
+// Matches C Lua's BIT_ISCOLLECTABLE (bit 6).
+const BIT_ISCOLLECTABLE Tag = 0x40
+
+// IsCollectable returns true if this tag represents a GC-collectable type.
+func (t Tag) IsCollectable() bool { return t&BIT_ISCOLLECTABLE != 0 }
+
+// Nil variants (4 kinds in Lua 5.5) — NOT collectable
 const (
 	TagNil     Tag = 0x00 // LUA_VNIL — standard nil
 	TagEmpty   Tag = 0x10 // LUA_VEMPTY — empty table slot
@@ -142,43 +149,43 @@ const (
 	TagNotable Tag = 0x30 // LUA_VNOTABLE — fast-get hit a non-table (Lua 5.5 new)
 )
 
-// Boolean variants
+// Boolean variants — NOT collectable
 const (
 	TagFalse Tag = 0x01 // LUA_VFALSE
 	TagTrue  Tag = 0x11 // LUA_VTRUE
 )
 
-// Number variants
+// Number variants — NOT collectable
 const (
 	TagInteger Tag = 0x03 // LUA_VNUMINT
 	TagFloat   Tag = 0x13 // LUA_VNUMFLT
 )
 
-// String variants
+// String variants — collectable (bit 6 set)
 const (
-	TagShortStr Tag = 0x04 // LUA_VSHRSTR — interned short string
-	TagLongStr  Tag = 0x14 // LUA_VLNGSTR — non-interned long string
+	TagShortStr Tag = 0x44 // LUA_VSHRSTR — interned short string
+	TagLongStr  Tag = 0x54 // LUA_VLNGSTR — non-interned long string
 )
 
 // Function variants
 const (
-	TagLuaClosure Tag = 0x06 // LUA_VLCL — Lua closure
-	TagLightCFunc Tag = 0x16 // LUA_VLCF — light C function (no upvalues)
-	TagCClosure   Tag = 0x26 // LUA_VCCL — C closure (with upvalues)
+	TagLuaClosure Tag = 0x46 // LUA_VLCL — Lua closure (collectable)
+	TagLightCFunc Tag = 0x16 // LUA_VLCF — light C function (NOT collectable)
+	TagCClosure   Tag = 0x66 // LUA_VCCL — C closure (collectable)
 )
 
-// Other collectable types
+// Other collectable types (bit 6 set)
 const (
-	TagTable         Tag = 0x05 // LUA_VTABLE
-	TagUserdata      Tag = 0x07 // LUA_VUSERDATA
-	TagThread        Tag = 0x08 // LUA_VTHREAD
-	TagUpVal         Tag = 0x09 // LUA_VUPVAL (internal)
-	TagProto         Tag = 0x0A // LUA_VPROTO (internal)
-	TagLightUserdata Tag = 0x02 // LUA_VLIGHTUSERDATA
+	TagTable         Tag = 0x45 // LUA_VTABLE
+	TagUserdata      Tag = 0x47 // LUA_VUSERDATA
+	TagThread        Tag = 0x48 // LUA_VTHREAD
+	TagUpVal         Tag = 0x49 // LUA_VUPVAL (internal)
+	TagProto         Tag = 0x4A // LUA_VPROTO (internal)
+	TagLightUserdata Tag = 0x02 // LUA_VLIGHTUSERDATA (NOT collectable)
 )
 
 // TagDeadKey is used for dead keys in table hash part (internal).
-const TagDeadKey Tag = 0x0B // LUA_TDEADKEY
+const TagDeadKey Tag = 0x0B // LUA_TDEADKEY (NOT collectable)
 
 // ---------------------------------------------------------------------------
 // Proto flag constants (C7 FIX: replaces IsVararg bool)

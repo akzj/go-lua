@@ -91,6 +91,9 @@ func linkGray(g *state.GlobalState, obj object.GCObject) {
 
 // markValue marks the value inside a TValue if it's a collectable object.
 func markValue(g *state.GlobalState, tv object.TValue) {
+	if tv.Tt&object.BIT_ISCOLLECTABLE == 0 {
+		return // not a GC-collectable type — skip interface assertion
+	}
 	if obj, ok := tv.Obj.(object.GCObject); ok {
 		markObject(g, obj)
 	}
@@ -345,8 +348,10 @@ func traverseStrongTable(g *state.GlobalState, t *table.Table) {
 		n := &nodes[i]
 		if n.Val.Tt != object.TagEmpty && n.Val.Tt != object.TagNil {
 			markValue(g, n.Val)
-			if obj, ok := n.KeyVal.(object.GCObject); ok {
-				markObject(g, obj)
+			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+				if obj, ok := n.KeyVal.(object.GCObject); ok {
+					markObject(g, obj)
+				}
 			}
 		}
 	}
@@ -364,8 +369,10 @@ func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 			continue // empty slot
 		}
 		// Mark key (strong)
-		if obj, ok := n.KeyVal.(object.GCObject); ok {
-			markObject(g, obj)
+		if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+			if obj, ok := n.KeyVal.(object.GCObject); ok {
+				markObject(g, obj)
+			}
 		}
 		// Check if value is white (don't mark it — it's weak)
 		if !hasClears {
@@ -418,7 +425,11 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 			continue // empty slot
 		}
 		// Check if key is marked
-		keyObj, keyIsGC := n.KeyVal.(object.GCObject)
+		var keyObj object.GCObject
+		var keyIsGC bool
+		if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+			keyObj, keyIsGC = n.KeyVal.(object.GCObject)
+		}
 		keyIsWhite := keyIsGC && isCleared(g, keyObj)
 		if keyIsWhite {
 			hasClears = true
@@ -848,10 +859,12 @@ func clearDeadKeysInList(g *state.GlobalState, list object.GCObject) {
 			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if keyObj, ok := n.KeyVal.(object.GCObject); ok {
-				if isCleared(g, keyObj) {
-					n.KeyTT = object.TagDeadKey
-					n.Val = object.Nil
+			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+				if keyObj, ok := n.KeyVal.(object.GCObject); ok {
+					if isCleared(g, keyObj) {
+						n.KeyTT = object.TagDeadKey
+						n.Val = object.Nil
+					}
 				}
 			}
 		}
@@ -868,12 +881,14 @@ func clearByKeys(g *state.GlobalState, list []object.GCObject) {
 				continue
 			}
 			// Check if key is a dead GC object
-			if keyObj, ok := n.KeyVal.(object.GCObject); ok {
-				if isCleared(g, keyObj) {
-					// Dead key — mark as dead and clear value
-					// Mirrors C Lua's setdeadkey(n)
-					n.KeyTT = object.TagDeadKey
-					n.Val = object.Nil
+			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
+				if keyObj, ok := n.KeyVal.(object.GCObject); ok {
+					if isCleared(g, keyObj) {
+						// Dead key — mark as dead and clear value
+						// Mirrors C Lua's setdeadkey(n)
+						n.KeyTT = object.TagDeadKey
+						n.Val = object.Nil
+					}
 				}
 			}
 		}
@@ -889,9 +904,11 @@ func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
 
 		// Clear array part
 		for i := range t.Array {
-			if vObj, ok := t.Array[i].Obj.(object.GCObject); ok {
-				if isCleared(g, vObj) {
-					t.Array[i] = object.Nil
+			if t.Array[i].Tt&object.BIT_ISCOLLECTABLE != 0 {
+				if vObj, ok := t.Array[i].Obj.(object.GCObject); ok {
+					if isCleared(g, vObj) {
+						t.Array[i] = object.Nil
+					}
 				}
 			}
 		}
@@ -902,12 +919,14 @@ func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
 			if n.Val.Tt == object.TagEmpty || n.Val.Tt == object.TagNil {
 				continue
 			}
-			if vObj, ok := n.Val.Obj.(object.GCObject); ok {
-				if isCleared(g, vObj) {
-					// Dead value — mark key as dead and clear value.
-					// Must NOT nil KeyVal — hash chain probing depends on it.
-					n.KeyTT = object.TagDeadKey
-					n.Val = object.Nil
+			if n.Val.Tt&object.BIT_ISCOLLECTABLE != 0 {
+				if vObj, ok := n.Val.Obj.(object.GCObject); ok {
+					if isCleared(g, vObj) {
+						// Dead value — mark key as dead and clear value.
+						// Must NOT nil KeyVal — hash chain probing depends on it.
+						n.KeyTT = object.TagDeadKey
+						n.Val = object.Nil
+					}
 				}
 			}
 		}

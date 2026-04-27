@@ -121,7 +121,7 @@ func (d *dumpState) dumpCode(p *object.Proto) {
 func (d *dumpState) dumpConstants(p *object.Proto) {
 	d.dumpInt(len(p.Constants))
 	for _, k := range p.Constants {
-		tt := byte(k.Tt)
+		tt := byte(k.Tt &^ object.BIT_ISCOLLECTABLE) // strip collectable bit for bytecode format
 		d.dumpByte(tt)
 		switch k.Tt {
 		case object.TagFloat:
