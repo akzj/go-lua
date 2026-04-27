@@ -149,13 +149,14 @@ startfunc:
 	k := cl.Proto.Constants
 	code := cl.Proto.Code
 	base := ci.Func + 1
+	trap := ci.Trap // local trap flag — avoids checking L.HookMask every instruction
 
 	// Mirrors: luaG_tracecall in ldebug.c — fire call hook at function entry.
 	// For tail calls, preTailCall sets CISTTail and savedpc=0, then jumps here.
 	// The call hook for non-tail calls is already fired by preCall (non-vararg)
 	// or OP_VARARGPREP (vararg). Only tail calls need this path.
 	// For vararg tail calls, defer to OP_VARARGPREP.
-	if L.HookMask != 0 && ci.CallStatus&state.CISTTail != 0 &&
+	if trap && ci.CallStatus&state.CISTTail != 0 &&
 		ci.SavedPC == 0 && !cl.Proto.IsVararg() {
 		callHook(L, ci)
 	}
@@ -165,13 +166,13 @@ startfunc:
 		ci.SavedPC++ // increment BEFORE hook check — mirrors C Lua vmfetch
 
 		// Hook dispatch: fire line/count hooks if active.
-		// Skip for OP_VARARGPREP — C Lua's luaG_tracecall returns 0 (trap=0)
-		// for vararg functions, so traceexec is not called for instruction 0.
-		// The call hook and OldPC adjustment happen inside OP_VARARGPREP instead.
+		// traceExec does NOT check AllowHook or OP_VARARGPREP, so we
+		// must keep those guards here.
 		// Mirrors: vmfetch trap check in lvm.c + luaG_tracecall in ldebug.c
-		if L.HookMask&(state.MaskLine|state.MaskCount) != 0 && L.AllowHook &&
-			opcode.GetOpCode(inst) != opcode.OP_VARARGPREP {
-			traceExec(L, ci)
+		if trap {
+			if L.AllowHook && opcode.GetOpCode(inst) != opcode.OP_VARARGPREP {
+				trap = traceExec(L, ci)
+			}
 		}
 		op := opcode.GetOpCode(inst)
 		ra := base + opcode.GetArgA(inst)
@@ -1019,6 +1020,7 @@ startfunc:
 
 		case opcode.OP_JMP:
 			ci.SavedPC += opcode.GetArgSJ(inst)
+			trap = ci.Trap // refresh after jump (hooks may have changed)
 
 		// ===== For loops =====
 
@@ -1078,7 +1080,8 @@ startfunc:
 				ci = newci
 				goto startfunc
 			}
-			// C function already executed
+			// C function already executed — refresh trap (C func may have set hooks)
+			trap = ci.Trap
 
 		case opcode.OP_TAILCALL:
 			b := opcode.GetArgB(inst)

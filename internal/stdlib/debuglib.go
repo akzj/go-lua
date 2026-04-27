@@ -665,6 +665,15 @@ func debugSethook(L *luaapi.State) int {
 	L1.HookMask = mask
 	L1.BaseHookCount = count
 	L1.HookCount = count
+	// Set trap on all active Lua CallInfos so they pick up the new hook.
+	// Mirrors: luaD_sethook / settraps in C Lua.
+	if mask != 0 {
+		for ci := L1.CI; ci != nil; ci = ci.Prev {
+			if ci.IsLua() {
+				ci.Trap = true
+			}
+		}
+	}
 	// Do NOT set AllowHook here — if called from inside a hook,
 	// AllowHook must remain false until hookDispatch restores it.
 	// C Lua's db_sethook does not touch allowhook when setting hooks.
