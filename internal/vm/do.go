@@ -349,6 +349,7 @@ retry:
 		CheckStack(L, fsize)
 		ci := prepCallInfo(L, funcIdx, status, funcIdx+1+fsize)
 		ci.SavedPC = 0 // starting point
+		ci.Trap = (L.HookMask != 0)
 		// Complete missing arguments with nil
 		for ; narg < nfixparams; narg++ {
 			L.Stack[L.Top].Val = object.Nil
