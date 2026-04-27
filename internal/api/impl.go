@@ -139,17 +139,11 @@ func NewState() *State {
 	// without importing this package.
 
 	// GCStepFn: periodic GC during VM allocation loops.
-	// Runs a full GC cycle (mark/sweep + weak table clearing) AND drains
-	// pending finalizers (__gc). This is required for gc.lua tests
-	// where allocation loops depend on __gc setting a finish flag.
-	// The traverseThread function marks ALL allocated stack slots,
-	// preventing premature collection of live registers.
-	//
-	// Note: This uses FullGC (not incremental GCStep) because Lua tests
-	// and user code rely on finalizers running promptly during allocation
-	// loops. The debt-based pacer (GCPause/GCDebt) controls how often
-	// this runs — with GCPause=250, it triggers when memory reaches
-	// 2.5x live data, which is infrequent enough for good performance.
+	// Dispatches based on GC mode:
+	//   - Generational (KGC_GENMINOR): runs YoungCollection — only scans
+	//     young objects, O(new_allocs) not O(total_objects). Much faster.
+	//   - Incremental/Major: runs FullGC + SetPause (full mark-and-sweep).
+	// The debt-based pacer (GCPause/GCDebt) controls how often this runs.
 	ls.Global.GCCountdown = 5000 // countdown for periodic GC safety net
 	ls.Global.GCStepFn = func(thread *state.LuaState) {
 		g := thread.Global
@@ -157,23 +151,36 @@ func NewState() *State {
 			return
 		}
 		g.GCRunning = true
-		// NOTE: No clearStaleStack for periodic GC — traverseThread uses
-		// maxTop (conservative) which limits marking to active frames.
-		// clearStaleStack is only needed for explicit GC (collectgarbage()).
-		gc.FullGC(g, thread)
+
+		switch g.GCKind {
+		case object.KGC_GENMINOR:
+			// Generational mode: run a minor (young) collection.
+			// Only scans young objects — O(new_allocs), not O(total_objects).
+			gc.YoungCollection(g, thread)
+			// Set debt for next cycle (YoungCollection may have promoted
+			// to KGC_GENMAJOR via checkminormajor).
+			gc.SetMinorDebt(g)
+		case object.KGC_GENMAJOR:
+			// Major mode (promoted from minor): do full gen collection
+			// then re-enter minor mode.
+			gc.FullGen(g, thread)
+			gc.SetMinorDebt(g)
+		default:
+			// Incremental mode: full collection.
+			gc.FullGC(g, thread)
+			gc.SetPause(g)
+		}
+
 		g.GCRunning = false
-		// Recalculate debt based on live data so GC doesn't re-trigger
-		// immediately on the next checkGC call.
-		gc.SetPause(g)
+
 		// Drain pending finalizers — objects moved to tobefnz by
-		// separateTobeFnz in FullGC need their __gc called.
+		// separateTobeFnz need their __gc called.
 		pub, _ := thread.APIState.(*State)
 		if pub == nil {
 			pub = &State{Internal: thread}
 			thread.APIState = pub
 		}
 		pub.callAllPendingFinalizers()
-		// V5 GC handles weak tables natively via clearByValues/clearByKeys.
 	}
 
 	// GCDrainFn: just drain pending finalizers.
@@ -192,6 +199,12 @@ func NewState() *State {
 			L.strtab().RemoveString(ts)
 		}
 	}
+
+	// Switch to generational GC mode (default for better performance).
+	// Instead of calling gc.ChangeMode (which runs a full GC cycle via EnterGen),
+	// we directly set up gen mode. Mark all existing objects as OLD and set
+	// gen boundaries so new allocations will be young (collected cheaply).
+	gc.InitGenMode(ls.Global)
 
 	return L
 }
