@@ -16,14 +16,14 @@ import (
 
 func InitGenMode(g *state.GlobalState) {
 	// Mark all existing objects as OLD
-	for obj := g.Allgc; obj != nil; obj = obj.GC().Next {
-		obj.GC().Age = object.G_OLD
+	for obj := g.Allgc; obj != nil; obj = object.FastGC(obj).Next {
+		object.FastGC(obj).Age = object.G_OLD
 	}
-	for obj := g.FinObj; obj != nil; obj = obj.GC().Next {
-		obj.GC().Age = object.G_OLD
+	for obj := g.FinObj; obj != nil; obj = object.FastGC(obj).Next {
+		object.FastGC(obj).Age = object.G_OLD
 	}
-	for obj := g.TobeFnz; obj != nil; obj = obj.GC().Next {
-		obj.GC().Age = object.G_OLD
+	for obj := g.TobeFnz; obj != nil; obj = object.FastGC(obj).Next {
+		object.FastGC(obj).Age = object.G_OLD
 	}
 
 	// Set gen mode state
@@ -55,7 +55,7 @@ func sweep2old(g *state.GlobalState, p *object.GCObject) {
 	otherwhite := otherWhite(g)
 	for *p != nil {
 		obj := *p
-		h := obj.GC()
+		h := object.FastGC(obj)
 		if isDeadMark(otherwhite, h.Marked) {
 			// Dead — unlink
 			*p = h.Next
@@ -115,7 +115,7 @@ func sweepgen(g *state.GlobalState, p *object.GCObject, limit object.GCObject,
 		if obj == nil {
 			break
 		}
-		h := obj.GC()
+		h := object.FastGC(obj)
 
 		otherwhite := otherWhite(g)
 		if isDeadMark(otherwhite, h.Marked) {
@@ -166,7 +166,7 @@ func sweepgen(g *state.GlobalState, p *object.GCObject, limit object.GCObject,
 func correctgraylist(list *[]object.GCObject) {
 	n := 0
 	for _, obj := range *list {
-		h := obj.GC()
+		h := object.FastGC(obj)
 		if h.IsWhite() {
 			// Remove white objects
 			continue
@@ -214,11 +214,11 @@ func correctgraylists(g *state.GlobalState) {
 // ---------------------------------------------------------------------------
 
 func markold(g *state.GlobalState, from, to object.GCObject) {
-	for p := from; p != to; p = p.GC().Next {
+	for p := from; p != to; p = object.FastGC(p).Next {
 		if p == nil {
 			break
 		}
-		h := p.GC()
+		h := object.FastGC(p)
 		if h.Age == object.G_OLD1 {
 			h.Age = object.G_OLD // now they are old
 			if h.IsBlack() {
@@ -419,14 +419,14 @@ func minor2inc(g *state.GlobalState, L *state.LuaState, kind byte) {
 	g.FinObjOld1 = nil
 	g.FinObjROld = nil
 	// Reset all ages to G_NEW
-	for obj := g.Allgc; obj != nil; obj = obj.GC().Next {
-		obj.GC().Age = object.G_NEW
+	for obj := g.Allgc; obj != nil; obj = object.FastGC(obj).Next {
+		object.FastGC(obj).Age = object.G_NEW
 	}
-	for obj := g.FinObj; obj != nil; obj = obj.GC().Next {
-		obj.GC().Age = object.G_NEW
+	for obj := g.FinObj; obj != nil; obj = object.FastGC(obj).Next {
+		object.FastGC(obj).Age = object.G_NEW
 	}
-	for obj := g.TobeFnz; obj != nil; obj = obj.GC().Next {
-		obj.GC().Age = object.G_NEW
+	for obj := g.TobeFnz; obj != nil; obj = object.FastGC(obj).Next {
+		object.FastGC(obj).Age = object.G_NEW
 	}
 	entersweep(g)
 }
