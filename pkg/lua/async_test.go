@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -929,6 +930,137 @@ func TestFuture_CancelAlreadyDone(t *testing.T) {
 		t.Fatalf("expected 'hello', got %v", val)
 	}
 }
+
+func TestFuture_CancelWithContext(t *testing.T) {
+	// Cancel should propagate to context
+	f, ctx := NewFutureWithContext(context.Background())
+
+	// Context should not be done yet
+	select {
+	case <-ctx.Done():
+		t.Fatal("context should not be done yet")
+	default:
+	}
+
+	// Cancel the future
+	f.Cancel()
+
+	// Context should now be done
+	select {
+	case <-ctx.Done():
+		// good
+	default:
+		t.Fatal("context should be done after Cancel")
+	}
+
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", ctx.Err())
+	}
+
+	// Future should report cancelled
+	if !f.IsCancelled() {
+		t.Fatal("expected IsCancelled")
+	}
+	_, err := f.Result()
+	if err != ErrCancelled {
+		t.Fatalf("expected ErrCancelled, got %v", err)
+	}
+}
+
+func TestFuture_ResolveReleasesContext(t *testing.T) {
+	// Resolve should also cancel context (resource cleanup)
+	f, ctx := NewFutureWithContext(context.Background())
+	f.Resolve("hello")
+
+	select {
+	case <-ctx.Done():
+		// good — context released
+	default:
+		t.Fatal("context should be done after Resolve")
+	}
+
+	// But future should NOT be cancelled
+	if f.IsCancelled() {
+		t.Fatal("should not be cancelled, was resolved")
+	}
+	val, err := f.Result()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != "hello" {
+		t.Fatalf("expected 'hello', got %v", val)
+	}
+}
+
+func TestFuture_RejectReleasesContext(t *testing.T) {
+	f, ctx := NewFutureWithContext(context.Background())
+	f.Reject(fmt.Errorf("boom"))
+
+	select {
+	case <-ctx.Done():
+		// good
+	default:
+		t.Fatal("context should be done after Reject")
+	}
+
+	if f.IsCancelled() {
+		t.Fatal("should not be IsCancelled, was rejected with custom error")
+	}
+}
+
+func TestFuture_ContextCancelledByParent(t *testing.T) {
+	// If parent context is cancelled, derived context is also cancelled
+	// but Future itself is NOT automatically cancelled (user must handle this)
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	f, ctx := NewFutureWithContext(parentCtx)
+
+	parentCancel()
+
+	select {
+	case <-ctx.Done():
+		// good — derived context cancelled via parent
+	default:
+		t.Fatal("derived context should be done when parent is cancelled")
+	}
+
+	// Future is NOT automatically cancelled (it doesn't watch the context)
+	if f.IsDone() {
+		t.Fatal("future should not be done just because parent context was cancelled")
+	}
+}
+
+func TestFuture_CancelWithContext_HTTPSimulation(t *testing.T) {
+	// Simulate an HTTP-like operation that respects context cancellation
+	f, ctx := NewFutureWithContext(context.Background())
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		close(started)
+		// Simulate blocking operation that respects context
+		select {
+		case <-ctx.Done():
+			f.Reject(ctx.Err())
+		case <-time.After(10 * time.Second):
+			f.Resolve("should not reach here")
+		}
+		close(done)
+	}()
+
+	<-started
+	// Cancel the future (simulates deps change in Lumina)
+	f.Cancel()
+
+	// Goroutine should exit quickly
+	select {
+	case <-done:
+		// good
+	case <-time.After(time.Second):
+		t.Fatal("goroutine should have exited after cancel")
+	}
+}
+
 
 func TestScheduler_Cancel(t *testing.T) {
 	L := NewState()
