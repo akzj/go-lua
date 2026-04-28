@@ -22,8 +22,11 @@ type Scheduler struct {
 	L       *State
 	pending []pendingCoroutine
 	buf     []pendingCoroutine // reusable buffer for double-buffered Tick
+	spawned []pendingCoroutine // coroutines spawned during Tick (via Spawn called from resumed Go funcs)
 	OnError func(err error)    // called when a coroutine errors during Tick
 	nextID  int                // monotonic ID for CoroutineHandle
+	inTick  bool               // true while Tick is executing
+	destroyed bool             // true after Destroy is called
 }
 
 type pendingCoroutine struct {
@@ -82,6 +85,7 @@ func (s *Scheduler) Spawn(L *State) (*CoroutineHandle, error) {
 // Call this in your event loop / main loop.
 // Uses double-buffering to avoid per-frame allocation.
 func (s *Scheduler) Tick() int {
+	s.inTick = true
 	s.buf = s.buf[:0]
 
 	for _, pc := range s.pending {
@@ -97,6 +101,9 @@ func (s *Scheduler) Tick() int {
 						if s.OnError != nil {
 							s.OnError(err2)
 						}
+						if s.destroyed {
+							break
+						}
 						continue
 					}
 				} else {
@@ -105,6 +112,9 @@ func (s *Scheduler) Tick() int {
 					if err2 := s.collectResumed(status, pc, &s.buf); err2 != nil {
 						if s.OnError != nil {
 							s.OnError(err2)
+						}
+						if s.destroyed {
+							break
 						}
 						continue
 					}
@@ -116,15 +126,34 @@ func (s *Scheduler) Tick() int {
 					if s.OnError != nil {
 						s.OnError(err)
 					}
+					if s.destroyed {
+						break
+					}
 					continue
 				}
+			}
+			if s.destroyed {
+				break
 			}
 		} else {
 			s.buf = append(s.buf, pc)
 		}
 	}
 
+	s.inTick = false
+
+	if s.destroyed {
+		return 0
+	}
+
 	s.pending, s.buf = s.buf, s.pending[:0]
+
+	// Merge any coroutines spawned during this tick
+	if len(s.spawned) > 0 {
+		s.pending = append(s.pending, s.spawned...)
+		s.spawned = s.spawned[:0]
+	}
+
 	return len(s.pending)
 }
 
@@ -173,12 +202,17 @@ func (s *Scheduler) handleResumeResult(status int, pc pendingCoroutine) error {
 			}
 			pc.thread.Pop(pc.thread.GetTop()) // clean yielded values
 		}
-		s.pending = append(s.pending, pendingCoroutine{
+		newPC := pendingCoroutine{
 			thread: pc.thread,
 			future: future,
 			ref:    pc.ref,
 			id:     pc.id,
-		})
+		}
+		if s.inTick {
+			s.spawned = append(s.spawned, newPC)
+		} else {
+			s.pending = append(s.pending, newPC)
+		}
 		return nil
 	}
 
@@ -216,6 +250,7 @@ func (s *Scheduler) Cancel(h *CoroutineHandle) {
 
 // Destroy cancels all pending coroutines and releases their registry references.
 // Call this when shutting down or hot-reloading.
+// Safe to call from within an OnError callback during Tick.
 func (s *Scheduler) Destroy() {
 	for _, pc := range s.pending {
 		s.L.Unref(RegistryIndex, pc.ref)
@@ -223,8 +258,16 @@ func (s *Scheduler) Destroy() {
 			pc.future.Cancel()
 		}
 	}
+	for _, pc := range s.spawned {
+		s.L.Unref(RegistryIndex, pc.ref)
+		if pc.future != nil {
+			pc.future.Cancel()
+		}
+	}
 	s.pending = nil
 	s.buf = nil
+	s.spawned = nil
+	s.destroyed = true
 }
 
 // Pending returns the number of pending coroutines.
