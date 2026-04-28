@@ -233,3 +233,45 @@ func TestLogInfoNoArgs(t *testing.T) {
 		t.Errorf("expected location prefix in output, got: %s", output)
 	}
 }
+
+func TestLogSetDepth(t *testing.T) {
+	L := newState(t)
+	defer L.Close()
+
+	var buf bytes.Buffer
+	L.Writer = &buf
+
+	// Default depth=1: nested tables show {...}
+	doString(t, L, `
+		local log = require("log")
+		log.info({a = {b = {c = 1}}})
+	`)
+	out1 := buf.String()
+	if !strings.Contains(out1, "{...}") {
+		t.Errorf("default depth should show {...}, got: %s", out1)
+	}
+
+	// depth=3: should expand 3 levels deep
+	buf.Reset()
+	doString(t, L, `
+		local log = require("log")
+		log.set_depth(3)
+		log.info({a = {b = {c = 1}}})
+	`)
+	out2 := buf.String()
+	if !strings.Contains(out2, "c = 1") {
+		t.Errorf("depth=3 should expand 3 levels, got: %s", out2)
+	}
+
+	// depth=0: all tables show as {...}
+	buf.Reset()
+	doString(t, L, `
+		local log = require("log")
+		log.set_depth(0)
+		log.info({a = 1})
+	`)
+	out3 := buf.String()
+	if !strings.Contains(out3, "{...}") {
+		t.Errorf("depth=0 should show {...}, got: %s", out3)
+	}
+}

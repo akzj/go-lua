@@ -26,13 +26,18 @@ var logTimers sync.Map // map[string]time.Time
 // It is designed to be used as a preloaded module: require("log").
 func OpenLog(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{
-		"info":     logInfo,
-		"warn":     logWarn,
-		"error":    logError,
-		"debug":    logDebug,
-		"time":     logTime,
-		"time_end": logTimeEnd,
+		"info":      logInfo,
+		"warn":      logWarn,
+		"error":     logError,
+		"debug":     logDebug,
+		"time":      logTime,
+		"time_end":  logTimeEnd,
+		"set_depth": logSetDepth,
 	})
+
+	// Set default max depth (1) in registry.
+	L.PushInteger(1)
+	L.SetField(luaapi.RegistryIndex, "_log_max_depth")
 	return 1
 }
 
@@ -70,28 +75,42 @@ func logGetCallerInfo(L *luaapi.State) string {
 // Value formatting
 // ---------------------------------------------------------------------------
 
+// getLogMaxDepth reads the configured max table depth from the registry.
+// Returns 1 (default) if not set.
+func getLogMaxDepth(L *luaapi.State) int {
+	tp := L.GetField(luaapi.RegistryIndex, "_log_max_depth")
+	if tp == object.TypeNumber {
+		n, _ := L.ToInteger(-1)
+		L.Pop(1)
+		return int(n)
+	}
+	L.Pop(1)
+	return 1 // default
+}
+
 // logFormatArgs formats all Lua stack arguments as tab-separated strings.
 func logFormatArgs(L *luaapi.State) string {
+	maxDepth := getLogMaxDepth(L)
 	n := L.GetTop()
 	if n == 0 {
 		return ""
 	}
 	parts := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
-		parts = append(parts, logFormatValue(L, i, 0))
+		parts = append(parts, logFormatValue(L, i, 0, maxDepth))
 	}
 	return strings.Join(parts, "\t")
 }
 
-// logFormatValue formats a single Lua value with shallow table expansion.
-func logFormatValue(L *luaapi.State, idx int, depth int) string {
+// logFormatValue formats a single Lua value with configurable table expansion depth.
+func logFormatValue(L *luaapi.State, idx int, depth int, maxDepth int) string {
 	tp := L.Type(idx)
 	switch tp {
 	case object.TypeTable:
-		if depth > 0 {
-			return "{...}" // prevent infinite recursion
+		if depth >= maxDepth {
+			return "{...}" // depth limit reached
 		}
-		return logFormatTable(L, idx)
+		return logFormatTable(L, idx, depth, maxDepth)
 	case object.TypeString:
 		s, _ := L.ToString(idx)
 		return s
@@ -117,8 +136,8 @@ func logFormatValue(L *luaapi.State, idx int, depth int) string {
 	}
 }
 
-// logFormatTable formats a table with shallow key=value expansion.
-func logFormatTable(L *luaapi.State, idx int) string {
+// logFormatTable formats a table with key=value expansion up to maxDepth.
+func logFormatTable(L *luaapi.State, idx int, depth int, maxDepth int) string {
 	// Normalize to absolute index so it stays valid as we push/pop
 	if idx < 0 {
 		idx = L.GetTop() + idx + 1
@@ -138,7 +157,7 @@ func logFormatTable(L *luaapi.State, idx int) string {
 
 		// Stack: ... key(top-1) value(top)
 		keyStr := logFormatKey(L, -2)
-		valStr := logFormatValue(L, -1, 1) // depth=1 prevents recursion
+		valStr := logFormatValue(L, -1, depth+1, maxDepth)
 
 		parts = append(parts, keyStr+" = "+valStr)
 
@@ -189,6 +208,18 @@ func logInfo(L *luaapi.State) int  { return logPrint(L, "") }
 func logWarn(L *luaapi.State) int  { return logPrint(L, "WARN") }
 func logError(L *luaapi.State) int { return logPrint(L, "ERROR") }
 func logDebug(L *luaapi.State) int { return logPrint(L, "DEBUG") }
+
+// log.set_depth(n) — sets the maximum table recursion depth for formatting.
+// n=0 means all tables show as {...}. n=1 (default) expands one level. etc.
+func logSetDepth(L *luaapi.State) int {
+	n := int(L.CheckInteger(1))
+	if n < 0 {
+		n = 0
+	}
+	L.PushInteger(int64(n))
+	L.SetField(luaapi.RegistryIndex, "_log_max_depth")
+	return 0
+}
 
 // log.time([label]) — starts a named timer.
 func logTime(L *luaapi.State) int {
