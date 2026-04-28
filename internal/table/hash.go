@@ -611,11 +611,10 @@ func resizeTable(t *Table, newASize, newHSize int) {
 	oldNodes := t.Nodes
 	oldSize := t.GCHeader.ObjSize // capture before resize
 
-	// Allocate new array
+	// Allocate new array from pool
 	var newArray []object.TValue
 	if newASize > 0 {
-		// make() returns zeroed memory; object.Nil is the zero value (TagNil=0x00)
-		newArray = make([]object.TValue, newASize)
+		newArray = getArraySlice(newASize)
 	}
 
 	// Copy common elements from old array
@@ -658,6 +657,14 @@ func resizeTable(t *Table, newASize, newHSize int) {
 		insertKey(t, k, nd.Val)
 	}
 
+	// Pool old slices for reuse (after all re-insertions are complete)
+	if oldArray != nil {
+		putArraySlice(oldArray)
+	}
+	if oldNodes != nil {
+		putNodeSlice(oldNodes)
+	}
+
 	// Update pre-computed size for GC accounting and track delta
 	t.GCHeader.ObjSize = t.EstimateBytes()
 	delta := t.GCHeader.ObjSize - oldSize
@@ -678,9 +685,7 @@ func initHashPart(t *Table, size int) {
 		lsize = 30
 	}
 	actualSize := 1 << lsize
-	t.Nodes = make([]node, actualSize)
+	t.Nodes = getNodeSlice(actualSize)
 	t.LsizeNode = lsize
 	t.LastFree = actualSize
-	// No explicit zeroing needed: make() returns zeroed memory, and
-	// all default values are zero: TagNil=0x00, Nil=TValue{Tt:0x00}, Next=0.
 }
