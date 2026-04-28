@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestConsoleLog(t *testing.T) {
+func TestLogInfo(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -14,8 +14,8 @@ func TestConsoleLog(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.log("hello", 42)
+		local log = require("log")
+		log.info("hello", 42)
 	`)
 
 	output := buf.String()
@@ -31,7 +31,7 @@ func TestConsoleLog(t *testing.T) {
 	}
 }
 
-func TestConsoleLogTable(t *testing.T) {
+func TestLogInfoTable(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -39,8 +39,8 @@ func TestConsoleLogTable(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.log({name = "Alice", hp = 100})
+		local log = require("log")
+		log.info({name = "Alice", hp = 100})
 	`)
 
 	output := buf.String()
@@ -52,7 +52,7 @@ func TestConsoleLogTable(t *testing.T) {
 	}
 }
 
-func TestConsoleLogArray(t *testing.T) {
+func TestLogInfoArray(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -60,8 +60,8 @@ func TestConsoleLogArray(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.log({10, 20, 30})
+		local log = require("log")
+		log.info({10, 20, 30})
 	`)
 
 	output := buf.String()
@@ -73,7 +73,7 @@ func TestConsoleLogArray(t *testing.T) {
 	}
 }
 
-func TestConsoleWarnErrorDebug(t *testing.T) {
+func TestLogWarnErrorDebug(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -81,10 +81,10 @@ func TestConsoleWarnErrorDebug(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.warn("low hp")
-		console.error("crash!")
-		console.debug("trace")
+		local log = require("log")
+		log.warn("low hp")
+		log.error("crash!")
+		log.debug("trace")
 	`)
 
 	output := buf.String()
@@ -108,7 +108,7 @@ func TestConsoleWarnErrorDebug(t *testing.T) {
 	}
 }
 
-func TestConsoleTime(t *testing.T) {
+func TestLogTime(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -116,11 +116,11 @@ func TestConsoleTime(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.time("test")
+		local log = require("log")
+		log.time("test")
 		local x = 0
 		for i = 1, 1000 do x = x + i end
-		console.time_end("test")
+		log.time_end("test")
 	`)
 
 	output := buf.String()
@@ -129,7 +129,7 @@ func TestConsoleTime(t *testing.T) {
 	}
 }
 
-func TestConsoleTimeDefault(t *testing.T) {
+func TestLogTimeDefault(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -137,9 +137,9 @@ func TestConsoleTimeDefault(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.time()
-		console.time_end()
+		local log = require("log")
+		log.time()
+		log.time_end()
 	`)
 
 	output := buf.String()
@@ -148,7 +148,7 @@ func TestConsoleTimeDefault(t *testing.T) {
 	}
 }
 
-func TestConsoleTimeNotFound(t *testing.T) {
+func TestLogTimeNotFound(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -156,8 +156,8 @@ func TestConsoleTimeNotFound(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.time_end("nonexistent")
+		local log = require("log")
+		log.time_end("nonexistent")
 	`)
 
 	output := buf.String()
@@ -166,7 +166,7 @@ func TestConsoleTimeNotFound(t *testing.T) {
 	}
 }
 
-func TestConsoleLogNested(t *testing.T) {
+func TestLogInfoNested(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -174,8 +174,8 @@ func TestConsoleLogNested(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.log({a = {1, 2, 3}})
+		local log = require("log")
+		log.info({a = {1, 2, 3}})
 	`)
 
 	output := buf.String()
@@ -185,7 +185,7 @@ func TestConsoleLogNested(t *testing.T) {
 	}
 }
 
-func TestConsoleLogMixedTypes(t *testing.T) {
+func TestLogInfoMixedTypes(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -193,8 +193,8 @@ func TestConsoleLogMixedTypes(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.log(nil, true, false, 3.14, "str")
+		local log = require("log")
+		log.info(nil, true, false, 3.14, "str")
 	`)
 
 	output := buf.String()
@@ -215,7 +215,7 @@ func TestConsoleLogMixedTypes(t *testing.T) {
 	}
 }
 
-func TestConsoleLogNoArgs(t *testing.T) {
+func TestLogInfoNoArgs(t *testing.T) {
 	L := newState(t)
 	defer L.Close()
 
@@ -223,8 +223,8 @@ func TestConsoleLogNoArgs(t *testing.T) {
 	L.Writer = &buf
 
 	doString(t, L, `
-		local console = require("console")
-		console.log()
+		local log = require("log")
+		log.info()
 	`)
 
 	output := buf.String()
