@@ -144,7 +144,7 @@ func NewState() *State {
 	//     young objects, O(new_allocs) not O(total_objects). Much faster.
 	//   - Incremental/Major: runs FullGC + SetPause (full mark-and-sweep).
 	// The debt-based pacer (GCPause/GCDebt) controls how often this runs.
-	ls.Global.GCCountdown = 5000 // countdown for periodic GC safety net
+	ls.Global.GCCountdown = 50000 // countdown for periodic GC safety net
 	ls.Global.GCStepFn = func(thread *state.LuaState) {
 		g := thread.Global
 		if g.GCRunning || g.GCRunningFinalizer || g.GCStopped {
