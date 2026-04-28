@@ -274,22 +274,16 @@ func getFunc(L *state.LuaState, funcIdx int) object.TValue {
 	return L.Stack[funcIdx].Val
 }
 
-// prepCallInfo allocates and initializes a new CallInfo.
-func prepCallInfo(L *state.LuaState, funcIdx int, status uint32, top int) *state.CallInfo {
-	// Inline nextCI: state.NewCI already handles reuse + allocation and sets L.CI.
-	ci := state.NewCI(L)
-	ci.Func = funcIdx
-	ci.CallStatus = status
-	ci.Top = top
-	return ci
-}
-
 // precallC handles the call to a C function (Go function).
 // Executes the function immediately and calls posCall.
 func precallC(L *state.LuaState, funcIdx int, status uint32, f state.CFunction) int {
 	// Ensure minimum stack size
 	CheckStack(L, luaMinStack)
-	ci := prepCallInfo(L, funcIdx, status|state.CISTC, L.Top+luaMinStack)
+	// Inlined prepCallInfo for inlining budget (was cost 97 > budget 80)
+	ci := state.NewCI(L)
+	ci.Func = funcIdx
+	ci.CallStatus = status | state.CISTC
+	ci.Top = L.Top + luaMinStack
 	// Fire call hook if active
 	if L.HookMask&state.MaskCall != 0 {
 		callHook(L, ci)
@@ -339,7 +333,11 @@ retry:
 		nfixparams := int(p.NumParams)
 		fsize := int(p.MaxStackSize)
 		CheckStack(L, fsize)
-		ci := prepCallInfo(L, funcIdx, status, funcIdx+1+fsize)
+		// Inlined prepCallInfo for inlining budget (was cost 97 > budget 80)
+		ci := state.NewCI(L)
+		ci.Func = funcIdx
+		ci.CallStatus = status
+		ci.Top = funcIdx + 1 + fsize
 		ci.SavedPC = 0 // starting point
 		ci.Trap = (L.HookMask != 0)
 		// Complete missing arguments with nil

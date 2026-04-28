@@ -1135,3 +1135,224 @@ func TestScheduler_CoroutineRequire(t *testing.T) {
 		t.Fatalf("expected 42, got %v (%T)", val, val)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Edge case: Spawn during Tick (Bug 1)
+// ---------------------------------------------------------------------------
+
+func TestScheduler_SpawnDuringTick(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+
+	// Register a Go function that spawns a new coroutine when called
+	L.PushFunction(func(L *State) int {
+		// Define and push a function that sets a global
+		err := L.DoString(`function spawned_task() spawned_result = "hello" end`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		L.GetGlobal("spawned_task")
+		_, err = sched.Spawn(L)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0
+	})
+	L.SetGlobal("spawn_sibling")
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f1)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		function task()
+			local f = get_future()
+			async.await(f)
+			spawn_sibling()  -- this calls Spawn during Tick
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	if _, err := sched.Spawn(L); err != nil {
+		t.Fatal(err)
+	}
+
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending, got %d", sched.Pending())
+	}
+
+	// Resolve the future so Tick will resume the coroutine
+	f1.Resolve("done")
+	sched.Tick()
+
+	// The spawned coroutine completed immediately (no yield), so
+	// spawned_result should be set. The key assertion is that the
+	// spawned coroutine was NOT lost.
+	L.GetGlobal("spawned_result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != "hello" {
+		t.Fatalf("expected 'hello' from spawned coroutine, got %v", val)
+	}
+}
+
+func TestScheduler_SpawnDuringTick_Yielding(t *testing.T) {
+	// Variant: spawned coroutine yields (has a future), so it must
+	// survive in pending after the Tick swap.
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+	f2 := NewFuture() // for the spawned coroutine
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f2)
+		return 1
+	})
+	L.SetGlobal("get_f2")
+
+	// Register a Go function that spawns a yielding coroutine
+	L.PushFunction(func(L *State) int {
+		err := L.DoString(`
+			function spawned_yielding()
+				local async = require("async")
+				spawned_yield_result = async.await(get_f2())
+			end
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		L.GetGlobal("spawned_yielding")
+		_, err = sched.Spawn(L)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0
+	})
+	L.SetGlobal("spawn_yielding_sibling")
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f1)
+		return 1
+	})
+	L.SetGlobal("get_f1")
+
+	err := L.DoString(`
+		local async = require("async")
+		function task()
+			local f = get_f1()
+			async.await(f)
+			spawn_yielding_sibling()
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	if _, err := sched.Spawn(L); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve f1 so Tick resumes task, which spawns the yielding sibling
+	f1.Resolve("go")
+	remaining := sched.Tick()
+
+	// The spawned coroutine yielded on f2, so it must be in pending
+	if remaining != 1 {
+		t.Fatalf("expected 1 pending (spawned yielding coroutine), got %d", remaining)
+	}
+
+	// Now resolve f2
+	f2.Resolve("spawned value")
+	remaining = sched.Tick()
+
+	if remaining != 0 {
+		t.Fatalf("expected 0 pending, got %d", remaining)
+	}
+
+	L.GetGlobal("spawned_yield_result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != "spawned value" {
+		t.Fatalf("expected 'spawned value', got %v", val)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Edge case: Destroy during Tick (Bug 2)
+// ---------------------------------------------------------------------------
+
+func TestScheduler_DestroyDuringTick(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+	f2 := NewFuture()
+
+	// OnError calls Destroy — this is the scenario that caused double-Unref
+	sched.OnError = func(err error) {
+		sched.Destroy()
+	}
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f1)
+		return 1
+	})
+	L.SetGlobal("get_f1")
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f2)
+		return 1
+	})
+	L.SetGlobal("get_f2")
+
+	err := L.DoString(`
+		local async = require("async")
+		function good_task()
+			async.await(get_f1())
+		end
+		function error_task()
+			async.await(get_f2())
+			error("boom in coroutine")
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Spawn both: error_task will error after resume, good_task is also pending
+	L.GetGlobal("error_task")
+	sched.Spawn(L) //nolint:errcheck
+	L.GetGlobal("good_task")
+	sched.Spawn(L) //nolint:errcheck
+
+	if sched.Pending() != 2 {
+		t.Fatalf("expected 2 pending, got %d", sched.Pending())
+	}
+
+	// Resolve both futures so both will be resumed in the same Tick
+	f1.Resolve("ok")
+	f2.Resolve("ok")
+
+	// Tick should NOT panic even though OnError calls Destroy mid-iteration
+	sched.Tick()
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending after destroy, got %d", sched.Pending())
+	}
+}
