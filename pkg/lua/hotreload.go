@@ -4,6 +4,9 @@ import (
 	"fmt"
 
 	"github.com/akzj/go-lua/internal/closure"
+	"github.com/akzj/go-lua/internal/gc"
+	"github.com/akzj/go-lua/internal/object"
+	"github.com/akzj/go-lua/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -12,7 +15,11 @@ import (
 
 // ReloadPlan represents a prepared hot-reload operation.
 // Created by PrepareReload, executed by Commit.
-// The plan is read-only until Commit — no state is modified during preparation.
+//
+// Note: The new module's init code has already been executed during
+// PrepareReload. The plan controls only whether function replacements
+// are applied (Commit) or discarded (Abort). Side effects from the
+// new module's init code cannot be rolled back by Abort.
 type ReloadPlan struct {
 	Module   string     // module name
 	Pairs    []FuncPair // matched old↔new function pairs
@@ -73,10 +80,17 @@ func (p *ReloadPlan) IncompatibleCount() int {
 // PrepareReload — Phase 1 (read-only, no state modification)
 // ---------------------------------------------------------------------------
 
-// PrepareReload compiles new module code and creates a reload plan.
-// This is Phase 1 of the two-phase commit — NO persistent state is modified.
-// The old module remains in package.loaded throughout.
-// Returns error if the module is not loaded or re-loading fails.
+// PrepareReload compiles and loads new module code, creating a reload plan.
+// This is Phase 1 of the two-phase commit — the old module table remains in
+// package.loaded and no function replacements occur until Commit().
+//
+// IMPORTANT: This method executes the new module's initialization code via
+// require(). Any side effects in the module's init code (global writes, I/O,
+// registry modifications, etc.) will persist even if Abort() is called
+// afterward. Only the function replacement step is deferred to Commit().
+//
+// Returns error if the module is not loaded or compilation/loading fails.
+// On failure, the old module is fully restored in package.loaded.
 func (L *State) PrepareReload(moduleName string) (*ReloadPlan, error) {
 	top := L.GetTop()
 	defer L.SetTop(top)
@@ -236,12 +250,26 @@ func (p *ReloadPlan) Commit() *ReloadResult {
 	L.RawGetI(RegistryIndex, int64(p.newModule))
 	newModIdx := L.GetTop()
 
+	// Get internal LuaState for GC barriers and coroutine safety checks
+	ls := L.s.Internal.(*state.LuaState)
+
 	// 1. Replace compatible function pairs
 	for _, pair := range p.Pairs {
 		if !pair.Compatible {
 			result.Skipped++
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("skipped %q: %s", pair.Name, pair.Reason))
+			continue
+		}
+
+		// BUG-3 FIX: Check if this closure is currently active on any call
+		// stack. If so, ci.SavedPC indexes into the old Proto.Code; swapping
+		// the Proto would make SavedPC point to wrong/out-of-bounds instructions,
+		// causing a panic or silent corruption when the coroutine resumes.
+		if isClosureOnStack(ls, pair.oldClosure) {
+			result.Skipped++
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("skipped %q: function is active on call stack (coroutine safety)", pair.Name))
 			continue
 		}
 
@@ -255,6 +283,13 @@ func (p *ReloadPlan) Commit() *ReloadResult {
 		// the update.
 		pair.oldClosure.Proto = pair.newClosure.Proto
 		pair.oldClosure.UpVals = pair.newClosure.UpVals
+
+		// BUG-1 FIX: GC write barrier. oldClosure may be black (already
+		// traversed by GC). The new Proto and UpVals may be white (not yet
+		// marked). Without a barrier, the tri-color invariant is violated and
+		// the new Proto could be collected as dead → dangling pointer crash.
+		// BarrierBack sets the closure back to gray for re-traversal.
+		gc.BarrierBack(ls.Global, pair.oldClosure)
 
 		result.Replaced++
 	}
@@ -288,6 +323,28 @@ func (p *ReloadPlan) Abort() {
 	p.committed = true
 	p.state.Unref(RegistryIndex, p.oldModule)
 	p.state.Unref(RegistryIndex, p.newModule)
+}
+
+// ---------------------------------------------------------------------------
+// Coroutine safety — active closure detection
+// ---------------------------------------------------------------------------
+
+// isClosureOnStack checks if the given closure is active on the given thread's
+// call stack. A closure is "active" if any CallInfo in the chain references it
+// as its function. Swapping the Proto of an active closure would invalidate
+// ci.SavedPC (which indexes into Proto.Code), causing panics or corruption.
+func isClosureOnStack(ls *state.LuaState, target *closure.LClosure) bool {
+	for ci := &ls.BaseCI; ci != nil; ci = ci.Next {
+		if ci.Func >= 0 && ci.Func < len(ls.Stack) {
+			val := ls.Stack[ci.Func].Val
+			if val.Tt == object.TagLuaClosure {
+				if cl, ok := val.Obj.(*closure.LClosure); ok && cl == target {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

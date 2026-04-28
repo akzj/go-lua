@@ -1,6 +1,7 @@
 package lua_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/akzj/go-lua/pkg/lua"
@@ -591,5 +592,368 @@ func TestHotReload_LuaPrepareCommit(t *testing.T) {
 	`)
 	if v := getGlobalInt(t, L, "plan_check"); v != 2 {
 		t.Fatalf("expected 2, got %d", v)
+	}
+
+}
+
+// ---------------------------------------------------------------------------
+// New comprehensive tests for bug fixes and edge cases
+// ---------------------------------------------------------------------------
+
+// Test 1: Shared upvalues between functions — after reload, both functions
+// should still share the same upvalue (the old count variable).
+func TestReloadModule_SharedUpvalues(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		package.preload["shared"] = function()
+			local M = {}
+			local count = 0
+			function M.inc() count = count + 1; return count end
+			function M.get() return count end
+			return M
+		end
+	`)
+	mustDoString(t, L, `
+		local m = require("shared")
+		m.inc(); m.inc()  -- count = 2
+	`)
+
+	// Reload with new inc (adds 10 instead of 1)
+	mustDoString(t, L, `
+		package.preload["shared"] = function()
+			local M = {}
+			local count = 0
+			function M.inc() count = count + 10; return count end
+			function M.get() return count end
+			return M
+		end
+	`)
+
+	result, err := L.ReloadModule("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Replaced != 2 {
+		t.Fatalf("expected 2 replaced, got %d", result.Replaced)
+	}
+
+	// Verify: count preserved at 2, inc now adds 10, and get still sees same count
+	mustDoString(t, L, `
+		local m = require("shared")
+		shared_get_after = m.get()       -- should be 2 (preserved)
+		m.inc()
+		shared_get_after_inc = m.get()   -- should be 12 (2 + 10)
+	`)
+
+	if v := getGlobalInt(t, L, "shared_get_after"); v != 2 {
+		t.Fatalf("expected count=2 after reload, got %d", v)
+	}
+	if v := getGlobalInt(t, L, "shared_get_after_inc"); v != 12 {
+		t.Fatalf("expected count=12 after inc, got %d", v)
+	}
+}
+
+// Test 2: GC stress during reload — force GC around reload to expose
+// write barrier issues (BUG-1 regression test).
+// Uses a function that returns a constant from the Proto (no upvalue),
+// so each reload's new code directly changes the return value.
+func TestReloadModule_GCStress(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		package.preload["gcmod"] = function()
+			local M = {}
+			function M.version() return 0 end
+			return M
+		end
+	`)
+	mustDoString(t, L, `require("gcmod")`)
+
+	for i := 0; i < 100; i++ {
+		mustDoString(t, L, fmt.Sprintf(`
+			package.preload["gcmod"] = function()
+				local M = {}
+				function M.version() return %d end
+				return M
+			end
+		`, i+1))
+
+		// Force GC before reload
+		mustDoString(t, L, `collectgarbage("collect")`)
+
+		_, err := L.ReloadModule("gcmod")
+		if err != nil {
+			t.Fatalf("reload %d: %v", i, err)
+		}
+
+		// Force GC after reload — this is the critical moment where
+		// a missing write barrier would cause the new Proto to be swept
+		mustDoString(t, L, `collectgarbage("collect")`)
+
+		// Verify the function returns the new constant (from new Proto)
+		mustDoString(t, L, `gc_result = require("gcmod").version()`)
+		expected := int64(i + 1)
+		got := getGlobalInt(t, L, "gc_result")
+		if got != expected {
+			t.Fatalf("reload %d: expected %d, got %d", i, expected, got)
+		}
+	}
+}
+
+// Test 3: Stress test — 100 reloads preserving state
+func TestReloadModule_Stress100(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		package.preload["stress"] = function()
+			local M = {}
+			local counter = 0
+			function M.inc() counter = counter + 1; return counter end
+			function M.get() return counter end
+			return M
+		end
+	`)
+	mustDoString(t, L, `
+		local m = require("stress")
+		for i = 1, 10 do m.inc() end  -- counter = 10
+	`)
+
+	for i := 0; i < 100; i++ {
+		mustDoString(t, L, fmt.Sprintf(`
+			package.preload["stress"] = function()
+				local M = {}
+				local counter = 0
+				function M.inc() counter = counter + %d; return counter end
+				function M.get() return counter end
+				return M
+			end
+		`, i+1))
+
+		_, err := L.ReloadModule("stress")
+		if err != nil {
+			t.Fatalf("reload %d: %v", i, err)
+		}
+	}
+
+	// counter should be preserved through all reloads (still 10)
+	// inc should now add 100 (last reload: i=99 → i+1=100)
+	mustDoString(t, L, `
+		local m = require("stress")
+		stress_before = m.get()
+		m.inc()
+		stress_after = m.get()
+	`)
+
+	if v := getGlobalInt(t, L, "stress_before"); v != 10 {
+		t.Fatalf("expected counter=10, got %d", v)
+	}
+	if v := getGlobalInt(t, L, "stress_after"); v != 110 {
+		t.Fatalf("expected 110 (10+100), got %d", v)
+	}
+}
+
+// Test 4: PrepareReload side effects — documents that init code runs during
+// Prepare even if Abort is called (BUG-2 documentation test).
+func TestPrepareReload_SideEffects(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		SIDE_EFFECT = 0
+		package.preload["sidemod"] = function()
+			SIDE_EFFECT = SIDE_EFFECT + 1
+			local M = {}
+			function M.get() return SIDE_EFFECT end
+			return M
+		end
+	`)
+	mustDoString(t, L, `require("sidemod")`) // SIDE_EFFECT = 1
+
+	// Update preload (same code — will increment SIDE_EFFECT again)
+	mustDoString(t, L, `
+		package.preload["sidemod"] = function()
+			SIDE_EFFECT = SIDE_EFFECT + 1
+			local M = {}
+			function M.get() return SIDE_EFFECT end
+			return M
+		end
+	`)
+
+	plan, err := L.PrepareReload("sidemod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Abort() // abort — but side effect already happened
+
+	// SIDE_EFFECT is 2 because PrepareReload ran the init code via require()
+	if v := getGlobalInt(t, L, "SIDE_EFFECT"); v != 2 {
+		t.Fatalf("expected SIDE_EFFECT=2 (init ran during prepare), got %d", v)
+	}
+}
+
+// Test 5: Module with metatables — documents that only top-level function
+// entries in the module table are matched, not metatable functions.
+func TestReloadModule_WithMetatable(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		package.preload["metamod"] = function()
+			local M = {}
+			local internal = {x = 10}
+			setmetatable(M, {
+				__index = function(t, k)
+					if k == "x" then return internal.x end
+				end
+			})
+			function M.setX(v) internal.x = v end
+			return M
+		end
+	`)
+	mustDoString(t, L, `
+		local m = require("metamod")
+		m.setX(42)
+		meta_before = m.x  -- 42 via __index
+	`)
+
+	if v := getGlobalInt(t, L, "meta_before"); v != 42 {
+		t.Fatalf("expected 42, got %d", v)
+	}
+
+	mustDoString(t, L, `
+		package.preload["metamod"] = function()
+			local M = {}
+			local internal = {x = 10}
+			setmetatable(M, {
+				__index = function(t, k)
+					if k == "x" then return internal.x * 2 end
+				end
+			})
+			function M.setX(v) internal.x = v end
+			return M
+		end
+	`)
+
+	result, err := L.ReloadModule("metamod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only setX is a top-level entry; __index is in the metatable
+	if result.Replaced != 1 {
+		t.Fatalf("expected 1 replaced (setX only), got %d", result.Replaced)
+	}
+
+	// After reload, setX is replaced but __index metatable is unchanged
+	// (it's the old metatable since we mutate the old module table in-place)
+	mustDoString(t, L, `
+		local m = require("metamod")
+		meta_after = m.x  -- still uses old __index → 42
+	`)
+	if v := getGlobalInt(t, L, "meta_after"); v != 42 {
+		t.Fatalf("expected 42 (old metatable preserved), got %d", v)
+	}
+}
+
+// Test 6: Upvalue that is itself a function — after reload, the old helper
+// function upvalue is transferred to the new closure.
+func TestReloadModule_FunctionUpvalue(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		package.preload["fnup"] = function()
+			local M = {}
+			local helper = function(x) return x * 2 end
+			function M.calc(x) return helper(x) end
+			return M
+		end
+	`)
+	mustDoString(t, L, `
+		local m = require("fnup")
+		fnup_before = m.calc(5)  -- 10
+	`)
+
+	if v := getGlobalInt(t, L, "fnup_before"); v != 10 {
+		t.Fatalf("expected 10, got %d", v)
+	}
+
+	mustDoString(t, L, `
+		package.preload["fnup"] = function()
+			local M = {}
+			local helper = function(x) return x * 3 end  -- changed!
+			function M.calc(x) return helper(x) + 1 end  -- changed!
+			return M
+		end
+	`)
+
+	_, err := L.ReloadModule("fnup")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// After reload: calc uses new code (helper(x) + 1)
+	// But helper upvalue was transferred from old → still x*2
+	// So result = 5*2 + 1 = 11 (old helper, new calc body)
+	mustDoString(t, L, `
+		local m = require("fnup")
+		fnup_after = m.calc(5)
+	`)
+
+	if v := getGlobalInt(t, L, "fnup_after"); v != 11 {
+		t.Fatalf("expected 11 (old helper x*2 + new body +1), got %d", v)
+	}
+}
+
+// Test 7: Upvalue count mismatch — function should be skipped as incompatible
+// when the new version has a different number of upvalues.
+func TestReloadModule_UpvalueCountMismatch(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	mustDoString(t, L, `
+		package.preload["upmismatch"] = function()
+			local M = {}
+			local a = 1
+			function M.get() return a end
+			return M
+		end
+	`)
+	mustDoString(t, L, `require("upmismatch")`)
+
+	// New version adds an extra upvalue
+	mustDoString(t, L, `
+		package.preload["upmismatch"] = function()
+			local M = {}
+			local a = 1
+			local b = 2
+			function M.get() return a + b end
+			return M
+		end
+	`)
+
+	result, err := L.ReloadModule("upmismatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Skipped != 1 {
+		t.Fatalf("expected 1 skipped (incompatible), got %d", result.Skipped)
+	}
+	if result.Replaced != 0 {
+		t.Fatalf("expected 0 replaced, got %d", result.Replaced)
+	}
+
+	// Old function should still work with original value
+	mustDoString(t, L, `
+		local m = require("upmismatch")
+		upmismatch_val = m.get()
+	`)
+
+	if v := getGlobalInt(t, L, "upmismatch_val"); v != 1 {
+		t.Fatalf("expected 1 (old function), got %d", v)
 	}
 }
