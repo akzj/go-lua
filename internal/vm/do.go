@@ -276,6 +276,7 @@ func getFunc(L *state.LuaState, funcIdx int) object.TValue {
 
 // precallC handles the call to a C function (Go function).
 // Executes the function immediately and calls posCall.
+// Returns -1 if the C function yielded via YieldFlag (no posCall performed).
 func precallC(L *state.LuaState, funcIdx int, status uint32, f state.CFunction) int {
 	// Ensure minimum stack size
 	CheckStack(L, luaMinStack)
@@ -290,6 +291,11 @@ func precallC(L *state.LuaState, funcIdx int, status uint32, f state.CFunction) 
 	}
 	// execute the C function
 	n := f(L)
+	// Fast-path yield: C function set YieldFlag instead of panicking.
+	// Do NOT call posCall — the CI frame must remain for unroll on resume.
+	if L.YieldFlag {
+		return -1
+	}
 	posCall(L, ci, n)
 	return n
 }
@@ -810,6 +816,11 @@ func Call(L *state.LuaState, funcIdx int, nResults int) {
 		ci.CallStatus |= state.CISTFresh
 		execute(L, ci)
 	}
+	// Fast-path yield: C function yielded via flag, coroutine is suspended.
+	// Don't decrement NCCalls — runProtected will restore it.
+	if L.YieldFlag {
+		return
+	}
 	L.NCCalls--
 }
 
@@ -869,6 +880,13 @@ func runProtected(L *state.LuaState, f func()) (status int) {
 		}
 	}()
 	f()
+	// Fast-path yield: f() returned normally but yield flag is set.
+	// The C function yielded via flag instead of panic(LuaYield{}).
+	if L.YieldFlag {
+		L.YieldFlag = false // consume the flag
+		status = state.StatusYield
+		L.NCCalls = oldNCCalls
+	}
 	return status
 }
 
@@ -1273,6 +1291,11 @@ func unroll(L *state.LuaState) {
 			// called UNCONDITIONALLY for all Lua CIs.
 			finishOp(L, ci)
 			execute(L, ci)
+			// Fast-path yield: execute returned because coroutine yielded again.
+			// Stop unrolling — the coroutine is suspended.
+			if L.Status == state.StatusYield {
+				return
+			}
 		}
 	}
 }
@@ -1291,6 +1314,19 @@ func Yield(L *state.LuaState, nResults int) {
 	ci := L.CI
 	ci.NYield = nResults
 	if !ci.IsLua() {
+		// Fast path: simple C function yield (no continuation) where the
+		// call chain is exactly: BaseCI → Lua frame → C frame (this yield).
+		// This is the common coroutine.yield() case inside a simple loop.
+		// Set flag and return normally — avoids panic/recover overhead.
+		// Complex cases (continuation, intermediate C frames like pcall/xpcall,
+		// nested calls) must use the panic path so runProtected/unroll handle
+		// them correctly.
+		if ci.K == nil {
+			if prev := ci.Prev; prev != nil && prev.IsLua() && prev.Prev == &L.BaseCI {
+				L.YieldFlag = true
+				return
+			}
+		}
 		// C function yield
 		panic(state.LuaYield{NResults: nResults})
 	}
