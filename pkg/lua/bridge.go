@@ -1,31 +1,13 @@
-// Bridge provides high-level type conversion between Go and Lua values.
+package lua
+
+// ---------------------------------------------------------------------------
+// Bridge — high-level type conversion between Go and Lua values.
 //
 // These functions eliminate the need for manual stack operations when
 // converting between Go and Lua types. They are convenience wrappers
 // over the low-level stack API.
-//
-// # PushAny — Go → Lua
-//
-// [State.PushAny] pushes any Go value onto the Lua stack, automatically
-// selecting the appropriate Lua type. Common types (bool, int, float64,
-// string) use fast paths without reflection.
-//
-// # ToAny — Lua → Go
-//
-// [State.ToAny] reads a Lua value from the stack and returns it as a Go
-// value. Tables are converted to map[string]any or []any depending on
-// their key structure.
-//
-// # ToStruct — Lua table → Go struct
-//
-// [State.ToStruct] reads a Lua table into a Go struct using field name
-// mapping (via `lua` struct tags or lowercased field names).
-//
-// # RegisterModule — register a Go module for require()
-//
-// [RegisterModule] registers a set of Go functions so that Lua code can
-// load them with require(name).
-package lua
+// ---------------------------------------------------------------------------
+
 
 import (
 	"fmt"
