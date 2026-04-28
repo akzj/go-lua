@@ -626,7 +626,16 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	}
 	p := cl.Proto
 
-	// Count hook — decrement first, then check for HOOKYIELD
+	// If hook yielded last time, clear the mark and skip this hook.
+	// Must be checked BEFORE count decrement — the instruction hasn't
+	// executed yet, so we shouldn't consume a count tick.
+	// Mirrors: luaG_traceexec CIST_HOOKYIELD check in ldebug.c
+	if ci.CallStatus&state.CISTHookYield != 0 {
+		ci.CallStatus &^= state.CISTHookYield
+		return true // keep trap active but skip hook this time
+	}
+
+	// Count hook
 	countHook := false
 	if mask&state.MaskCount != 0 {
 		L.HookCount--
@@ -637,15 +646,6 @@ func traceExec(L *state.LuaState, ci *state.CallInfo) bool {
 	}
 	if !countHook && mask&state.MaskLine == 0 {
 		return true // no line hook and count != 0
-	}
-
-	// If hook yielded last time, clear the mark and skip this hook.
-	// The instruction hasn't executed yet — VM will re-enter traceExec
-	// after the instruction runs.
-	// Mirrors: luaG_traceexec CIST_HOOKYIELD check in ldebug.c
-	if ci.CallStatus&state.CISTHookYield != 0 {
-		ci.CallStatus &^= state.CISTHookYield
-		return true // keep trap active but skip hook this time
 	}
 
 	if countHook {
