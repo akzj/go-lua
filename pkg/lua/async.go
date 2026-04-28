@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"errors"
 	"sync"
 )
@@ -15,12 +16,36 @@ type Future struct {
 	done    bool
 	value   any
 	err     error
-	waiters []chan struct{} // notify when done
+	waiters []chan struct{}     // notify when done
+	cancel  context.CancelFunc // cancels associated context when Future completes
 }
 
 // NewFuture creates a new unresolved Future.
 func NewFuture() *Future {
 	return &Future{}
+}
+
+// NewFutureWithContext creates a Future with an associated context.
+// The returned context is derived from parent and will be cancelled when
+// the Future completes (Resolve, Reject, or Cancel). Use this context in
+// Go goroutines to support cancellation of in-flight operations (HTTP
+// requests, IO, etc.).
+//
+// Example:
+//
+//	future, ctx := lua.NewFutureWithContext(parentCtx)
+//	go func() {
+//	    req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+//	    resp, err := http.DefaultClient.Do(req)
+//	    if err != nil {
+//	        future.Reject(err)
+//	        return
+//	    }
+//	    future.Resolve(body)
+//	}()
+func NewFutureWithContext(parent context.Context) (*Future, context.Context) {
+	ctx, cancelFn := context.WithCancel(parent)
+	return &Future{cancel: cancelFn}, ctx
 }
 
 // Resolve completes the Future with a value.
@@ -34,6 +59,9 @@ func (f *Future) Resolve(value any) {
 	}
 	f.done = true
 	f.value = value
+	if f.cancel != nil {
+		f.cancel() // release context resources
+	}
 	for _, w := range f.waiters {
 		close(w)
 	}
@@ -50,6 +78,9 @@ func (f *Future) Reject(err error) {
 	}
 	f.done = true
 	f.err = err
+	if f.cancel != nil {
+		f.cancel() // release context resources
+	}
 	for _, w := range f.waiters {
 		close(w)
 	}
@@ -66,6 +97,9 @@ func (f *Future) Cancel() {
 	}
 	f.done = true
 	f.err = ErrCancelled
+	if f.cancel != nil {
+		f.cancel()
+	}
 	for _, w := range f.waiters {
 		close(w)
 	}
