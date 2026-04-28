@@ -1,0 +1,56 @@
+# Benchmark Summary — 2026-04-28 (v0.9.3, main @ 4cece3d)
+
+## C Lua vs go-lua Comparison (os.clock, 5 runs median)
+
+| Benchmark                      | C Lua (ms) | go-lua (ms) | Ratio | Status |
+|-------------------------------|----------:|------------:|------:|--------|
+| Table Ops                      |      16.47 |       18.19 | 1.10x | 🟢 |
+| Method Call                    |      40.75 |       64.39 | 1.58x | 🟢 |
+| Pattern Match                  |      25.87 |       40.76 | 1.58x | 🟢 |
+| Fibonacci                      |      13.77 |       26.21 | 1.90x | 🟢 |
+| Closure Creation               |      32.24 |       62.84 | 1.95x | 🟢 |
+| For Loop                       |     118.92 |      232.73 | 1.96x | 🟢 |
+| Concat Multi                   |       5.25 |       11.29 | 2.15x | 🟡 |
+| String Concat                  |      10.25 |       29.42 | 2.87x | 🟡 |
+| GC                             |      24.21 |       71.91 | 2.97x | 🟡 |
+| Concat Operator                |      10.46 |       31.22 | 2.99x | 🟡 |
+| Coroutine Create Resume Finish |      72.63 |      345.22 | 4.75x | 🟡 |
+| Coroutine Create               |      45.54 |      241.54 | 5.30x | 🔴 |
+| Coroutine Yield Resume         |      33.37 |      226.00 | 6.77x | 🔴 |
+
+Geometric Mean: 2.54x
+
+## vs Previous (2026-04-22, feature/perf-round6 @ ae1bd63)
+
+Previous geometric mean: 2.86x → Current: 2.54x (11% improvement)
+
+Notable changes:
+- Table Ops:     5.33x → 1.10x  (huge improvement!)
+- Concat Operator: 6.70x → 2.99x (major improvement)
+- GC:            5.44x → 2.97x  (major improvement)
+- Closure:       2.16x → 1.95x  (improved)
+- Fibonacci:     1.81x → 1.90x  (slight regression, within noise)
+
+## Go Benchmarks (go test -bench, count=3)
+
+| Benchmark                    | ns/op     | B/op    | allocs/op |
+|-----------------------------|----------:|--------:|----------:|
+| Fibonacci                    |   491,501 |  79,303 |       871 |
+| TableOps                     |   719,340 | 192,165 |       902 |
+| StringConcat                 |   828,471 | 333,589 |     6,413 |
+| PatternMatch                 | 3,511,966 | 589,667 |    21,911 |
+| ForLoop                      | 4,683,073 |  78,847 |       857 |
+| ClosureCreation              | 1,300,399 | 167,576 |    10,904 |
+| MethodCall                   | 5,220,221 |  86,940 |       982 |
+| GC                           | 1,229,282 | 330,581 |    10,876 |
+| ConcatOperator               |   628,446 | 685,587 |     2,901 |
+| ConcatMulti                  |   244,858 |  89,128 |     1,888 |
+| CoroutineCreate              | 4,372,524 | 894,263 |    10,874 |
+| CoroutineYieldResume         | 4,286,800 | 897,132 |    10,922 |
+| CoroutineCreateResumeFinish  | 6,712,896 |1,810,147|    30,909 |
+| GCCollectEmpty               |     5,397 |   2,045 |        29 |
+| GCCollectLive                |   624,776 |   2,908 |        29 |
+| TableCreation100K            |47,725,898 |13,228,616|  502,549 |
+| TUIRender                    |   471,455 |  83,546 |     3,466 |
+| TUIRenderWithGC              |   490,592 |  83,137 |     3,457 |
+| TUIRenderDeep                | 1,824,433 | 523,749 |    18,219 |
