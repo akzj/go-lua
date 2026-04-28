@@ -168,7 +168,14 @@ func sigToFuncInfo(name string, sig *types.Signature) FuncInfo {
 func typeToGoString(t types.Type) string {
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
-		return u.Name()
+		switch u.Kind() {
+		case types.Byte: // uint8 alias
+			return "uint8"
+		case types.Rune: // int32 alias
+			return "int32"
+		default:
+			return u.Name()
+		}
 	case *types.Slice:
 		return "[]" + typeToGoString(u.Elem())
 	case *types.Interface:
