@@ -48,6 +48,7 @@ func StandardLibraries() []Library {
 // - OpenUTF8:      utf8lib.go
 // - OpenCoroutine: corolib.go
 // - OpenPackage:   packagelib.go
+// - OpenConsole:   consolelib.go (preloaded, use require("console"))
 
 // OpenAll opens all standard libraries. Convenience function.
 func OpenAll(L *luaapi.State) {
@@ -60,6 +61,7 @@ func OpenAll(L *luaapi.State) {
 	// require("tracegc") works without a .lua file on disk.
 	preloadModules := map[string]luaapi.CFunction{
 		"tracegc": luaapi.CFunction(OpenTraceGC),
+		"console": luaapi.CFunction(OpenConsole),
 	}
 	L.GetGlobal("package")          // push package table
 	L.GetField(-1, "preload")       // push package.preload
