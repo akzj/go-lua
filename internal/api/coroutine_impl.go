@@ -28,6 +28,7 @@ func (L *State) NewThread() *State {
 	// Cache the public State wrapper on the new thread so that
 	// wrapCFunctionStatic can reuse it without allocating.
 	pub := &State{Internal: L1}
+	pub.GlobalSearcher = L.GlobalSearcher // inherit from parent so require() works in coroutines
 	L1.APIState = pub
 	return pub
 }
