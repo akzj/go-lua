@@ -215,7 +215,7 @@ func scanNeedsStringSlice(b *Bindings) bool {
 func generateStringSliceHelpers(w *strings.Builder) {
 	w.WriteString("func luaCheckStringSlice(L *lua.State, idx int) []string {\n")
 	w.WriteString("\tL.CheckType(idx, lua.TypeTable)\n")
-	w.WriteString("\tn := L.RawLen(idx)\n")
+	w.WriteString("\tn := int(L.RawLen(idx))\n")
 	w.WriteString("\tresult := make([]string, 0, n)\n")
 	w.WriteString("\tfor i := 1; i <= n; i++ {\n")
 	w.WriteString("\t\tL.GetI(idx, int64(i))\n")
