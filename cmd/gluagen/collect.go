@@ -38,18 +38,20 @@ type TypeInfo struct {
 
 // ParamInfo describes a function parameter.
 type ParamInfo struct {
-	Name    string
-	GoType  string // "string", "int", "int64", "float64", "bool", "*Player", etc.
-	IsPtr   bool
-	IsSlice bool
-	IsMap   bool
+	Name           string
+	GoType         string // "string", "int", "os.FileMode", "*Player", etc.
+	UnderlyingKind string // underlying primitive: "uint32", "string", etc. (scan mode only)
+	IsPtr          bool
+	IsSlice        bool
+	IsMap          bool
 }
 
 // ReturnInfo describes a return value.
 type ReturnInfo struct {
-	GoType  string
-	IsPtr   bool
-	IsError bool
+	GoType         string
+	UnderlyingKind string // underlying primitive (scan mode only)
+	IsPtr          bool
+	IsError        bool
 }
 
 // FieldInfo describes a struct field.
