@@ -1098,3 +1098,40 @@ func TestScheduler_SpawnReturnsHandle(t *testing.T) {
 	f2.Resolve("done")
 	sched.WaitAll(time.Second)
 }
+
+func TestScheduler_CoroutineRequire(t *testing.T) {
+	// Regression: NewThread must inherit GlobalSearcher so require() works in coroutines
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	err := L.DoString(`
+		result = nil
+		function task()
+			local async = require("async")
+			local f = async.resolve(42)
+			result = async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("task")
+	_, err = sched.Spawn(L)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sched.Pending() != 0 {
+		sched.Tick()
+	}
+
+	L.GetGlobal("result")
+	val := L.ToAny(-1)
+	L.Pop(1)
+	if val != int64(42) {
+		t.Fatalf("expected 42, got %v (%T)", val, val)
+	}
+}
