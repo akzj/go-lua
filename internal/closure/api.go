@@ -52,6 +52,9 @@ func (uv *UpVal) Close(val object.TValue) {
 // Get returns the current value of the upvalue.
 // For closed upvalues (common case), returns Own directly.
 // For open upvalues, reads from the owning thread's stack.
+// The stack parameter is a fallback for manually-constructed upvalues
+// that don't have Stack set (e.g. in tests). In production, FindUpval
+// always sets uv.Stack = &L.Stack.
 func (uv *UpVal) Get(stack []object.StackValue) object.TValue {
 	if uv.StackIdx < 0 {
 		return uv.Own
