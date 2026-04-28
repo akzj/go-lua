@@ -6,11 +6,14 @@
 //
 // Options:
 //
-//	-e "code"   Execute the given Lua code
-//	-l name     Require library 'name' before executing scripts
-//	-i          Enter interactive REPL mode after executing scripts
-//	-v          Print version information and exit
-//	-           Read script from standard input
+//	-e "code"     Execute the given Lua code
+//	-l name       Require library 'name' before executing scripts
+//	-i            Enter interactive REPL mode after executing scripts
+//	-v            Print version information and exit
+//	-             Read script from standard input
+//	--sandbox     Run in sandbox mode (CPU limited)
+//	--timeout N   Set execution timeout in seconds
+//	--no-stdlib   Don't load standard libraries
 //
 // When invoked with no arguments, glua enters interactive REPL mode.
 // Multiple -e and -l flags can be combined; they execute in order.
@@ -19,19 +22,25 @@
 // automatically prints the result (wraps in "return <expr>" internally).
 // Multi-line input is supported — if a statement is incomplete, the prompt
 // changes to ">> " and waits for more input.
+//
+// Shebang support: scripts can start with #!/usr/bin/env glua and be
+// executed directly as programs on Unix systems.
 package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/akzj/go-lua/pkg/lua"
 )
 
-const version = "glua 0.1.0 (go-lua, Lua 5.5)"
+const version = "glua 0.8.2 (go-lua, Lua 5.5)"
 
 func main() {
 	os.Exit(run())
@@ -48,11 +57,14 @@ func run() int {
 
 	// Parse flags manually (to support Lua-style argument ordering).
 	var (
-		actions     []action // -e and -l actions in order
-		files       []string // script files
-		interactive bool     // -i flag
-		showVersion bool     // -v flag
-		readStdin   bool     // - flag
+		actions        []action // -e and -l actions in order
+		files          []string // script files
+		interactive    bool     // -i flag
+		showVersion    bool     // -v flag
+		readStdin      bool     // - flag
+		sandboxMode    bool     // --sandbox flag
+		bareMode       bool     // --no-stdlib flag
+		timeoutSeconds int      // --timeout N
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -77,6 +89,22 @@ func run() int {
 			actions = append(actions, action{kind: "lib", arg: args[i]})
 		case "-":
 			readStdin = true
+		case "--sandbox":
+			sandboxMode = true
+		case "--no-stdlib":
+			bareMode = true
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "glua: '--timeout' needs argument (seconds)")
+				return 1
+			}
+			sec, parseErr := strconv.Atoi(args[i])
+			if parseErr != nil {
+				fmt.Fprintf(os.Stderr, "glua: invalid timeout: %s\n", args[i])
+				return 1
+			}
+			timeoutSeconds = sec
 		case "--":
 			// Everything after -- is script arguments, not glua flags.
 			files = append(files, args[i+1:]...)
@@ -104,8 +132,26 @@ func run() int {
 		interactive = true
 	}
 
-	L := lua.NewState()
+	// Create the Lua state based on mode flags.
+	var L *lua.State
+	switch {
+	case sandboxMode:
+		L = lua.NewSandboxState(lua.SandboxConfig{
+			CPULimit: 10_000_000, // 10M instructions default
+		})
+	case bareMode:
+		L = lua.NewBareState()
+	default:
+		L = lua.NewState()
+	}
 	defer L.Close()
+
+	// Apply execution timeout if requested.
+	if timeoutSeconds > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+		defer cancel()
+		L.SetContext(ctx)
+	}
 
 	// Set up the global 'arg' table (like C Lua).
 	setupArgTable(L, files)
@@ -290,9 +336,12 @@ func isIncomplete(msg string) bool {
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "usage: glua [options] [script [args...]]")
-	fmt.Fprintln(os.Stderr, "  -e code   execute string 'code'")
-	fmt.Fprintln(os.Stderr, "  -l name   require library 'name'")
-	fmt.Fprintln(os.Stderr, "  -i        enter interactive mode after executing script")
-	fmt.Fprintln(os.Stderr, "  -v        show version information")
-	fmt.Fprintln(os.Stderr, "  -         read from standard input")
+	fmt.Fprintln(os.Stderr, "  -e code       execute string 'code'")
+	fmt.Fprintln(os.Stderr, "  -l name       require library 'name'")
+	fmt.Fprintln(os.Stderr, "  -i            enter interactive mode after executing script")
+	fmt.Fprintln(os.Stderr, "  -v            show version information")
+	fmt.Fprintln(os.Stderr, "  -             read from standard input")
+	fmt.Fprintln(os.Stderr, "  --sandbox     run in sandbox mode (CPU limited)")
+	fmt.Fprintln(os.Stderr, "  --timeout N   set execution timeout in seconds")
+	fmt.Fprintln(os.Stderr, "  --no-stdlib   don't load standard libraries")
 }
