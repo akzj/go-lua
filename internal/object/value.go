@@ -19,7 +19,7 @@ import "unsafe"
 // eface mirrors the runtime layout of an empty interface (any).
 type eface struct {
 	_type uintptr
-	data  uintptr
+	data  unsafe.Pointer
 }
 
 // FuncDataPtr returns the interface data-word for a func value stored in
@@ -30,7 +30,7 @@ func FuncDataPtr(val any) uintptr {
 		return 0
 	}
 	ef := (*eface)(unsafe.Pointer(&val))
-	return ef.data
+	return uintptr(ef.data)
 }
 
 // LightCFuncEqual returns true if two light C function values (stored as
