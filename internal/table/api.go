@@ -11,7 +11,11 @@
 // Reference: .analysis/07-runtime-infrastructure.md §3
 package table
 
-import "github.com/akzj/go-lua/internal/object"
+import (
+	"unsafe"
+
+	"github.com/akzj/go-lua/internal/object"
+)
 
 // ---------------------------------------------------------------------------
 // Table — the core Lua data structure
@@ -52,11 +56,23 @@ func (t *Table) HasWeakKeys() bool { return t.WeakMode&WeakKey != 0 }
 func (t *Table) HasWeakValues() bool { return t.WeakMode&WeakValue != 0 }
 
 // node is a hash table entry (key + value + chain offset).
+//
+// Key storage uses split fields to avoid boxing allocations:
+//   - KeyN: numeric payload (int64 for integers, float64 bits for floats)
+//   - KeyPtr: pointer payload for GC objects (*LuaString, *Table, etc.)
+//   - KeyTT: type tag (packed after Next for alignment)
+//   - KeyOldTT: preserved original tag when key is dead (TagDeadKey)
+//
+// This eliminates heap allocations for integer/float key insertions
+// that were previously caused by boxing into the `any` interface.
 type node struct {
-	Val    object.TValue // value
-	KeyTT  object.Tag    // key type tag
-	KeyVal any           // key value (int64, float64, *object.LuaString, etc.)
-	Next   int32         // offset to next node in chain (0 = end)
+	Val      object.TValue    // 32 bytes — value
+	KeyN     int64            // 8 bytes — numeric key (int64 directly, float64 via bits)
+	KeyPtr   unsafe.Pointer   // 8 bytes — GC object key (*LuaString, *Table, etc.)
+	Next     int32            // 4 bytes — offset to next node in chain (0 = end)
+	KeyTT    object.Tag       // 1 byte — key type tag
+	KeyOldTT object.Tag       // 1 byte — original tag preserved when KeyTT = TagDeadKey
+	_pad     [2]byte          // 2 bytes padding to align to 8
 }
 
 // ---------------------------------------------------------------------------
@@ -193,11 +209,10 @@ func (t *Table) HashLen() int {
 
 // EstimateBytes returns an approximate byte size for this table,
 // mirroring C Lua's allocation tracking for collectgarbage("count").
-// sizeof(Table)=80, sizeof(TValue)=24, sizeof(Node)=56 on 64-bit Go.
 func (t *Table) EstimateBytes() int64 {
 	const tableOverhead = 80
 	const tvalueSize = 24
-	const nodeSize = 56
+	const nodeSize = int64(unsafe.Sizeof(node{}))
 	return int64(tableOverhead) + int64(len(t.Array))*tvalueSize + int64(t.HashLen())*nodeSize
 }
 
@@ -207,4 +222,34 @@ func (t *Table) EstimateBytes() int64 {
 // Used by OP_SETLIST to pre-allocate the exact array size.
 func (t *Table) ResizeArray(newSize int) {
 	resizeTable(t, newSize, t.HashLen())
+}
+
+// ---------------------------------------------------------------------------
+// GC node key access helpers (exported for internal/gc)
+// ---------------------------------------------------------------------------
+
+// NodeKeyGCHeader returns the GCHeader for a node key at index i.
+// Precondition: the node's KeyTT has BIT_ISCOLLECTABLE set and KeyPtr is non-nil.
+// For string keys, KeyPtr points directly to the LuaString (GCHeader is first field).
+// For rare collectable types, KeyPtr also points to the object (GCHeader first field).
+func (t *Table) NodeKeyGCHeader(i int) *object.GCHeader {
+	ptr := t.Nodes[i].KeyPtr
+	if ptr == nil {
+		return nil
+	}
+	return (*object.GCHeader)(ptr)
+}
+
+// NodeKeyPtr returns the raw key pointer for a node at index i.
+// Used by GC to reconstruct GCObject for rare collectable key types.
+func (t *Table) NodeKeyPtr(i int) unsafe.Pointer {
+	return t.Nodes[i].KeyPtr
+}
+
+// MarkNodeKeyDead marks the key at node index i as dead.
+// Preserves KeyN/KeyPtr for hash chain probing.
+func (t *Table) MarkNodeKeyDead(i int) {
+	nd := &t.Nodes[i]
+	nd.KeyOldTT = nd.KeyTT
+	nd.KeyTT = object.TagDeadKey
 }

@@ -28,13 +28,12 @@ const maxTagLoop = 2000
 // Debt-based GC trigger
 // ---------------------------------------------------------------------------
 
-// checkGC triggers a GC step when GCDebt has been exhausted (≤ 0).
+// checkGC triggers a GC step when debt-based pacing indicates collection is due.
 // GCDebt is decremented by TrackAllocation (called from LinkGC and table
 // resize paths). After a collection, SetPause resets debt based on live data.
-// Also maintains a countdown-based safety net: even if debt hasn't run out,
-// trigger GC every 5000 allocations to prevent Go-heap OOM when Lua's
-// ObjSize estimates undercount actual Go memory usage.
-// Uses countdown instead of modulo to keep inline cost below 80.
+// The debt mechanism is the primary trigger; the countdown is a lightweight
+// safety net (50000 allocations) for edge cases where ObjSize estimates
+// undercount actual Go memory usage.
 func checkGC(g *state.GlobalState, L *state.LuaState) {
 	g.GCCountdown--
 	if g.GCDebt <= 0 || g.GCCountdown <= 0 {
@@ -47,7 +46,7 @@ func checkGC(g *state.GlobalState, L *state.LuaState) {
 //
 //go:noinline
 func checkGCSlow(g *state.GlobalState, L *state.LuaState) {
-	g.GCCountdown = 5000
+	g.GCCountdown = 50000
 	if g.GCStepFn != nil {
 		g.GCStepFn(L)
 	}

@@ -40,6 +40,38 @@ func LightCFuncEqual(a, b any) bool {
 }
 
 // ---------------------------------------------------------------------------
+// Unsafe pointer helpers for table node key storage
+//
+// These support the split KeyN/KeyPtr node layout that eliminates boxing.
+// ---------------------------------------------------------------------------
+
+// AnyDataPtr extracts the data pointer from an any interface value.
+// Used by table node setNodeKey and equalKey for pointer identity comparison.
+func AnyDataPtr(val any) unsafe.Pointer {
+	if val == nil {
+		return nil
+	}
+	return unsafe.Pointer((*eface)(unsafe.Pointer(&val)).data)
+}
+
+// NodeKeyGCHeader returns the GCHeader pointer for a node key stored as
+// an unsafe.Pointer. The key must be a collectable type (BIT_ISCOLLECTABLE set).
+// This is the equivalent of FastGCFromAny but for the split-field layout.
+func NodeKeyGCHeader(ptr unsafe.Pointer) *GCHeader {
+	return (*GCHeader)(ptr)
+}
+
+// ReconstructObj is a callback that reconstructs an `any` from a type tag and
+// an unsafe.Pointer for rare collectable key types (table-as-key, userdata-as-key,
+// closure-as-key, thread-as-key). It is registered at init time by the api package
+// which has access to all concrete types.
+//
+// This avoids import cycles: the table package can't import state/closure,
+// but needs to return properly-typed TValues from nodeKey() for next() iteration.
+var ReconstructObj func(tt Tag, ptr unsafe.Pointer) any
+
+
+// ---------------------------------------------------------------------------
 // GC-type constructors
 // These use 'any' to avoid import cycles with table/closure/state packages.
 // The caller is responsible for passing the correct pointer type.

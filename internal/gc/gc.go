@@ -41,6 +41,33 @@ const (
 // ---------------------------------------------------------------------------
 
 // markObject marks an object as gray (to be traversed) if it is currently white.
+// nodeKeyGCObject reconstructs a GCObject from a table node's key tag and pointer.
+// The table package stores collectable key pointers in KeyPtr (unsafe.Pointer).
+// Since the GC package can import all concrete types, it does the tag→type mapping here.
+func nodeKeyGCObject(t *table.Table, tag object.Tag, i int) (object.GCObject, bool) {
+	ptr := t.NodeKeyPtr(i)
+	if ptr == nil {
+		return nil, false
+	}
+	switch tag {
+	case object.TagShortStr, object.TagLongStr:
+		return (*object.LuaString)(ptr), true
+	case object.TagTable:
+		return (*table.Table)(ptr), true
+	case object.TagUserdata:
+		return (*object.Userdata)(ptr), true
+	case object.TagLuaClosure:
+		return (*closure.LClosure)(ptr), true
+	case object.TagCClosure:
+		return (*closure.CClosure)(ptr), true
+	case object.TagThread:
+		return (*state.LuaState)(ptr), true
+	default:
+		// Unknown collectable type — shouldn't happen, but be safe
+		return nil, false
+	}
+}
+
 // Strings and closed upvalues are marked black immediately (no children to traverse).
 func markObject(g *state.GlobalState, obj object.GCObject) {
 	if obj == nil {
@@ -364,9 +391,9 @@ func traverseStrongTable(g *state.GlobalState, t *table.Table) {
 		if n.Val.Tt != object.TagEmpty && n.Val.Tt != object.TagNil {
 			markValue(g, n.Val)
 			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
-				kh := object.FastGCFromAny(n.KeyVal)
-				if kh.IsWhite() {
-					if obj, ok := n.KeyVal.(object.GCObject); ok {
+				kh := t.NodeKeyGCHeader(i)
+				if kh != nil && kh.IsWhite() {
+					if obj, ok := nodeKeyGCObject(t, n.KeyTT, i); ok {
 						markObject(g, obj)
 					}
 				}
@@ -388,7 +415,7 @@ func traverseWeakValue(g *state.GlobalState, t *table.Table) {
 		}
 		// Mark key (strong)
 		if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
-			if obj, ok := n.KeyVal.(object.GCObject); ok {
+			if obj, ok := nodeKeyGCObject(t, n.KeyTT, i); ok {
 				markObject(g, obj)
 			}
 		}
@@ -446,7 +473,7 @@ func traverseEphemeron(g *state.GlobalState, t *table.Table, inv bool) bool {
 		var keyObj object.GCObject
 		var keyIsGC bool
 		if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
-			keyObj, keyIsGC = n.KeyVal.(object.GCObject)
+			keyObj, keyIsGC = nodeKeyGCObject(t, n.KeyTT, i)
 		}
 		keyIsWhite := keyIsGC && isCleared(g, keyObj)
 		if keyIsWhite {
@@ -878,9 +905,9 @@ func clearDeadKeysInList(g *state.GlobalState, list object.GCObject) {
 				continue
 			}
 			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
-				if keyObj, ok := n.KeyVal.(object.GCObject); ok {
+				if keyObj, ok := nodeKeyGCObject(t, n.KeyTT, i); ok {
 					if isCleared(g, keyObj) {
-						n.KeyTT = object.TagDeadKey
+						t.MarkNodeKeyDead(i)
 						n.Val = object.Nil
 					}
 				}
@@ -900,11 +927,11 @@ func clearByKeys(g *state.GlobalState, list []object.GCObject) {
 			}
 			// Check if key is a dead GC object
 			if n.KeyTT&object.BIT_ISCOLLECTABLE != 0 {
-				if keyObj, ok := n.KeyVal.(object.GCObject); ok {
+				if keyObj, ok := nodeKeyGCObject(t, n.KeyTT, i); ok {
 					if isCleared(g, keyObj) {
 						// Dead key — mark as dead and clear value
 						// Mirrors C Lua's setdeadkey(n)
-						n.KeyTT = object.TagDeadKey
+						t.MarkNodeKeyDead(i)
 						n.Val = object.Nil
 					}
 				}
@@ -941,8 +968,8 @@ func clearByValues(g *state.GlobalState, list []object.GCObject, startIdx int) {
 				if vObj, ok := n.Val.Obj.(object.GCObject); ok {
 					if isCleared(g, vObj) {
 						// Dead value — mark key as dead and clear value.
-						// Must NOT nil KeyVal — hash chain probing depends on it.
-						n.KeyTT = object.TagDeadKey
+						// Must NOT nil KeyN/KeyPtr — hash chain probing depends on them.
+						t.MarkNodeKeyDead(i)
 						n.Val = object.Nil
 					}
 				}

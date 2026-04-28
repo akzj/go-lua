@@ -20,10 +20,7 @@ import (
 func newTable(arraySize, hashSize int) *Table {
 	t := getTable()
 	if arraySize > 0 {
-		t.Array = make([]object.TValue, arraySize)
-		for i := range t.Array {
-			t.Array[i] = object.Nil
-		}
+		t.Array = getArraySlice(arraySize)
 	}
 	initHashPart(t, hashSize)
 	t.Flags = 0x3F // all 6 fast TM bits set = all absent (empty table)
@@ -183,6 +180,7 @@ func (t *Table) setHash(key, value object.TValue) {
 				// Live key match — update or delete
 				if value.Tt.IsNil() {
 					nd.Val = object.Nil
+					nd.KeyOldTT = nd.KeyTT
 					nd.KeyTT = object.TagDeadKey
 				} else {
 					nd.Val = value

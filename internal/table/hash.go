@@ -7,6 +7,7 @@ package table
 import (
 	"math"
 	"math/bits"
+	"unsafe"
 
 	"github.com/akzj/go-lua/internal/object"
 )
@@ -85,36 +86,9 @@ func mainPosition(t *Table, key object.TValue) int {
 }
 
 // mainPositionFromNode returns the main position for a node's key.
-// Dead keys (TagDeadKey) preserve their original KeyVal, so we reconstruct
-// the original tag from the Go type of KeyVal to hash correctly.
+// Dead keys (TagDeadKey) are handled by nodeKey which uses KeyOldTT.
 func mainPositionFromNode(t *Table, nd *node) int {
-	key := nodeKey(nd)
-	if key.Tt == object.TagDeadKey {
-		// Reconstruct original tag from the preserved KeyVal
-		switch v := nd.KeyVal.(type) {
-		case int64:
-			key.Tt = object.TagInteger
-		case float64:
-			key.Tt = object.TagFloat
-		case *object.LuaString:
-			if v.IsShort {
-				key.Tt = object.TagShortStr
-			} else {
-				key.Tt = object.TagLongStr
-			}
-		case bool:
-			if v {
-				key.Tt = object.TagTrue
-			} else {
-				key.Tt = object.TagFalse
-			}
-		default:
-			// Other collectable types — use pointer identity hash
-			hmask := (1 << t.LsizeNode) - 1
-			return int(uintptr(0)) & hmask
-		}
-	}
-	return mainPosition(t, key)
+	return mainPosition(t, nodeKey(nd))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,12 +96,66 @@ func mainPositionFromNode(t *Table, nd *node) int {
 // ---------------------------------------------------------------------------
 
 func nodeKey(nd *node) object.TValue {
-	return object.MakeFromPayload(nd.KeyTT, nd.KeyVal)
+	tt := nd.KeyTT
+	if tt == object.TagDeadKey {
+		// Dead keys: reconstruct using the preserved original tag.
+		// This is needed for next() iteration and getFromHashDeadOk.
+		tt = nd.KeyOldTT
+	}
+	return nodeKeyFromParts(tt, nd.KeyN, nd.KeyPtr)
+}
+
+// nodeKeyFromParts reconstructs a TValue from a tag and the split key fields.
+func nodeKeyFromParts(tt object.Tag, keyN int64, keyPtr unsafe.Pointer) object.TValue {
+	switch tt {
+	case object.TagInteger:
+		return object.MakeInteger(keyN)
+	case object.TagFloat:
+		return object.TValue{Tt: object.TagFloat, N: keyN}
+	case object.TagShortStr, object.TagLongStr:
+		s := (*object.LuaString)(keyPtr)
+		return object.MakeString(s)
+	case object.TagFalse:
+		return object.False
+	case object.TagTrue:
+		return object.True
+	case object.TagNil:
+		return object.TValue{Tt: object.TagNil}
+	default:
+		// Rare collectable types (table-as-key, userdata-as-key, etc.)
+		// Use the registered callback to reconstruct a properly-typed any.
+		if object.ReconstructObj != nil && keyPtr != nil {
+			obj := object.ReconstructObj(tt, keyPtr)
+			return object.TValue{Tt: tt, Obj: obj}
+		}
+		return object.TValue{Tt: tt}
+	}
 }
 
 func setNodeKey(nd *node, key object.TValue) {
 	nd.KeyTT = key.Tt
-	nd.KeyVal = key.Payload()
+	switch key.Tt {
+	case object.TagInteger:
+		nd.KeyN = key.N
+		nd.KeyPtr = nil
+	case object.TagFloat:
+		nd.KeyN = key.N
+		nd.KeyPtr = nil
+	case object.TagShortStr, object.TagLongStr:
+		nd.KeyPtr = unsafe.Pointer(key.Obj.(*object.LuaString))
+		nd.KeyN = 0
+	case object.TagFalse:
+		nd.KeyN = 0
+		nd.KeyPtr = nil
+	case object.TagTrue:
+		nd.KeyN = 1
+		nd.KeyPtr = nil
+	default:
+		// For other collectable types (rare: tables as keys, userdata, closures, threads)
+		// Extract the data pointer from the any interface.
+		nd.KeyPtr = object.AnyDataPtr(key.Obj)
+		nd.KeyN = 0
+	}
 }
 
 func nodeIsEmpty(nd *node) bool {
@@ -149,16 +177,13 @@ func keyIsDead(nd *node) bool {
 func equalKey(k1 object.TValue, n2 *node, deadOk bool) bool {
 	if k1.Tt != n2.KeyTT {
 		if deadOk && keyIsDead(n2) {
-			// Dead key: compare by value identity for collectable types
-			if k1.Tt == object.TagLightCFunc {
-				return object.LightCFuncEqual(k1.Obj, n2.KeyVal)
-			}
-			return k1.Payload() == n2.KeyVal
+			// Dead key: compare by value identity using original tag
+			return equalKeyDead(k1, n2)
 		}
 		// Cross-type string comparison (short vs long or long vs short)
 		if k1.IsString() && (n2.KeyTT == object.TagShortStr || n2.KeyTT == object.TagLongStr) {
 			s1 := k1.Obj.(*object.LuaString)
-			s2 := n2.KeyVal.(*object.LuaString)
+			s2 := (*object.LuaString)(n2.KeyPtr)
 			return s1.Data == s2.Data
 		}
 		return false
@@ -167,20 +192,49 @@ func equalKey(k1 object.TValue, n2 *node, deadOk bool) bool {
 	case object.TagNil, object.TagFalse, object.TagTrue:
 		return true
 	case object.TagInteger:
-		return k1.N == n2.KeyVal.(int64)
+		return k1.N == n2.KeyN
 	case object.TagFloat:
-		return k1.Float() == n2.KeyVal.(float64)
+		return k1.Float() == math.Float64frombits(uint64(n2.KeyN))
 	case object.TagShortStr:
-		return k1.Obj == n2.KeyVal // pointer equality for interned strings
+		// Pointer equality for interned short strings
+		return unsafe.Pointer(k1.Obj.(*object.LuaString)) == n2.KeyPtr
 	case object.TagLongStr:
 		s1 := k1.Obj.(*object.LuaString)
-		s2 := n2.KeyVal.(*object.LuaString)
+		s2 := (*object.LuaString)(n2.KeyPtr)
 		return s1.Data == s2.Data
 	default:
 		if n2.KeyTT == object.TagLightCFunc {
-			return object.LightCFuncEqual(k1.Obj, n2.KeyVal)
+			// Light C functions: compare by data pointer identity
+			return object.AnyDataPtr(k1.Obj) == n2.KeyPtr
 		}
-		return k1.Obj == n2.KeyVal // identity for GC objects (pointers)
+		// Other GC objects (table, userdata, etc.): pointer identity
+		return object.AnyDataPtr(k1.Obj) == n2.KeyPtr
+	}
+}
+
+// equalKeyDead compares a live key against a dead node key.
+// Dead keys preserve their original KeyN/KeyPtr and KeyOldTT.
+func equalKeyDead(k1 object.TValue, n2 *node) bool {
+	origTT := n2.KeyOldTT
+	if k1.Tt != origTT {
+		return false
+	}
+	switch origTT {
+	case object.TagInteger:
+		return k1.N == n2.KeyN
+	case object.TagFloat:
+		return k1.Float() == math.Float64frombits(uint64(n2.KeyN))
+	case object.TagShortStr:
+		return unsafe.Pointer(k1.Obj.(*object.LuaString)) == n2.KeyPtr
+	case object.TagLongStr:
+		s1 := k1.Obj.(*object.LuaString)
+		s2 := (*object.LuaString)(n2.KeyPtr)
+		return s1.Data == s2.Data
+	case object.TagLightCFunc:
+		return object.AnyDataPtr(k1.Obj) == n2.KeyPtr
+	default:
+		// Other collectable types: pointer identity
+		return object.AnyDataPtr(k1.Obj) == n2.KeyPtr
 	}
 }
 
@@ -236,7 +290,7 @@ func getIntFromHash(t *Table, key int64) (object.TValue, bool) {
 	idx := hashInt(key, hmask)
 	for {
 		nd := &t.Nodes[idx]
-		if nd.KeyTT == object.TagInteger && nd.KeyVal.(int64) == key {
+		if nd.KeyTT == object.TagInteger && nd.KeyN == key {
 			if !nodeIsEmpty(nd) {
 				return nd.Val, true
 			}
@@ -260,7 +314,7 @@ func getStrFromHash(t *Table, key *object.LuaString) (object.TValue, bool) {
 	for {
 		nd := &t.Nodes[idx]
 		if nd.KeyTT == object.TagShortStr {
-			ndKey := nd.KeyVal.(*object.LuaString)
+			ndKey := (*object.LuaString)(nd.KeyPtr)
 			if ndKey == key || ndKey.Data == key.Data {
 				if !nodeIsEmpty(nd) {
 					return nd.Val, true
@@ -309,7 +363,7 @@ func setIntInHashIfExists(t *Table, key int64, value object.TValue) bool {
 	idx := hashInt(key, hmask)
 	for {
 		nd := &t.Nodes[idx]
-		if nd.KeyTT == object.TagInteger && nd.KeyVal.(int64) == key {
+		if nd.KeyTT == object.TagInteger && nd.KeyN == key {
 			if !nodeIsEmpty(nd) {
 				nd.Val = value
 				return true
@@ -334,7 +388,7 @@ func setStrInHashIfExists(t *Table, key *object.LuaString, value object.TValue) 
 	for {
 		nd := &t.Nodes[idx]
 		if nd.KeyTT == object.TagShortStr {
-			ndKey := nd.KeyVal.(*object.LuaString)
+			ndKey := (*object.LuaString)(nd.KeyPtr)
 			if ndKey == key || ndKey.Data == key.Data {
 				if !nodeIsEmpty(nd) {
 					nd.Val = value
@@ -412,7 +466,8 @@ func insertKey(t *Table, key object.TValue, value object.TValue) bool {
 			t.Nodes[mp].Next = 0
 			t.Nodes[mp].Val = object.Nil
 			t.Nodes[mp].KeyTT = object.TagNil
-			t.Nodes[mp].KeyVal = nil
+			t.Nodes[mp].KeyN = 0
+			t.Nodes[mp].KeyPtr = nil
 		} else {
 			// Colliding node IS in its main position — put new key in f.
 			if nd.Next != 0 {
@@ -461,7 +516,7 @@ func rehash(t *Table, extraKey object.TValue) {
 		}
 		total++
 		if nd.KeyTT == object.TagInteger {
-			k := nd.KeyVal.(int64)
+			k := nd.KeyN
 			if ai := arrayIndex(k); ai > 0 {
 				nums[ceilLog2(uint(ai))]++
 				totalNA++
@@ -556,11 +611,10 @@ func resizeTable(t *Table, newASize, newHSize int) {
 	oldNodes := t.Nodes
 	oldSize := t.GCHeader.ObjSize // capture before resize
 
-	// Allocate new array
+	// Allocate new array from pool
 	var newArray []object.TValue
 	if newASize > 0 {
-		// make() returns zeroed memory; object.Nil is the zero value (TagNil=0x00)
-		newArray = make([]object.TValue, newASize)
+		newArray = getArraySlice(newASize)
 	}
 
 	// Copy common elements from old array
@@ -603,6 +657,14 @@ func resizeTable(t *Table, newASize, newHSize int) {
 		insertKey(t, k, nd.Val)
 	}
 
+	// Pool old slices for reuse (after all re-insertions are complete)
+	if oldArray != nil {
+		putArraySlice(oldArray)
+	}
+	if oldNodes != nil {
+		putNodeSlice(oldNodes)
+	}
+
 	// Update pre-computed size for GC accounting and track delta
 	t.GCHeader.ObjSize = t.EstimateBytes()
 	delta := t.GCHeader.ObjSize - oldSize
@@ -623,9 +685,7 @@ func initHashPart(t *Table, size int) {
 		lsize = 30
 	}
 	actualSize := 1 << lsize
-	t.Nodes = make([]node, actualSize)
+	t.Nodes = getNodeSlice(actualSize)
 	t.LsizeNode = lsize
 	t.LastFree = actualSize
-	// No explicit zeroing needed: make() returns zeroed memory, and
-	// all default values are zero: TagNil=0x00, Nil=TValue{Tt:0x00}, Next=0.
 }
