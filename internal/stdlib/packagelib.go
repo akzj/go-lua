@@ -173,7 +173,7 @@ func searcher_Clib(L *luaapi.State) int {
 func searcher_GoGlobal(L *luaapi.State) int {
 	name := L.CheckString(1)
 	if L.GlobalSearcher == nil {
-		L.PushString("no Go global searcher installed")
+		L.PushString("no global Go module '" + name + "'")
 		return 1
 	}
 	opener := L.GlobalSearcher(name)
