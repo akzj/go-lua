@@ -220,20 +220,16 @@ startfunc:
 			uv := cl.UpVals[opcode.GetArgB(inst)]
 			if uv.StackIdx < 0 {
 				L.Stack[ra].Val = uv.Own
-			} else if uv.Stack != nil {
-				L.Stack[ra].Val = (*uv.Stack)[uv.StackIdx].Val
 			} else {
-				L.Stack[ra].Val = L.Stack[uv.StackIdx].Val
+				// Open upvalues always have Stack set (FindUpval sets uv.Stack = &L.Stack)
+				L.Stack[ra].Val = (*uv.Stack)[uv.StackIdx].Val
 			}
 
 		case opcode.OP_SETUPVAL:
 			uv := cl.UpVals[opcode.GetArgB(inst)]
 			if uv.StackIdx >= 0 {
-				if uv.Stack != nil {
-					(*uv.Stack)[uv.StackIdx].Val = L.Stack[ra].Val
-				} else {
-					L.Stack[uv.StackIdx].Val = L.Stack[ra].Val
-				}
+				// Open upvalues always have Stack set (FindUpval sets uv.Stack = &L.Stack)
+				(*uv.Stack)[uv.StackIdx].Val = L.Stack[ra].Val
 			} else {
 				uv.Own = L.Stack[ra].Val
 			}
@@ -254,10 +250,9 @@ startfunc:
 			var upval object.TValue
 			if uv.StackIdx < 0 {
 				upval = uv.Own
-			} else if uv.Stack != nil {
-				upval = (*uv.Stack)[uv.StackIdx].Val
 			} else {
-				upval = L.Stack[uv.StackIdx].Val
+				// Open upvalues always have Stack set (FindUpval sets uv.Stack = &L.Stack)
+				upval = (*uv.Stack)[uv.StackIdx].Val
 			}
 			rc := k[opcode.GetArgC(inst)]
 			if upval.IsTable() {
@@ -336,10 +331,9 @@ startfunc:
 			var upval object.TValue
 			if uvs.StackIdx < 0 {
 				upval = uvs.Own
-			} else if uvs.Stack != nil {
-				upval = (*uvs.Stack)[uvs.StackIdx].Val
 			} else {
-				upval = L.Stack[uvs.StackIdx].Val
+				// Open upvalues always have Stack set (FindUpval sets uv.Stack = &L.Stack)
+				upval = (*uvs.Stack)[uvs.StackIdx].Val
 			}
 			rb := k[b]
 			var rc object.TValue
