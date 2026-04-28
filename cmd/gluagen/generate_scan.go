@@ -43,9 +43,9 @@ func generateScan(b *Bindings) string {
 		generateScanFuncWrapper(&w, f, b)
 	}
 
-	// Emit []string helpers if needed.
+	// Emit []string helpers if needed (module-scoped names to avoid redeclaration).
 	if needsStringSlice {
-		generateStringSliceHelpers(&w)
+		generateStringSliceHelpers(&w, b.ModuleName)
 	}
 
 	return w.String()
@@ -65,7 +65,7 @@ func generateScanFuncWrapper(w *strings.Builder, f FuncInfo, b *Bindings) {
 			varName = fmt.Sprintf("arg%d", i+1)
 		}
 		paramVarNames[i] = varName
-		w.WriteString(fmt.Sprintf("\t%s := %s\n", varName, genScanCheckExpr(p, idx)))
+		w.WriteString(fmt.Sprintf("\t%s := %s\n", varName, genScanCheckExpr(p, idx, b.ModuleName)))
 	}
 
 	// Build call: pkgAlias.FuncName(args...)
@@ -96,19 +96,19 @@ func generateScanFuncWrapper(w *strings.Builder, f FuncInfo, b *Bindings) {
 			if r.IsError {
 				continue
 			}
-			w.WriteString(fmt.Sprintf("\t%s\n", genScanPushExpr(r, retNames[i])))
+			w.WriteString(fmt.Sprintf("\t%s\n", genScanPushExpr(r, retNames[i], b.ModuleName)))
 			nPush++
 		}
 		w.WriteString(fmt.Sprintf("\treturn %d\n", nPush))
 	} else if len(f.Returns) == 1 {
 		w.WriteString(fmt.Sprintf("\tresult := %s\n", callExpr))
-		w.WriteString(fmt.Sprintf("\t%s\n", genScanPushExpr(f.Returns[0], "result")))
+		w.WriteString(fmt.Sprintf("\t%s\n", genScanPushExpr(f.Returns[0], "result", b.ModuleName)))
 		w.WriteString("\treturn 1\n")
 	} else {
 		retNames := genScanReturnNames(f.Returns)
 		w.WriteString(fmt.Sprintf("\t%s := %s\n", strings.Join(retNames, ", "), callExpr))
 		for i, r := range f.Returns {
-			w.WriteString(fmt.Sprintf("\t%s\n", genScanPushExpr(r, retNames[i])))
+			w.WriteString(fmt.Sprintf("\t%s\n", genScanPushExpr(r, retNames[i], b.ModuleName)))
 		}
 		w.WriteString(fmt.Sprintf("\treturn %d\n", len(f.Returns)))
 	}
@@ -116,7 +116,7 @@ func generateScanFuncWrapper(w *strings.Builder, f FuncInfo, b *Bindings) {
 	w.WriteString("}\n\n")
 }
 
-func genScanCheckExpr(p ParamInfo, idx int) string {
+func genScanCheckExpr(p ParamInfo, idx int, moduleName string) string {
 	switch p.GoType {
 	case "string":
 		return fmt.Sprintf("L.CheckString(%d)", idx)
@@ -149,13 +149,13 @@ func genScanCheckExpr(p ParamInfo, idx int) string {
 	case "[]byte":
 		return fmt.Sprintf("[]byte(L.CheckString(%d))", idx)
 	case "[]string":
-		return fmt.Sprintf("luaCheckStringSlice(L, %d)", idx)
+		return fmt.Sprintf("luaCheckStringSlice_%s(L, %d)", moduleName, idx)
 	default:
 		return fmt.Sprintf("L.CheckString(%d) /* unsupported type %s */", idx, p.GoType)
 	}
 }
 
-func genScanPushExpr(r ReturnInfo, varName string) string {
+func genScanPushExpr(r ReturnInfo, varName string, moduleName string) string {
 	switch r.GoType {
 	case "string":
 		return fmt.Sprintf("L.PushString(%s)", varName)
@@ -176,7 +176,7 @@ func genScanPushExpr(r ReturnInfo, varName string) string {
 	case "[]byte":
 		return fmt.Sprintf("L.PushString(string(%s))", varName)
 	case "[]string":
-		return fmt.Sprintf("luaPushStringSlice(L, %s)", varName)
+		return fmt.Sprintf("luaPushStringSlice_%s(L, %s)", moduleName, varName)
 	default:
 		return fmt.Sprintf("L.PushString(fmt.Sprint(%s))", varName)
 	}
@@ -212,8 +212,12 @@ func scanNeedsStringSlice(b *Bindings) bool {
 }
 
 // generateStringSliceHelpers emits helper functions for []string ↔ Lua table conversion.
-func generateStringSliceHelpers(w *strings.Builder) {
-	w.WriteString("func luaCheckStringSlice(L *lua.State, idx int) []string {\n")
+// Helper names are suffixed with _<moduleName> to avoid redeclaration when
+// multiple generated files coexist in the same Go package.
+func generateStringSliceHelpers(w *strings.Builder, moduleName string) {
+	suffix := "_" + moduleName
+
+	w.WriteString(fmt.Sprintf("func luaCheckStringSlice%s(L *lua.State, idx int) []string {\n", suffix))
 	w.WriteString("\tL.CheckType(idx, lua.TypeTable)\n")
 	w.WriteString("\tn := int(L.RawLen(idx))\n")
 	w.WriteString("\tresult := make([]string, 0, n)\n")
@@ -226,7 +230,7 @@ func generateStringSliceHelpers(w *strings.Builder) {
 	w.WriteString("\treturn result\n")
 	w.WriteString("}\n\n")
 
-	w.WriteString("func luaPushStringSlice(L *lua.State, ss []string) {\n")
+	w.WriteString(fmt.Sprintf("func luaPushStringSlice%s(L *lua.State, ss []string) {\n", suffix))
 	w.WriteString("\tL.CreateTable(len(ss), 0)\n")
 	w.WriteString("\tfor i, s := range ss {\n")
 	w.WriteString("\t\tL.PushString(s)\n")
