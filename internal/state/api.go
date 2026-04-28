@@ -190,6 +190,12 @@ type LuaState struct {
 	// This avoids allocating a new &State{Internal: ls} on every C function call.
 	// Set once during state creation; type is any to avoid circular import.
 	APIState any
+
+	// YieldFlag is set by Yield() for simple C function yields (no continuation)
+	// to avoid the overhead of panic/recover stack unwinding. When set, the call
+	// chain (precallC → preCall → execute → Call → runProtected) returns normally
+	// instead of unwinding via panic(LuaYield{}).
+	YieldFlag bool
 }
 
 // Hook event constants (matches C LUA_HOOK*)

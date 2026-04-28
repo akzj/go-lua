@@ -1101,6 +1101,10 @@ startfunc:
 				ci = newci
 				goto startfunc
 			}
+			// Fast-path yield: C function yielded without panic
+			if L.YieldFlag {
+				return // exit execute() normally — Resume will handle
+			}
 			// C function already executed — refresh trap (C func may have set hooks)
 			trap = ci.Trap
 
