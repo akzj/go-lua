@@ -60,7 +60,7 @@ func TestTimerDelayWithScheduler(t *testing.T) {
 
 	// Push the function and spawn it
 	L.GetGlobal("delayTest")
-	err = sched.Spawn(L)
+	_, err = sched.Spawn(L)
 	if err != nil {
 		t.Fatalf("Spawn failed: %v", err)
 	}

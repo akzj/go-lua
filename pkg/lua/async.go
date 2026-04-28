@@ -1,6 +1,12 @@
 package lua
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrCancelled is returned by Future.Result when the Future was cancelled.
+var ErrCancelled = errors.New("cancelled")
 
 // Future represents the result of an async operation.
 // Thread-safe: can be resolved from any goroutine.
@@ -48,6 +54,29 @@ func (f *Future) Reject(err error) {
 		close(w)
 	}
 	f.waiters = nil
+}
+
+// Cancel cancels the Future. Waiters are notified with ErrCancelled.
+// Thread-safe. No-op if already done.
+func (f *Future) Cancel() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.done {
+		return
+	}
+	f.done = true
+	f.err = ErrCancelled
+	for _, w := range f.waiters {
+		close(w)
+	}
+	f.waiters = nil
+}
+
+// IsCancelled returns true if the Future was cancelled.
+func (f *Future) IsCancelled() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.done && f.err == ErrCancelled
 }
 
 // IsDone returns whether the Future has been resolved or rejected.
