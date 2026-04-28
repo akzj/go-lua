@@ -9,10 +9,12 @@ import (
 
 // Bindings holds all collected binding information for code generation.
 type Bindings struct {
-	PkgName    string     // Go package name
-	ModuleName string     // Lua module name
-	Funcs      []FuncInfo // standalone functions
-	Types      []TypeInfo // struct types
+	PkgName     string     // Go package name
+	ModuleName  string     // Lua module name
+	ImportPath  string     // import path for scan mode (e.g., "strings", "path/filepath")
+	ImportAlias string     // Go package alias (e.g., "filepath" for "path/filepath")
+	Funcs       []FuncInfo // standalone functions
+	Types       []TypeInfo // struct types
 }
 
 // FuncInfo describes a function to bind.

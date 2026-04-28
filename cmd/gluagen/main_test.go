@@ -87,3 +87,132 @@ func TestToSnakeCase(t *testing.T) {
 		}
 	}
 }
+
+func TestScanStrings(t *testing.T) {
+	bindings, err := scanPackage("strings", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bindings.ModuleName != "strings" {
+		t.Errorf("expected module name 'strings', got %q", bindings.ModuleName)
+	}
+
+	// strings package should have many bindable functions
+	if len(bindings.Funcs) < 30 {
+		t.Errorf("expected 30+ bindable functions, got %d", len(bindings.Funcs))
+	}
+
+	// Check specific functions exist
+	found := map[string]bool{}
+	for _, f := range bindings.Funcs {
+		found[f.GoName] = true
+	}
+	for _, name := range []string{"Contains", "HasPrefix", "Split", "Join", "ToUpper", "ToLower", "TrimSpace"} {
+		if !found[name] {
+			t.Errorf("expected function %s to be bindable", name)
+		}
+	}
+
+	// Functions with func params should be excluded
+	for _, name := range []string{"ContainsFunc", "Map", "IndexFunc"} {
+		if found[name] {
+			t.Errorf("function %s should be excluded (has func param)", name)
+		}
+	}
+
+	// Generate and check code
+	code := generateScan(bindings)
+	if !strings.Contains(code, "LuaOpen_strings") {
+		t.Error("missing LuaOpen_strings")
+	}
+	if !strings.Contains(code, `"strings"`) {
+		t.Error("missing strings import")
+	}
+	if !strings.Contains(code, "strings.Contains") {
+		t.Error("missing strings.Contains call")
+	}
+
+	t.Logf("Generated %d functions for strings package", len(bindings.Funcs))
+}
+
+func TestScanMath(t *testing.T) {
+	bindings, err := scanPackage("math", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(bindings.Funcs) < 30 {
+		t.Errorf("expected 30+ math functions, got %d", len(bindings.Funcs))
+	}
+
+	code := generateScan(bindings)
+	if !strings.Contains(code, "math.Sqrt") {
+		t.Error("missing math.Sqrt")
+	}
+	if !strings.Contains(code, "L.CheckNumber") {
+		t.Error("missing CheckNumber for float64 params")
+	}
+}
+
+func TestScanWithInclude(t *testing.T) {
+	bindings, err := scanPackage("strings", "Contains,HasPrefix,ToUpper", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(bindings.Funcs) != 3 {
+		t.Errorf("expected 3 functions with include filter, got %d", len(bindings.Funcs))
+	}
+}
+
+func TestScanWithExclude(t *testing.T) {
+	bindings, err := scanPackage("strings", "", "Contains,HasPrefix")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range bindings.Funcs {
+		if f.GoName == "Contains" || f.GoName == "HasPrefix" {
+			t.Errorf("function %s should be excluded", f.GoName)
+		}
+	}
+}
+
+func TestScanFilepath(t *testing.T) {
+	bindings, err := scanPackage("path/filepath", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Module name should be "filepath" (package name, not full path)
+	if bindings.ModuleName != "filepath" {
+		t.Errorf("expected module name 'filepath', got %q", bindings.ModuleName)
+	}
+
+	// Check some expected functions
+	found := map[string]bool{}
+	for _, f := range bindings.Funcs {
+		found[f.GoName] = true
+	}
+	// Base, Clean, Dir, Ext take string and return string — should be bindable.
+	for _, name := range []string{"Base", "Clean", "Dir", "Ext"} {
+		if !found[name] {
+			t.Errorf("expected function %s to be bindable", name)
+		}
+	}
+	// Join is variadic — should be excluded.
+	if found["Join"] {
+		t.Error("variadic function Join should be excluded")
+	}
+
+	code := generateScan(bindings)
+	// Import should use full path
+	if !strings.Contains(code, `"path/filepath"`) {
+		t.Error("missing path/filepath import")
+	}
+	// Call should use package alias "filepath"
+	if !strings.Contains(code, "filepath.Base") {
+		t.Error("missing filepath.Base call")
+	}
+}
