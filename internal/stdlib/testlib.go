@@ -1447,6 +1447,15 @@ func sethookaux(L *luaapi.State, L1 *luaapi.State, mask, count int, script strin
 	ls1.HookMask = mask
 	ls1.BaseHookCount = count
 	ls1.HookCount = count
+	// Set trap on all active Lua CallInfos so they pick up the new hook.
+	// Mirrors: luaD_sethook / settraps in C Lua.
+	if mask != 0 {
+		for ci := ls1.CI; ci != nil; ci = ci.Prev {
+			if ci.IsLua() {
+				ci.Trap = true
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
