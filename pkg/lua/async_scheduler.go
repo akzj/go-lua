@@ -5,17 +5,32 @@ import (
 	"time"
 )
 
+// CoroutineHandle is a handle to a spawned coroutine, used for cancellation.
+type CoroutineHandle struct {
+	id  int
+	ref int
+}
+
+// ID returns the handle's unique identifier.
+func (h *CoroutineHandle) ID() int {
+	return h.id
+}
+
 // Scheduler manages async coroutines within a single Lua State.
 // NOT thread-safe — must be used from a single goroutine (the main/event loop goroutine).
 type Scheduler struct {
 	L       *State
 	pending []pendingCoroutine
+	buf     []pendingCoroutine // reusable buffer for double-buffered Tick
+	OnError func(err error)    // called when a coroutine errors during Tick
+	nextID  int                // monotonic ID for CoroutineHandle
 }
 
 type pendingCoroutine struct {
 	thread *State  // the coroutine
 	future *Future // what it's waiting for (nil = resume unconditionally)
 	ref    int     // registry reference to prevent GC
+	id     int     // unique ID for cancellation via CoroutineHandle
 }
 
 // NewScheduler creates a new Scheduler for the given State.
@@ -26,35 +41,48 @@ func NewScheduler(L *State) *Scheduler {
 // Spawn creates a new coroutine from the function at the top of L's stack
 // and starts executing it. If it yields (via await), it's added to the pending list.
 // The function is popped from the stack.
-func (s *Scheduler) Spawn(L *State) error {
+// Returns a CoroutineHandle that can be used to cancel the coroutine.
+func (s *Scheduler) Spawn(L *State) (*CoroutineHandle, error) {
 	// Stack: [..., function]
 	co := L.NewThread() // pushes thread onto L's stack → [..., function, thread]
 
 	// Move the function from L to co's stack
-	L.PushValue(-2)  // copy function → [..., function, thread, function]
-	L.XMove(co, 1)   // move copy to co → L: [..., function, thread], co: [function]
+	L.PushValue(-2) // copy function → [..., function, thread, function]
+	L.XMove(co, 1)  // move copy to co → L: [..., function, thread], co: [function]
 
 	// Save a registry reference to the thread to prevent GC
-	L.PushValue(-1)            // copy thread → [..., function, thread, thread]
+	L.PushValue(-1)             // copy thread → [..., function, thread, thread]
 	ref := L.Ref(RegistryIndex) // pops thread copy → [..., function, thread]
 
 	L.Pop(2) // pop thread and original function → [...]
 
+	s.nextID++
+	id := s.nextID
+
+	handle := &CoroutineHandle{id: id, ref: ref}
+
 	// Resume the coroutine (function is already on co's stack)
 	status, _ := co.Resume(L, 0)
 
-	return s.handleResumeResult(status, pendingCoroutine{
+	err := s.handleResumeResult(status, pendingCoroutine{
 		thread: co,
 		future: nil,
 		ref:    ref,
+		id:     id,
 	})
+
+	if err != nil {
+		return nil, err
+	}
+	return handle, nil
 }
 
 // Tick checks all pending coroutines and resumes any whose Future is done.
 // Returns the number of still-pending coroutines.
 // Call this in your event loop / main loop.
+// Uses double-buffering to avoid per-frame allocation.
 func (s *Scheduler) Tick() int {
-	remaining := make([]pendingCoroutine, 0, len(s.pending))
+	s.buf = s.buf[:0]
 
 	for _, pc := range s.pending {
 		if pc.future == nil || pc.future.IsDone() {
@@ -65,30 +93,38 @@ func (s *Scheduler) Tick() int {
 					pc.thread.PushNil()
 					pc.thread.PushString(err.Error())
 					status, _ := pc.thread.Resume(s.L, 2)
-					if err2 := s.collectResumed(status, pc, &remaining); err2 != nil {
-						// Coroutine errored — already unref'd inside collectResumed
+					if err2 := s.collectResumed(status, pc, &s.buf); err2 != nil {
+						if s.OnError != nil {
+							s.OnError(err2)
+						}
 						continue
 					}
 				} else {
 					pc.thread.PushAny(val)
 					status, _ := pc.thread.Resume(s.L, 1)
-					if err2 := s.collectResumed(status, pc, &remaining); err2 != nil {
+					if err2 := s.collectResumed(status, pc, &s.buf); err2 != nil {
+						if s.OnError != nil {
+							s.OnError(err2)
+						}
 						continue
 					}
 				}
 			} else {
 				// No future, just resume
 				status, _ := pc.thread.Resume(s.L, 0)
-				if err := s.collectResumed(status, pc, &remaining); err != nil {
+				if err := s.collectResumed(status, pc, &s.buf); err != nil {
+					if s.OnError != nil {
+						s.OnError(err)
+					}
 					continue
 				}
 			}
 		} else {
-			remaining = append(remaining, pc)
+			s.buf = append(s.buf, pc)
 		}
 	}
 
-	s.pending = remaining
+	s.pending, s.buf = s.buf, s.pending[:0]
 	return len(s.pending)
 }
 
@@ -110,6 +146,7 @@ func (s *Scheduler) collectResumed(status int, pc pendingCoroutine, dst *[]pendi
 			thread: pc.thread,
 			future: future,
 			ref:    pc.ref,
+			id:     pc.id,
 		})
 		return nil
 	}
@@ -140,6 +177,7 @@ func (s *Scheduler) handleResumeResult(status int, pc pendingCoroutine) error {
 			thread: pc.thread,
 			future: future,
 			ref:    pc.ref,
+			id:     pc.id,
 		})
 		return nil
 	}
@@ -154,6 +192,39 @@ func (s *Scheduler) handleResumeResult(status int, pc pendingCoroutine) error {
 	msg, _ := pc.thread.ToString(-1)
 	s.L.Unref(RegistryIndex, pc.ref)
 	return fmt.Errorf("coroutine error: %s", msg)
+}
+
+// Cancel cancels a coroutine by its handle.
+// Removes it from pending, unrefs, and cancels its future.
+func (s *Scheduler) Cancel(h *CoroutineHandle) {
+	if h == nil {
+		return
+	}
+	for i, pc := range s.pending {
+		if pc.id == h.id {
+			s.L.Unref(RegistryIndex, pc.ref)
+			if pc.future != nil {
+				pc.future.Cancel()
+			}
+			// Remove from pending (swap with last, shrink)
+			s.pending[i] = s.pending[len(s.pending)-1]
+			s.pending = s.pending[:len(s.pending)-1]
+			return
+		}
+	}
+}
+
+// Destroy cancels all pending coroutines and releases their registry references.
+// Call this when shutting down or hot-reloading.
+func (s *Scheduler) Destroy() {
+	for _, pc := range s.pending {
+		s.L.Unref(RegistryIndex, pc.ref)
+		if pc.future != nil {
+			pc.future.Cancel()
+		}
+	}
+	s.pending = nil
+	s.buf = nil
 }
 
 // Pending returns the number of pending coroutines.

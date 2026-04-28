@@ -140,7 +140,7 @@ func TestScheduler_SpawnSimple(t *testing.T) {
 	}
 
 	L.GetGlobal("task")
-	if err := sched.Spawn(L); err != nil {
+	if _, err := sched.Spawn(L); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,7 +189,7 @@ func TestScheduler_SpawnWithFuture(t *testing.T) {
 	}
 
 	L.GetGlobal("task")
-	if err := sched.Spawn(L); err != nil {
+	if _, err := sched.Spawn(L); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,7 +246,7 @@ func TestScheduler_SpawnWithFutureError(t *testing.T) {
 	}
 
 	L.GetGlobal("task")
-	if err := sched.Spawn(L); err != nil {
+	if _, err := sched.Spawn(L); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,9 +314,9 @@ func TestScheduler_MultipleCoroutines(t *testing.T) {
 	}
 
 	L.GetGlobal("task1")
-	sched.Spawn(L)
+	sched.Spawn(L) //nolint:errcheck
 	L.GetGlobal("task2")
-	sched.Spawn(L)
+	sched.Spawn(L) //nolint:errcheck
 
 	if sched.Pending() != 2 {
 		t.Fatalf("expected 2 pending, got %d", sched.Pending())
@@ -774,9 +774,9 @@ func TestAsync_ConcurrentGoroutines(t *testing.T) {
 	}
 
 	L.GetGlobal("task1")
-	sched.Spawn(L)
+	sched.Spawn(L) //nolint:errcheck
 	L.GetGlobal("task2")
-	sched.Spawn(L)
+	sched.Spawn(L) //nolint:errcheck
 
 	if err := sched.WaitAll(5 * time.Second); err != nil {
 		t.Fatal(err)
@@ -795,4 +795,306 @@ func TestAsync_ConcurrentGoroutines(t *testing.T) {
 	if v2 != "fast" {
 		t.Fatalf("expected 'fast', got %v", v2)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// New tests for async enhancements
+// ---------------------------------------------------------------------------
+
+func TestScheduler_OnError(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	var gotErr error
+	sched.OnError = func(err error) {
+		gotErr = err
+	}
+
+	future := NewFuture()
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		function error_after_await()
+			local f = get_future()
+			async.await(f)
+			error("boom in coroutine")
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("error_after_await")
+	_, err = sched.Spawn(L)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending, got %d", sched.Pending())
+	}
+
+	// Resolve future — coroutine resumes and then errors
+	future.Resolve("go")
+	sched.Tick()
+
+	if gotErr == nil {
+		t.Fatal("expected OnError to be called")
+	}
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending after error, got %d", sched.Pending())
+	}
+
+	// Verify without OnError set, error is just swallowed (no panic)
+	L2 := NewState()
+	defer L2.Close()
+	sched2 := NewScheduler(L2) // no OnError set
+
+	f2 := NewFuture()
+	L2.PushFunction(func(L *State) int {
+		L.PushUserdata(f2)
+		return 1
+	})
+	L2.SetGlobal("get_future")
+
+	err = L2.DoString(`
+		local async = require("async")
+		function error_task()
+			local f = get_future()
+			async.await(f)
+			error("should not panic")
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L2.GetGlobal("error_task")
+	sched2.Spawn(L2) //nolint:errcheck
+
+	f2.Resolve("x")
+	sched2.Tick() // should not panic even without OnError
+}
+
+func TestFuture_Cancel(t *testing.T) {
+	f := NewFuture()
+	ch := f.Wait()
+
+	f.Cancel()
+
+	if !f.IsDone() {
+		t.Fatal("expected done after cancel")
+	}
+	if !f.IsCancelled() {
+		t.Fatal("expected IsCancelled")
+	}
+	val, err := f.Result()
+	if val != nil {
+		t.Fatalf("expected nil value, got %v", val)
+	}
+	if err != ErrCancelled {
+		t.Fatalf("expected ErrCancelled, got %v", err)
+	}
+
+	// Channel should be closed
+	select {
+	case <-ch:
+		// good
+	default:
+		t.Fatal("Wait channel should be closed after Cancel")
+	}
+}
+
+func TestFuture_CancelAlreadyDone(t *testing.T) {
+	f := NewFuture()
+	f.Resolve("hello")
+
+	f.Cancel() // should be no-op
+
+	if f.IsCancelled() {
+		t.Fatal("should not be cancelled after Resolve")
+	}
+	val, err := f.Result()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if val != "hello" {
+		t.Fatalf("expected 'hello', got %v", val)
+	}
+}
+
+func TestScheduler_Cancel(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+	future := NewFuture()
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(future)
+		return 1
+	})
+	L.SetGlobal("get_future")
+
+	err := L.DoString(`
+		local async = require("async")
+		function cancellable_task()
+			local f = get_future()
+			async.await(f)
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("cancellable_task")
+	h, err := sched.Spawn(L)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sched.Pending() != 1 {
+		t.Fatalf("expected 1 pending, got %d", sched.Pending())
+	}
+
+	// Cancel via handle
+	sched.Cancel(h)
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending after cancel, got %d", sched.Pending())
+	}
+
+	// Future should be cancelled
+	if !future.IsCancelled() {
+		t.Fatal("expected future to be cancelled")
+	}
+}
+
+func TestScheduler_Destroy(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+	f2 := NewFuture()
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f1)
+		return 1
+	})
+	L.SetGlobal("get_f1")
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f2)
+		return 1
+	})
+	L.SetGlobal("get_f2")
+
+	err := L.DoString(`
+		local async = require("async")
+		function t1()
+			async.await(get_f1())
+		end
+		function t2()
+			async.await(get_f2())
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("t1")
+	sched.Spawn(L) //nolint:errcheck
+	L.GetGlobal("t2")
+	sched.Spawn(L) //nolint:errcheck
+
+	if sched.Pending() != 2 {
+		t.Fatalf("expected 2 pending, got %d", sched.Pending())
+	}
+
+	sched.Destroy()
+
+	if sched.Pending() != 0 {
+		t.Fatalf("expected 0 pending after destroy, got %d", sched.Pending())
+	}
+
+	// Futures should be cancelled
+	if !f1.IsCancelled() {
+		t.Fatal("expected f1 cancelled")
+	}
+	if !f2.IsCancelled() {
+		t.Fatal("expected f2 cancelled")
+	}
+}
+
+func TestScheduler_SpawnReturnsHandle(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	sched := NewScheduler(L)
+
+	f1 := NewFuture()
+	f2 := NewFuture()
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f1)
+		return 1
+	})
+	L.SetGlobal("get_f1")
+
+	L.PushFunction(func(L *State) int {
+		L.PushUserdata(f2)
+		return 1
+	})
+	L.SetGlobal("get_f2")
+
+	err := L.DoString(`
+		local async = require("async")
+		function t1()
+			async.await(get_f1())
+		end
+		function t2()
+			async.await(get_f2())
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("t1")
+	h1, err := sched.Spawn(L)
+	if err != nil {
+		t.Fatal(err)
+	}
+	L.GetGlobal("t2")
+	h2, err := sched.Spawn(L)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if h1 == nil {
+		t.Fatal("expected non-nil handle h1")
+	}
+	if h2 == nil {
+		t.Fatal("expected non-nil handle h2")
+	}
+	if h1.ID() == h2.ID() {
+		t.Fatalf("expected unique IDs, got %d and %d", h1.ID(), h2.ID())
+	}
+	if h1.ID() <= 0 || h2.ID() <= 0 {
+		t.Fatalf("expected positive IDs, got %d and %d", h1.ID(), h2.ID())
+	}
+
+	// Cleanup
+	f1.Resolve("done")
+	f2.Resolve("done")
+	sched.WaitAll(time.Second)
 }
