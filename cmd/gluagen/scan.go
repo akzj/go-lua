@@ -138,10 +138,12 @@ func sigToFuncInfo(name string, sig *types.Signature) FuncInfo {
 	for i := range params.Len() {
 		p := params.At(i)
 		goType := typeToGoString(p.Type())
+		kind := underlyingKindString(p.Type())
 		pi := ParamInfo{
-			Name:    p.Name(),
-			GoType:  goType,
-			IsSlice: strings.HasPrefix(goType, "[]"),
+			Name:           p.Name(),
+			GoType:         goType,
+			UnderlyingKind: kind,
+			IsSlice:        strings.HasPrefix(goType, "[]"),
 		}
 		fi.Params = append(fi.Params, pi)
 	}
@@ -150,9 +152,11 @@ func sigToFuncInfo(name string, sig *types.Signature) FuncInfo {
 	for i := range results.Len() {
 		r := results.At(i)
 		goType := typeToGoString(r.Type())
+		kind := underlyingKindString(r.Type())
 		ri := ReturnInfo{
-			GoType:  goType,
-			IsError: goType == "error",
+			GoType:         goType,
+			UnderlyingKind: kind,
+			IsError:        goType == "error",
 		}
 		fi.Returns = append(fi.Returns, ri)
 	}
@@ -165,7 +169,30 @@ func sigToFuncInfo(name string, sig *types.Signature) FuncInfo {
 }
 
 // typeToGoString converts a types.Type to the Go type string used in codegen.
+// Named/aliased types from external packages are preserved (e.g., "os.FileMode").
 func typeToGoString(t types.Type) string {
+	// Check for type aliases first (e.g., os.FileMode = io/fs.FileMode).
+	if alias, ok := t.(*types.Alias); ok {
+		obj := alias.Obj()
+		pkg := obj.Pkg()
+		if pkg != nil {
+			return pkg.Name() + "." + obj.Name()
+		}
+		return obj.Name()
+	}
+
+	// Check for named types (e.g., io/fs.FileMode).
+	if named, ok := t.(*types.Named); ok {
+		obj := named.Obj()
+		pkg := obj.Pkg()
+		if pkg != nil {
+			// External named type: qualified name (e.g., "fs.FileMode").
+			return pkg.Name() + "." + obj.Name()
+		}
+		// Built-in named type (e.g., "error").
+		return obj.Name()
+	}
+
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		switch u.Kind() {
@@ -185,6 +212,37 @@ func typeToGoString(t types.Type) string {
 		return "any"
 	}
 	return t.String()
+}
+
+// underlyingKindString returns the underlying primitive type name for a type.
+// For named types like os.FileMode (underlying uint32), returns "uint32".
+// For basic types, returns the basic name. For slices, returns "[]byte" or "[]string".
+func underlyingKindString(t types.Type) string {
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		switch u.Kind() {
+		case types.Byte:
+			return "uint8"
+		case types.Rune:
+			return "int32"
+		default:
+			return u.Name()
+		}
+	case *types.Slice:
+		if basic, ok := u.Elem().Underlying().(*types.Basic); ok {
+			if basic.Kind() == types.Byte {
+				return "[]byte"
+			}
+			if basic.Kind() == types.String {
+				return "[]string"
+			}
+		}
+	case *types.Interface:
+		if isErrorType(t) {
+			return "error"
+		}
+	}
+	return ""
 }
 
 // parseCSV splits a comma-separated string into a set.

@@ -117,68 +117,72 @@ func generateScanFuncWrapper(w *strings.Builder, f FuncInfo, b *Bindings) {
 }
 
 func genScanCheckExpr(p ParamInfo, idx int, moduleName string) string {
-	switch p.GoType {
+	// Use UnderlyingKind to pick the Lua operation, GoType for the cast.
+	kind := p.UnderlyingKind
+	if kind == "" {
+		kind = p.GoType
+	}
+	castType := p.GoType // the type the Go function expects
+
+	switch kind {
 	case "string":
+		if castType != "string" {
+			return fmt.Sprintf("%s(L.CheckString(%d))", castType, idx)
+		}
 		return fmt.Sprintf("L.CheckString(%d)", idx)
-	case "int":
-		return fmt.Sprintf("int(L.CheckInteger(%d))", idx)
-	case "int8":
-		return fmt.Sprintf("int8(L.CheckInteger(%d))", idx)
-	case "int16":
-		return fmt.Sprintf("int16(L.CheckInteger(%d))", idx)
-	case "int32":
-		return fmt.Sprintf("int32(L.CheckInteger(%d))", idx)
-	case "int64":
-		return fmt.Sprintf("L.CheckInteger(%d)", idx)
-	case "uint":
-		return fmt.Sprintf("uint(L.CheckInteger(%d))", idx)
-	case "uint8":
-		return fmt.Sprintf("uint8(L.CheckInteger(%d))", idx)
-	case "uint16":
-		return fmt.Sprintf("uint16(L.CheckInteger(%d))", idx)
-	case "uint32":
-		return fmt.Sprintf("uint32(L.CheckInteger(%d))", idx)
-	case "uint64":
-		return fmt.Sprintf("uint64(L.CheckInteger(%d))", idx)
-	case "float32":
-		return fmt.Sprintf("float32(L.CheckNumber(%d))", idx)
-	case "float64":
-		return fmt.Sprintf("L.CheckNumber(%d)", idx)
 	case "bool":
+		if castType != "bool" {
+			return fmt.Sprintf("%s(L.ToBoolean(%d))", castType, idx)
+		}
 		return fmt.Sprintf("L.ToBoolean(%d)", idx)
+	case "float64":
+		if castType != "float64" {
+			return fmt.Sprintf("%s(L.CheckNumber(%d))", castType, idx)
+		}
+		return fmt.Sprintf("L.CheckNumber(%d)", idx)
+	case "float32":
+		return fmt.Sprintf("%s(L.CheckNumber(%d))", castType, idx)
+	case "int64":
+		if castType != "int64" {
+			return fmt.Sprintf("%s(L.CheckInteger(%d))", castType, idx)
+		}
+		return fmt.Sprintf("L.CheckInteger(%d)", idx)
 	case "[]byte":
 		return fmt.Sprintf("[]byte(L.CheckString(%d))", idx)
 	case "[]string":
 		return fmt.Sprintf("luaCheckStringSlice_%s(L, %d)", moduleName, idx)
 	default:
-		return fmt.Sprintf("L.CheckString(%d) /* unsupported type %s */", idx, p.GoType)
+		// All other int/uint types always need a cast.
+		return fmt.Sprintf("%s(L.CheckInteger(%d))", castType, idx)
 	}
 }
 
 func genScanPushExpr(r ReturnInfo, varName string, moduleName string) string {
-	switch r.GoType {
+	// Use UnderlyingKind to pick the Lua push operation.
+	// The varName already has the correct Go type from the function return.
+	kind := r.UnderlyingKind
+	if kind == "" {
+		kind = r.GoType
+	}
+
+	switch kind {
 	case "string":
-		return fmt.Sprintf("L.PushString(%s)", varName)
-	case "int":
-		return fmt.Sprintf("L.PushInteger(int64(%s))", varName)
-	case "int8", "int16", "int32":
-		return fmt.Sprintf("L.PushInteger(int64(%s))", varName)
-	case "int64":
-		return fmt.Sprintf("L.PushInteger(%s)", varName)
-	case "uint", "uint8", "uint16", "uint32", "uint64":
-		return fmt.Sprintf("L.PushInteger(int64(%s))", varName)
+		return fmt.Sprintf("L.PushString(string(%s))", varName)
+	case "bool":
+		return fmt.Sprintf("L.PushBoolean(bool(%s))", varName)
+	case "float64":
+		return fmt.Sprintf("L.PushNumber(float64(%s))", varName)
 	case "float32":
 		return fmt.Sprintf("L.PushNumber(float64(%s))", varName)
-	case "float64":
-		return fmt.Sprintf("L.PushNumber(%s)", varName)
-	case "bool":
-		return fmt.Sprintf("L.PushBoolean(%s)", varName)
+	case "int64":
+		return fmt.Sprintf("L.PushInteger(int64(%s))", varName)
 	case "[]byte":
 		return fmt.Sprintf("L.PushString(string(%s))", varName)
 	case "[]string":
 		return fmt.Sprintf("luaPushStringSlice_%s(L, %s)", moduleName, varName)
 	default:
-		return fmt.Sprintf("L.PushString(fmt.Sprint(%s))", varName)
+		// All other int/uint types: cast to int64 for PushInteger.
+		return fmt.Sprintf("L.PushInteger(int64(%s))", varName)
 	}
 }
 
