@@ -1150,6 +1150,10 @@ startfunc:
 				}
 				gc.CloseUpvals(L.Global, L, base) // barrier-aware close
 				closeTBCWithError(L, base, state.StatusCloseKTop, object.Nil, true)
+				// If __close yielded via flag, exit execute — coroutine is suspended.
+				if L.YieldFlag {
+					return
+				}
 				// After close, stack may have been reallocated by __close calls.
 				// Refresh base and ra from ci (which uses offsets, not pointers).
 				base = ci.Func + 1
