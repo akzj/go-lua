@@ -315,7 +315,7 @@ func getStrFromHash(t *Table, key *object.LuaString) (object.TValue, bool) {
 		nd := &t.Nodes[idx]
 		if nd.KeyTT == object.TagShortStr {
 			ndKey := (*object.LuaString)(nd.KeyPtr)
-			if ndKey == key || ndKey.Data == key.Data {
+			if ndKey == key || (ndKey.Hash_ == key.Hash_ && ndKey.Data == key.Data) {
 				if !nodeIsEmpty(nd) {
 					return nd.Val, true
 				}
@@ -389,7 +389,7 @@ func setStrInHashIfExists(t *Table, key *object.LuaString, value object.TValue) 
 		nd := &t.Nodes[idx]
 		if nd.KeyTT == object.TagShortStr {
 			ndKey := (*object.LuaString)(nd.KeyPtr)
-			if ndKey == key || ndKey.Data == key.Data {
+			if ndKey == key || (ndKey.Hash_ == key.Hash_ && ndKey.Data == key.Data) {
 				if !nodeIsEmpty(nd) {
 					nd.Val = value
 					return true
