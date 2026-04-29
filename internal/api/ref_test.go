@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // ---------------------------------------------------------------------------
 // Ref / Unref (luaL_ref / luaL_unref)
@@ -266,5 +269,47 @@ func TestRefUnrefAndReuseAll(t *testing.T) {
 			t.Fatalf("duplicate ref %d at iteration %d", ref, i)
 		}
 		newRefs[ref] = true
+	}
+}
+
+// TestRefStress runs 1000 rounds of random ref/unref to stress-test the
+// free list for corruption, duplicate slots, and lost values.
+func TestRefStress(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	refs := make(map[int]bool)
+	var allRefs []int
+
+	for i := 0; i < 1000; i++ {
+		if i%3 != 0 || len(allRefs) == 0 {
+			// Ref
+			L.PushString(fmt.Sprintf("val_%d", i))
+			ref := L.Ref(RegistryIndex)
+			if refs[ref] {
+				t.Fatalf("iteration %d: duplicate ref %d", i, ref)
+			}
+			refs[ref] = true
+			allRefs = append(allRefs, ref)
+		} else {
+			// Unref random
+			idx := i % len(allRefs)
+			ref := allRefs[idx]
+			if refs[ref] {
+				L.Unref(RegistryIndex, ref)
+				delete(refs, ref)
+			}
+			allRefs[idx] = allRefs[len(allRefs)-1]
+			allRefs = allRefs[:len(allRefs)-1]
+		}
+	}
+
+	// Verify all remaining refs
+	for ref := range refs {
+		L.RawGetI(RegistryIndex, int64(ref))
+		if L.IsNil(-1) {
+			t.Fatalf("ref %d lost", ref)
+		}
+		L.Pop(1)
 	}
 }
