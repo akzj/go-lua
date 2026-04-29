@@ -410,6 +410,9 @@ func posCall(L *state.LuaState, ci *state.CallInfo, nres int) {
 	if hasTBC {
 		// Close TBC vars from TBCList down to res (CLOSEKTOP semantics).
 		closeTBCWithError(L, res, state.StatusCloseKTop, object.Nil, true)
+		if L.YieldFlag {
+			return // don't move results or pop CI — coroutine is suspended
+		}
 		// Call return hook after __close methods (C Lua defers hook for TBC).
 		if L.HookMask != 0 {
 			if L.AllowHook && L.HookMask&state.MaskRet != 0 {
@@ -1586,6 +1589,10 @@ func closeTBCWithError(L *state.LuaState, level int, status int, errObj object.T
 
 		tm := metamethod.GetTMByObj(L.Global, obj, metamethod.TM_CLOSE)
 		callCloseMethod(L, tm, obj, tbc, status, errObj, yieldable)
+		// If __close yielded via flag, stop closing — resume will continue.
+		if L.YieldFlag {
+			return
+		}
 	}
 }
 
@@ -1640,6 +1647,11 @@ func callCloseMethod(L *state.LuaState, tm, obj object.TValue, level int, status
 		Call(L, top, 0)
 	} else {
 		CallNoYield(L, top, 0)
+	}
+	// If the __close method yielded via flag, do NOT restore oldStatus.
+	// CISTClsRet must remain set so unroll knows this is a TBC close yield.
+	if L.YieldFlag {
+		return
 	}
 	L.CI.CallStatus = oldStatus
 }
