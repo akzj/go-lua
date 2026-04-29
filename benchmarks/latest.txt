@@ -32,9 +32,9 @@ testing order (floats cannot represent all integers)
 testing ldexp/frexp
 testing -0 and NaN
 testing 'math.random'
-random seeds: 1777382195083729746, -4860102577003928737
-float random range in 42400 calls: [0.000004, 0.999997]
-integer random range in 32000 calls: [minint + 9ppm, maxint - 13ppm]
+random seeds: 1777437276676502260, -4860102577003928737
+float random range in 31800 calls: [0.000029, 0.999925]
+integer random range in 51200 calls: [minint + 24ppm, maxint - 12ppm]
 testing precision of 'tostring'
   15-digit float numbers with full precision
   18-digit integer numbers with full precision
@@ -45,10 +45,10 @@ testing 'table.create'
 testing unpack
 testing pack
 testing sort
-sorting 5000 random elements in 2.96 msec.
-re-sorting 5000 sorted elements in 0.96 msec.
-Invert-sorting other 5000 elements in 3.27 msec., with 64709 comparisons
-sorting 5000 equal elements in 2.71 msec.
+sorting 5000 random elements in 2.81 msec.
+re-sorting 5000 sorted elements in 0.99 msec.
+Invert-sorting other 5000 elements in 3.08 msec., with 66299 comparisons
+sorting 5000 equal elements in 2.03 msec.
 OK
   sort.lua             PASS
 testing vararg
@@ -116,14 +116,18 @@ testing panic function
 testing load of binaries in fixed buffers
 +
 +
-  api.lua              FAIL: api.lua:1091: assertion failed!
++
+testing to-be-closed variables
++
+OK
+  api.lua              PASS
   big.lua              PASS
   bwcoercion.lua       PASS
 testing RK
   verybig.lua          PASS
 testing tables, next, and for
 +
-testing length for some random tables (seeds 0X18aa87b0923144bb:75c64c1302a0d69a)
+testing length for some random tables (seeds 0X18aab9c9474f4ba9:ee14fd41fafb194b)
 testing attack on table length
 +
 +
@@ -151,13 +155,25 @@ OK
 testing require
 package config: /|;|?|!|-
 testing 'require' message
-  attrib.lua           FAIL: runtime error: ../../lua-master/testes/attrib.lua:68: assertion failed!
++
+testing assignments, logical operators, and constructors
++
+OK
+  attrib.lua           PASS
 testing coroutines
 to-be-closed variables in coroutines
 testing 'coroutine.close'
 coroutines closing itself
 testing yields inside hooks
-  coroutine.lua        FAIL: coroutine.lua:685: assertion failed!
+testing coroutine API
++
++
+testing yields inside metamethods
++
+testing yields inside 'for' iterators
+testing coroutine API
+OK
+  coroutine.lua        PASS
 testing errors
 +
 testing tokens in error messages
@@ -213,7 +229,7 @@ testing flush
 +
 testing date/time
   8-byte time_t
-test done on 28/04/2026, at 21:16:35
+test done on 29/04/2026, at 12:34:37
 Lua 5.5
   files.lua            PASS
 testing stack overflow detection
@@ -276,9 +292,9 @@ testing order (floats cannot represent all integers)
 testing ldexp/frexp
 testing -0 and NaN
 testing 'math.random'
-random seeds: 1777382196007317375, -4860102577003928737
-float random range in 37100 calls: [0.000015, 0.999992]
-integer random range in 38400 calls: [minint + 21ppm, maxint - 15ppm]
+random seeds: 1777437277687934965, -4860102577003928737
+float random range in 37100 calls: [0.000056, 0.999934]
+integer random range in 44800 calls: [minint + 50ppm, maxint - 43ppm]
 testing precision of 'tostring'
   15-digit float numbers with full precision
   18-digit integer numbers with full precision
@@ -289,10 +305,270 @@ testing 'table.create'
 testing unpack
 testing pack
 testing sort
-sorting 5000 random elements in 1.42 msec.
-re-sorting 5000 sorted elements in 0.94 msec.
-Invert-sorting other 5000 elements in 2.68 msec., with 64154 comparisons
-sorting 5000 equal elements in 1.79 msec.
+sorting 5000 random elements in 1.47 msec.
+re-sorting 5000 sorted elements in 1.03 msec.
+Invert-sorting other 5000 elements in 3.00 msec., with 65182 comparisons
+sorting 5000 equal elements in 1.92 msec.
+OK
+  sort.lua             PASS
+testing vararg
++
++
++
+OK
+  vararg.lua           PASS
+testing syntax
++
+testing short-circuit optimizations (1)
++
+OK
+  constructs.lua       PASS
+testing metatables
++
++
+OK
+  events.lua           PASS
+testing functions and calls
++
++
+testing tail calls
++
+testing chains of '__call'
++
+testing binary chunks
+OK
+  calls.lua            PASS
+testing local variables and environments
++
+testing local constants
+testing to-be-closed variables
+testing errors in __close
+to-be-closed variables in coroutines
+OK
+  locals.lua           PASS
+testing bitwise operations
++
+testing bitwise library
++
++
+OK
+  bitwise.lua          PASS
+testing pack/unpack
+platform:
+	short 2, int 4, long 8, size_t 8, float 4, double 8,
+	lua Integer 8, lua Number 8
+	little endian
+	alignment: 8
+testing invalid formats
+testing pack/unpack of floating-point numbers
+testing pack/unpack of strings
+testing alignment
+OK
+  tpack.lua            PASS
+
+ >>> testC not active: skipping opcode tests <<<
+
+  code.lua             PASS
+testing C API
+Lua warning: #This should be a single warning
+Lua warning: #This should be another one
+testing panic function
+testing load of binaries in fixed buffers
++
++
++
+testing to-be-closed variables
++
+OK
+  api.lua              PASS
+  big.lua              PASS
+  bwcoercion.lua       PASS
+testing RK
+  verybig.lua          PASS
+testing tables, next, and for
++
+testing length for some random tables (seeds 0X18aab9c978f9b4f0:75e0302735a95635)
+testing attack on table length
++
++
+testing next x GC of deleted keys
++
+testing floats in numeric for
+OK
+  nextvar.lua          PASS
+testing pattern matching
++
++
++
++
+OK
+  pm.lua               PASS
+testing debug library and debug information
++
+testing inspection of parameters/returned values
++
++
+testing traceback sizes
+testing debug functions on chunk without debug info
+OK
+  db.lua               PASS
+testing require
+package config: /|;|?|!|-
+testing 'require' message
++
+testing assignments, logical operators, and constructors
++
+OK
+  attrib.lua           PASS
+testing coroutines
+to-be-closed variables in coroutines
+testing 'coroutine.close'
+coroutines closing itself
+testing yields inside hooks
+testing coroutine API
++
++
+testing yields inside metamethods
++
+testing yields inside 'for' iterators
+testing coroutine API
+OK
+  coroutine.lua        PASS
+testing errors
++
+testing tokens in error messages
++
+OK
+  errors.lua           PASS
+testing goto and global declarations
+  ('global' is not a reserved word)
+testing initialization in global declarations
+OK
+  goto.lua             PASS
+testing scanner
++
++
++
++
++
+
+ >>> pt_BR locale not available: skipping decimal point tests <<<
+
+OK
+  literals.lua         PASS
+testing UTF-8 library
+ok
+  utf8.lua             PASS
+testing closures
++
+OK
+  closure.lua          PASS
+testing incremental garbage collection
+steps
+creating many objects
+functions with errors
+long strings
+clearing tables
+weak tables
++
+self-referenced threads
+OK
+  gc.lua               PASS
+testing generational garbage collection
++
+testing stop-the-world collection
+OK
+  gengc.lua            PASS
+testing i/o
++
++
++
+testing flush
++
++
++
+testing date/time
+  8-byte time_t
+test done on 29/04/2026, at 12:34:38
+Lua 5.5
+  files.lua            PASS
+testing stack overflow detection
+testing stack overflow in message handling
+final count: 	250044
+testing recursion inside pattern matching
+testing stack-overflow in recursive 'gsub'
+final count: 	198
+testing stack-overflow in recursive 'gsub' with metatables
+final count: 	99
+testing limits in coroutines inside deep calls
+final count: 	98
+chain of 'coroutine.close'
+final count: 	198
+nesting of resuming yielded coroutines
+final count: 	195
+nesting coroutines running after recoverable errors
+final count: 	197
+testing stack recovery
+maximum stack size: 1000005
++
+OK
+  cstack.lua           PASS
+testing vararg
++
++
++
+OK
+testing string.dump
+dump ok, size=83
+basic roundtrip ok
+mode t rejection ok
+C function rejection ok
+multi-arg roundtrip ok
+all string.dump tests passed
+global const star OK
+OK
+global const names OK
+global decl OK
+global function OK
+global assign OK
+global multi OK
+hello	42	true	nil
+
+testing strings and string library
+testing 'format %a %A'
+'collate' locale not found
+'ctype' locale not found
+
+ >>> testC not active: skipping 'pushfstring' tests <<<
+
+
+ >>> testC not active: skipping external strings tests <<<
+
+OK
+  strings.lua          PASS
+testing numbers and math lib
+  64-bit integers, 53-bit*2^1023 floats
+testing order (floats cannot represent all integers)
+testing ldexp/frexp
+testing -0 and NaN
+testing 'math.random'
+random seeds: 1777437278521747857, -4860102577003928737
+float random range in 37100 calls: [0.000048, 0.999926]
+integer random range in 44800 calls: [minint + 37ppm, maxint - 10ppm]
+testing precision of 'tostring'
+  15-digit float numbers with full precision
+  18-digit integer numbers with full precision
+OK
+  math.lua             PASS
+testing (parts of) table library
+testing 'table.create'
+testing unpack
+testing pack
+testing sort
+sorting 5000 random elements in 1.48 msec.
+re-sorting 5000 sorted elements in 0.99 msec.
+Invert-sorting other 5000 elements in 2.95 msec., with 63089 comparisons
+sorting 5000 equal elements in 1.94 msec.
 OK
   sort.lua             PASS
 testing vararg
@@ -360,258 +636,18 @@ testing panic function
 testing load of binaries in fixed buffers
 +
 +
-  api.lua              FAIL: api.lua:1091: assertion failed!
-  big.lua              PASS
-  bwcoercion.lua       PASS
-testing RK
-  verybig.lua          PASS
-testing tables, next, and for
 +
-testing length for some random tables (seeds 0X18aa87b0c38f3564:7c3e577e97d0528)
-testing attack on table length
-+
-+
-testing next x GC of deleted keys
-+
-testing floats in numeric for
-OK
-  nextvar.lua          PASS
-testing pattern matching
-+
-+
-+
-+
-OK
-  pm.lua               PASS
-testing debug library and debug information
-+
-testing inspection of parameters/returned values
-+
-+
-testing traceback sizes
-testing debug functions on chunk without debug info
-OK
-  db.lua               PASS
-testing require
-package config: /|;|?|!|-
-testing 'require' message
-  attrib.lua           FAIL: runtime error: ../../lua-master/testes/attrib.lua:68: assertion failed!
-testing coroutines
-to-be-closed variables in coroutines
-testing 'coroutine.close'
-coroutines closing itself
-testing yields inside hooks
-  coroutine.lua        FAIL: coroutine.lua:685: assertion failed!
-testing errors
-+
-testing tokens in error messages
-+
-OK
-  errors.lua           PASS
-testing goto and global declarations
-  ('global' is not a reserved word)
-testing initialization in global declarations
-OK
-  goto.lua             PASS
-testing scanner
-+
-+
-+
-+
-+
-
- >>> pt_BR locale not available: skipping decimal point tests <<<
-
-OK
-  literals.lua         PASS
-testing UTF-8 library
-ok
-  utf8.lua             PASS
-testing closures
-+
-OK
-  closure.lua          PASS
-testing incremental garbage collection
-steps
-creating many objects
-functions with errors
-long strings
-clearing tables
-weak tables
-+
-self-referenced threads
-OK
-  gc.lua               PASS
-testing generational garbage collection
-+
-testing stop-the-world collection
-OK
-  gengc.lua            PASS
-testing i/o
-+
-+
-+
-testing flush
-+
-+
-+
-testing date/time
-  8-byte time_t
-test done on 28/04/2026, at 21:16:36
-Lua 5.5
-  files.lua            PASS
-testing stack overflow detection
-testing stack overflow in message handling
-final count: 	250044
-testing recursion inside pattern matching
-testing stack-overflow in recursive 'gsub'
-final count: 	198
-testing stack-overflow in recursive 'gsub' with metatables
-final count: 	99
-testing limits in coroutines inside deep calls
-final count: 	98
-chain of 'coroutine.close'
-final count: 	198
-nesting of resuming yielded coroutines
-final count: 	195
-nesting coroutines running after recoverable errors
-final count: 	197
-testing stack recovery
-maximum stack size: 1000005
-+
-OK
-  cstack.lua           PASS
-testing vararg
-+
-+
-+
-OK
-testing string.dump
-dump ok, size=83
-basic roundtrip ok
-mode t rejection ok
-C function rejection ok
-multi-arg roundtrip ok
-all string.dump tests passed
-global const star OK
-OK
-global const names OK
-global decl OK
-global function OK
-global assign OK
-global multi OK
-hello	42	true	nil
-
-testing strings and string library
-testing 'format %a %A'
-'collate' locale not found
-'ctype' locale not found
-
- >>> testC not active: skipping 'pushfstring' tests <<<
-
-
- >>> testC not active: skipping external strings tests <<<
-
-OK
-  strings.lua          PASS
-testing numbers and math lib
-  64-bit integers, 53-bit*2^1023 floats
-testing order (floats cannot represent all integers)
-testing ldexp/frexp
-testing -0 and NaN
-testing 'math.random'
-random seeds: 1777382196751967954, -4860102577003928737
-float random range in 37100 calls: [0.000019, 0.999968]
-integer random range in 51200 calls: [minint + 7ppm, maxint - 27ppm]
-testing precision of 'tostring'
-  15-digit float numbers with full precision
-  18-digit integer numbers with full precision
-OK
-  math.lua             PASS
-testing (parts of) table library
-testing 'table.create'
-testing unpack
-testing pack
-testing sort
-sorting 5000 random elements in 1.40 msec.
-re-sorting 5000 sorted elements in 0.94 msec.
-Invert-sorting other 5000 elements in 2.69 msec., with 64444 comparisons
-sorting 5000 equal elements in 1.84 msec.
-OK
-  sort.lua             PASS
-testing vararg
-+
-+
-+
-OK
-  vararg.lua           PASS
-testing syntax
-+
-testing short-circuit optimizations (0)
-+
-OK
-  constructs.lua       PASS
-testing metatables
-+
-+
-OK
-  events.lua           PASS
-testing functions and calls
-+
-+
-testing tail calls
-+
-testing chains of '__call'
-+
-testing binary chunks
-OK
-  calls.lua            PASS
-testing local variables and environments
-+
-testing local constants
 testing to-be-closed variables
-testing errors in __close
-to-be-closed variables in coroutines
-OK
-  locals.lua           PASS
-testing bitwise operations
-+
-testing bitwise library
-+
 +
 OK
-  bitwise.lua          PASS
-testing pack/unpack
-platform:
-	short 2, int 4, long 8, size_t 8, float 4, double 8,
-	lua Integer 8, lua Number 8
-	little endian
-	alignment: 8
-testing invalid formats
-testing pack/unpack of floating-point numbers
-testing pack/unpack of strings
-testing alignment
-OK
-  tpack.lua            PASS
-
- >>> testC not active: skipping opcode tests <<<
-
-  code.lua             PASS
-testing C API
-Lua warning: #This should be a single warning
-Lua warning: #This should be another one
-testing panic function
-testing load of binaries in fixed buffers
-+
-+
-  api.lua              FAIL: api.lua:1091: assertion failed!
+  api.lua              PASS
   big.lua              PASS
   bwcoercion.lua       PASS
 testing RK
   verybig.lua          PASS
 testing tables, next, and for
 +
-testing length for some random tables (seeds 0X18aa87b0f262324b:e81b23521ced5245)
+testing length for some random tables (seeds 0X18aab9c9af70533c:11ce43d41fe13992)
 testing attack on table length
 +
 +
@@ -639,13 +675,25 @@ OK
 testing require
 package config: /|;|?|!|-
 testing 'require' message
-  attrib.lua           FAIL: runtime error: ../../lua-master/testes/attrib.lua:68: assertion failed!
++
+testing assignments, logical operators, and constructors
++
+OK
+  attrib.lua           PASS
 testing coroutines
 to-be-closed variables in coroutines
 testing 'coroutine.close'
 coroutines closing itself
 testing yields inside hooks
-  coroutine.lua        FAIL: coroutine.lua:685: assertion failed!
+testing coroutine API
++
++
+testing yields inside metamethods
++
+testing yields inside 'for' iterators
+testing coroutine API
+OK
+  coroutine.lua        PASS
 testing errors
 +
 testing tokens in error messages
@@ -701,7 +749,7 @@ testing flush
 +
 testing date/time
   8-byte time_t
-test done on 28/04/2026, at 21:16:37
+test done on 29/04/2026, at 12:34:39
 Lua 5.5
   files.lua            PASS
 testing stack overflow detection
@@ -734,62 +782,62 @@ goos: linux
 goarch: amd64
 pkg: github.com/akzj/go-lua/internal/stdlib
 cpu: Intel(R) Core(TM) i7-14700KF
-BenchmarkFibonacci-28                      	    2719	    491501 ns/op	   79303 B/op	     871 allocs/op
-BenchmarkFibonacci-28                      	    2786	    488465 ns/op	   79334 B/op	     871 allocs/op
-BenchmarkFibonacci-28                      	    2066	    517866 ns/op	   79317 B/op	     871 allocs/op
-BenchmarkTableOps-28                       	    1698	    719340 ns/op	  192165 B/op	     902 allocs/op
-BenchmarkTableOps-28                       	    1670	    702259 ns/op	  198819 B/op	     903 allocs/op
-BenchmarkTableOps-28                       	    1916	    786272 ns/op	  215404 B/op	     903 allocs/op
-BenchmarkStringConcat-28                   	    1341	    867215 ns/op	  333589 B/op	    6413 allocs/op
-BenchmarkStringConcat-28                   	    1712	    828471 ns/op	  334376 B/op	    6413 allocs/op
-BenchmarkStringConcat-28                   	    1456	    844956 ns/op	  333536 B/op	    6413 allocs/op
-BenchmarkPatternMatch-28                   	     314	   3511966 ns/op	  589667 B/op	   21911 allocs/op
-BenchmarkPatternMatch-28                   	     315	   3517533 ns/op	  589752 B/op	   21911 allocs/op
-BenchmarkPatternMatch-28                   	     307	   3700051 ns/op	  589740 B/op	   21911 allocs/op
-BenchmarkForLoop-28                        	     253	   4683073 ns/op	   78847 B/op	     857 allocs/op
-BenchmarkForLoop-28                        	     250	   4706265 ns/op	   78876 B/op	     857 allocs/op
-BenchmarkForLoop-28                        	     256	   4690732 ns/op	   78867 B/op	     856 allocs/op
-BenchmarkClosureCreation-28                	     909	   1304781 ns/op	  167576 B/op	   10904 allocs/op
-BenchmarkClosureCreation-28                	     922	   1300399 ns/op	  167485 B/op	   10904 allocs/op
-BenchmarkClosureCreation-28                	     960	   1333448 ns/op	  167606 B/op	   10904 allocs/op
-BenchmarkMethodCall-28                     	     229	   5220221 ns/op	   86940 B/op	     982 allocs/op
-BenchmarkMethodCall-28                     	     228	   5244049 ns/op	   86931 B/op	     982 allocs/op
-BenchmarkMethodCall-28                     	     228	   5289935 ns/op	   86939 B/op	     982 allocs/op
-BenchmarkGC-28                             	    1262	   1335438 ns/op	  330581 B/op	   10876 allocs/op
-BenchmarkGC-28                             	    1030	   1229282 ns/op	  330503 B/op	   10876 allocs/op
-BenchmarkGC-28                             	    1015	   1327426 ns/op	  330604 B/op	   10876 allocs/op
-BenchmarkConcatOperator-28                 	    4706	    655048 ns/op	  685587 B/op	    2901 allocs/op
-BenchmarkConcatOperator-28                 	    1471	    684216 ns/op	  685480 B/op	    2901 allocs/op
-BenchmarkConcatOperator-28                 	    1603	    628446 ns/op	  685684 B/op	    2901 allocs/op
-BenchmarkConcatMulti-28                    	    4747	    253919 ns/op	   89128 B/op	    1888 allocs/op
-BenchmarkConcatMulti-28                    	    5174	    244858 ns/op	   89126 B/op	    1889 allocs/op
-BenchmarkConcatMulti-28                    	    4963	    245715 ns/op	   89109 B/op	    1888 allocs/op
-BenchmarkCoroutineCreate-28                	     258	   4372524 ns/op	  894263 B/op	   10874 allocs/op
-BenchmarkCoroutineCreate-28                	     280	   4450610 ns/op	  893716 B/op	   10873 allocs/op
-BenchmarkCoroutineCreate-28                	     261	   4406199 ns/op	  893304 B/op	   10873 allocs/op
-BenchmarkCoroutineYieldResume-28           	     284	   4395726 ns/op	  897132 B/op	   10922 allocs/op
-BenchmarkCoroutineYieldResume-28           	     262	   4286800 ns/op	  897089 B/op	   10922 allocs/op
-BenchmarkCoroutineYieldResume-28           	     278	   4320697 ns/op	  897178 B/op	   10922 allocs/op
-BenchmarkCoroutineCreateResumeFinish-28    	     171	   6733169 ns/op	 1810147 B/op	   30909 allocs/op
-BenchmarkCoroutineCreateResumeFinish-28    	     178	   6826444 ns/op	 1810749 B/op	   30909 allocs/op
-BenchmarkCoroutineCreateResumeFinish-28    	     175	   6712896 ns/op	 1809279 B/op	   30908 allocs/op
-BenchmarkGCCollectEmpty-28                 	  246537	      5397 ns/op	    2045 B/op	      29 allocs/op
-BenchmarkGCCollectEmpty-28                 	  221308	      6240 ns/op	    2045 B/op	      29 allocs/op
-BenchmarkGCCollectEmpty-28                 	  217542	      7121 ns/op	    2045 B/op	      29 allocs/op
-BenchmarkGCCollectLive-28                  	    1972	    646615 ns/op	    2908 B/op	      29 allocs/op
-BenchmarkGCCollectLive-28                  	    1628	    625355 ns/op	    3092 B/op	      29 allocs/op
-BenchmarkGCCollectLive-28                  	    1615	    624776 ns/op	    3100 B/op	      29 allocs/op
-BenchmarkTableCreation100K-28              	      27	  47725898 ns/op	13228616 B/op	  502549 allocs/op
-BenchmarkTableCreation100K-28              	      27	  48532586 ns/op	13223599 B/op	  502551 allocs/op
-BenchmarkTableCreation100K-28              	      27	  47753964 ns/op	13239117 B/op	  502553 allocs/op
-BenchmarkTUIRender-28                      	    2374	    502258 ns/op	   83546 B/op	    3466 allocs/op
-BenchmarkTUIRender-28                      	    2439	    471455 ns/op	   84153 B/op	    3466 allocs/op
-BenchmarkTUIRender-28                      	    2377	    475555 ns/op	   83656 B/op	    3465 allocs/op
-BenchmarkTUIRenderWithGC-28                	    2590	    490592 ns/op	   83137 B/op	    3457 allocs/op
-BenchmarkTUIRenderWithGC-28                	    2358	    500023 ns/op	   83576 B/op	    3457 allocs/op
-BenchmarkTUIRenderWithGC-28                	    2504	    491352 ns/op	   82786 B/op	    3454 allocs/op
-BenchmarkTUIRenderDeep-28                  	     542	   1887142 ns/op	  524833 B/op	   18202 allocs/op
-BenchmarkTUIRenderDeep-28                  	     561	   1824433 ns/op	  523749 B/op	   18219 allocs/op
-BenchmarkTUIRenderDeep-28                  	     646	   1892696 ns/op	  527750 B/op	   18209 allocs/op
+BenchmarkFibonacci-28                      	    8052	    470692 ns/op
+BenchmarkFibonacci-28                      	    7555	    478189 ns/op
+BenchmarkFibonacci-28                      	    7449	    483406 ns/op
+BenchmarkTableOps-28                       	    4968	    725911 ns/op
+BenchmarkTableOps-28                       	    4629	    719969 ns/op
+BenchmarkTableOps-28                       	    4357	    796468 ns/op
+BenchmarkStringConcat-28                   	    4818	    840942 ns/op
+BenchmarkStringConcat-28                   	    5184	    775564 ns/op
+BenchmarkStringConcat-28                   	    4137	    788742 ns/op
+BenchmarkPatternMatch-28                   	     912	   3678010 ns/op
+BenchmarkPatternMatch-28                   	    1057	   3505906 ns/op
+BenchmarkPatternMatch-28                   	    1021	   3511238 ns/op
+BenchmarkForLoop-28                        	     771	   4694611 ns/op
+BenchmarkForLoop-28                        	     759	   4696770 ns/op
+BenchmarkForLoop-28                        	     769	   4663224 ns/op
+BenchmarkClosureCreation-28                	    2374	   1347984 ns/op
+BenchmarkClosureCreation-28                	    2679	   1335592 ns/op
+BenchmarkClosureCreation-28                	    2253	   1340903 ns/op
+BenchmarkMethodCall-28                     	     643	   5434180 ns/op
+BenchmarkMethodCall-28                     	     663	   5422855 ns/op
+BenchmarkMethodCall-28                     	     666	   5460034 ns/op
+BenchmarkGC-28                             	    3622	   1290232 ns/op
+BenchmarkGC-28                             	    2814	   1320874 ns/op
+BenchmarkGC-28                             	    3013	   1243600 ns/op
+BenchmarkConcatOperator-28                 	    6086	    627832 ns/op
+BenchmarkConcatOperator-28                 	    5487	    676260 ns/op
+BenchmarkConcatOperator-28                 	    5883	    646812 ns/op
+BenchmarkConcatMulti-28                    	   15176	    235422 ns/op
+BenchmarkConcatMulti-28                    	   13292	    246410 ns/op
+BenchmarkConcatMulti-28                    	   15782	    254031 ns/op
+BenchmarkCoroutineCreate-28                	     810	   4429118 ns/op
+BenchmarkCoroutineCreate-28                	     786	   4390793 ns/op
+BenchmarkCoroutineCreate-28                	     802	   4433229 ns/op
+BenchmarkCoroutineYieldResume-28           	    1344	   2604217 ns/op
+BenchmarkCoroutineYieldResume-28           	    1453	   2537110 ns/op
+BenchmarkCoroutineYieldResume-28           	    1890	   2562565 ns/op
+BenchmarkCoroutineCreateResumeFinish-28    	     517	   6815337 ns/op
+BenchmarkCoroutineCreateResumeFinish-28    	     516	   6735561 ns/op
+BenchmarkCoroutineCreateResumeFinish-28    	     523	   6803412 ns/op
+BenchmarkGCCollectEmpty-28                 	 1000000	      5774 ns/op
+BenchmarkGCCollectEmpty-28                 	 1000000	      5836 ns/op
+BenchmarkGCCollectEmpty-28                 	  660832	      5599 ns/op
+BenchmarkGCCollectLive-28                  	    5010	    602879 ns/op
+BenchmarkGCCollectLive-28                  	    5673	    598722 ns/op
+BenchmarkGCCollectLive-28                  	    5595	    655972 ns/op
+BenchmarkTableCreation100K-28              	     100	  46226690 ns/op
+BenchmarkTableCreation100K-28              	      68	  47890368 ns/op
+BenchmarkTableCreation100K-28              	      72	  47046455 ns/op
+BenchmarkTUIRender-28                      	    7826	    476513 ns/op	   83537 B/op	    3464 allocs/op
+BenchmarkTUIRender-28                      	    6463	    500500 ns/op	   83481 B/op	    3464 allocs/op
+BenchmarkTUIRender-28                      	    6993	    500100 ns/op	   83514 B/op	    3464 allocs/op
+BenchmarkTUIRenderWithGC-28                	    7371	    484878 ns/op	   83018 B/op	    3456 allocs/op
+BenchmarkTUIRenderWithGC-28                	    8760	    474717 ns/op	   82704 B/op	    3455 allocs/op
+BenchmarkTUIRenderWithGC-28                	    7669	    491346 ns/op	   83007 B/op	    3456 allocs/op
+BenchmarkTUIRenderDeep-28                  	    1944	   1916818 ns/op	  517081 B/op	   18185 allocs/op
+BenchmarkTUIRenderDeep-28                  	    1940	   1917642 ns/op	  515801 B/op	   18187 allocs/op
+BenchmarkTUIRenderDeep-28                  	    1748	   1920563 ns/op	  520032 B/op	   18188 allocs/op
 PASS
-ok  	github.com/akzj/go-lua/internal/stdlib	98.344s
+ok  	github.com/akzj/go-lua/internal/stdlib	255.588s
