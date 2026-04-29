@@ -88,19 +88,21 @@ func NewState() *LuaState {
 
 // stackInit allocates the stack and sets up the base CallInfo.
 // Mirrors: stack_init in lstate.c
+//
+// The zeroing loop is intentionally omitted: object.Nil is the zero value of
+// TValue (TagNil == 0), so both fresh make() slices (Go-zeroed) and pooled
+// slices (zeroed by PutLuaState) already contain Nil in every slot.
 func stackInit(L *LuaState) {
 	// Allocate stack with extra space and capacity headroom
 	// to avoid reallocation on moderate growth.
 	size := BasicStackSize + ExtraStack
 	if cap(L.Stack) >= size {
-		// Reuse existing stack slice from pool — just reslice and clear
+		// Reuse existing stack slice from pool — already zeroed by PutLuaState.
 		L.Stack = L.Stack[:size]
 	} else {
-		// Allocate new stack with capacity headroom
+		// Allocate new stack with capacity headroom.
+		// Go guarantees zeroed memory, and zero == object.Nil.
 		L.Stack = make([]object.StackValue, size, size+size/2)
-	}
-	for i := range L.Stack {
-		L.Stack[i].Val = object.Nil
 	}
 
 	// Reset CI to base

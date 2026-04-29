@@ -18,13 +18,28 @@ var luaStatePool = sync.Pool{
 }
 
 // getLuaState gets a LuaState from the pool or allocates a new one.
-// The returned state has zeroed fields except Stack and CISlab which may
-// retain capacity from a previous use (reused in stackInit and NewCallInfo).
+// PutLuaState guarantees all fields are zeroed before returning to the pool,
+// so no per-field clearing is needed here. Stack and CISlab retain capacity
+// from a previous use (reused in stackInit and NewCallInfo).
 func getLuaState() *LuaState {
-	L := luaStatePool.Get().(*LuaState)
-	// Zero the GCHeader
+	return luaStatePool.Get().(*LuaState)
+}
+
+// PutLuaState returns a LuaState to the pool for reuse.
+// Called by the GC sweep phase when a dead thread is unlinked.
+// Zeroes ALL fields (scalar, pointer, embedded) so getLuaState can return
+// the struct directly without per-field clearing. Stack and CISlab backing
+// arrays are retained for capacity reuse.
+func PutLuaState(L *LuaState) {
+	// GC header and pointer fields — prevent retaining dead objects
 	L.GCHeader = object.GCHeader{}
-	// Scalar fields
+	L.Global = nil
+	L.OpenUpval = nil
+	L.Hook = nil
+	L.APIState = nil
+	L.CI = nil
+	L.BaseCI = CallInfo{}
+	// Scalar fields — zero for clean reuse by NewThread
 	L.Top = 0
 	L.Status = 0
 	L.AllowHook = false
@@ -42,45 +57,16 @@ func getLuaState() *LuaState {
 	L.HookLine = 0
 	L.HookSavedTop = 0
 	L.HookSavedCITop = 0
-	// Reset CI slab index to reuse existing capacity (if any)
-	L.CISlabIdx = 0
-	// Pointer fields — clear to prevent GC retention
-	L.CI = nil
-	L.Global = nil
-	L.OpenUpval = nil
-	L.Hook = nil
-	L.APIState = nil
-	// BaseCI is embedded — zero it
-	L.BaseCI = CallInfo{}
-	// NOTE: L.Stack is intentionally NOT cleared here.
-	// stackInit will reuse its capacity if sufficient, or allocate new.
-	// NOTE: L.CISlab is intentionally kept — NewCallInfo will reuse its capacity.
-	// The slab entries are zeroed in PutLuaState.
-	return L
-}
-
-// PutLuaState returns a LuaState to the pool for reuse.
-// Called by the GC sweep phase when a dead thread is unlinked.
-// Clears all reference fields before pooling to help Go's GC,
-// but retains the Stack and CISlab slice capacities for reuse.
-func PutLuaState(L *LuaState) {
-	// Clear all reference-bearing fields to avoid retaining garbage
-	L.GCHeader = object.GCHeader{}
-	L.Global = nil
-	L.OpenUpval = nil
-	L.Hook = nil
-	L.APIState = nil
-	L.CI = nil
-	L.BaseCI = CallInfo{}
-	// Clear CI slab entries but keep the backing array
-	for i := range L.CISlab {
+	// Clear only used CI slab entries (CISlabIdx tells us how many were used)
+	for i := 0; i < L.CISlabIdx; i++ {
 		L.CISlab[i] = CallInfo{}
 	}
 	L.CISlabIdx = 0
-	// Clear stack values but keep the backing array
-	for i := range L.Stack {
-		L.Stack[i] = object.StackValue{}
-	}
+	// Zero all stack slots. Uses Go's built-in clear() which the compiler
+	// optimizes to memclr (a single fast memset-like operation) instead of
+	// a per-element loop. Both Tt (for Lua GC safety) and Obj (for Go GC
+	// safety) must be zeroed; clear() handles the full StackValue.
+	clear(L.Stack)
 	// Reslice to zero length but keep capacity
 	L.Stack = L.Stack[:0]
 	luaStatePool.Put(L)
