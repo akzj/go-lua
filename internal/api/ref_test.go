@@ -142,3 +142,129 @@ func TestUnrefNoRefAndRefNilAreNoOps(t *testing.T) {
 	}
 	L.Pop(1)
 }
+
+// ---------------------------------------------------------------------------
+// Double-free / corruption guards
+// ---------------------------------------------------------------------------
+
+// TestRefDoubleUnref verifies that calling Unref twice with the same ref
+// does not corrupt the free list (no self-loop causing duplicate Ref returns).
+func TestRefDoubleUnref(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	L.PushString("val1")
+	r1 := L.Ref(RegistryIndex)
+	L.PushString("val2")
+	_ = L.Ref(RegistryIndex) // r2, keep it alive
+
+	// Double unref r1 — should not corrupt free list
+	L.Unref(RegistryIndex, r1)
+	L.Unref(RegistryIndex, r1) // double-free!
+
+	// Two new refs should get DIFFERENT slots
+	L.PushString("new1")
+	nr1 := L.Ref(RegistryIndex)
+	L.PushString("new2")
+	nr2 := L.Ref(RegistryIndex)
+
+	if nr1 == nr2 {
+		t.Fatalf("double Unref caused duplicate ref: nr1=%d nr2=%d", nr1, nr2)
+	}
+
+	// Verify values are correct
+	L.RawGetI(RegistryIndex, int64(nr1))
+	v1, _ := L.ToString(-1)
+	L.Pop(1)
+	L.RawGetI(RegistryIndex, int64(nr2))
+	v2, _ := L.ToString(-1)
+	L.Pop(1)
+
+	if v1 != "new1" {
+		t.Fatalf("expected 'new1', got %q", v1)
+	}
+	if v2 != "new2" {
+		t.Fatalf("expected 'new2', got %q", v2)
+	}
+}
+
+// TestRefDoubleUnrefNonConsecutive verifies the self-loop guard in Ref
+// catches corruption even if the double-free wasn't caught by Unref's
+// head-check (e.g., A freed, B freed, A freed again → cycle).
+func TestRefDoubleUnrefNonConsecutive(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	L.PushString("a")
+	rA := L.Ref(RegistryIndex)
+	L.PushString("b")
+	rB := L.Ref(RegistryIndex)
+	L.PushString("c")
+	_ = L.Ref(RegistryIndex) // rC, keep alive
+
+	// Free A, then B, then A again (non-consecutive double-free)
+	L.Unref(RegistryIndex, rA)
+	L.Unref(RegistryIndex, rB)
+	L.Unref(RegistryIndex, rA) // A is freed again — creates cycle A→B→A→B...
+
+	// Allocate several refs — they must all be unique
+	seen := map[int]bool{}
+	for i := 0; i < 5; i++ {
+		L.PushString("x")
+		ref := L.Ref(RegistryIndex)
+		if seen[ref] {
+			t.Fatalf("got duplicate ref %d at iteration %d", ref, i)
+		}
+		seen[ref] = true
+	}
+
+	_ = rB // suppress unused warning
+}
+
+// TestRefConsecutiveRefsUnique allocates many refs without any Unref and
+// verifies all are unique.
+func TestRefConsecutiveRefsUnique(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	refs := make(map[int]bool)
+	for i := 0; i < 100; i++ {
+		L.PushInteger(int64(i))
+		ref := L.Ref(RegistryIndex)
+		if refs[ref] {
+			t.Fatalf("duplicate ref %d at iteration %d", ref, i)
+		}
+		refs[ref] = true
+	}
+}
+
+// TestRefUnrefAndReuseAll frees all refs and then re-allocates, verifying
+// no duplicates occur.
+func TestRefUnrefAndReuseAll(t *testing.T) {
+	L := NewState()
+	defer L.Close()
+
+	// Allocate 5 refs
+	var allRefs []int
+	for i := 0; i < 5; i++ {
+		L.PushInteger(int64(i))
+		ref := L.Ref(RegistryIndex)
+		allRefs = append(allRefs, ref)
+	}
+
+	// Free all
+	for _, ref := range allRefs {
+		L.Unref(RegistryIndex, ref)
+	}
+
+	// Allocate 5 more — should reuse freed slots, all unique
+	newRefs := make(map[int]bool)
+	for i := 0; i < 5; i++ {
+		L.PushInteger(int64(i + 100))
+		ref := L.Ref(RegistryIndex)
+		if newRefs[ref] {
+			t.Fatalf("duplicate ref %d at iteration %d", ref, i)
+		}
+		newRefs[ref] = true
+	}
+}
