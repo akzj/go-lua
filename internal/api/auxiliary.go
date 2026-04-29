@@ -350,13 +350,19 @@ func (L *State) Ref(t int) int {
 		key := int(ref)
 		// Update free list: t[0] = t[key] (next in chain)
 		L.RawGetI(absT, int64(key)) // push t[key] (next free ref)
-		L.RawSetI(absT, 0)          // t[0] = popped value (next free ref)
-		// Store the value (currently at top) into t[key]
-		// The value to store is now at top-1 (it was pushed before Ref was called)
-		// Actually: the original value is still on the stack at the position before our operations
-		// Let's re-check: at this point, the original value is at top of stack
-		L.RawSetI(absT, int64(key)) // t[key] = top value (pops it)
-		return key
+		// Self-loop guard: if t[key] == key, the free list is corrupted
+		// (caused by double-free). Reset free list head to 0 and fall
+		// through to the rawlen allocation path.
+		if next, ok2 := L.ToInteger(-1); ok2 && int(next) == key {
+			L.Pop(1) // pop the self-referencing value
+			L.PushInteger(0)
+			L.RawSetI(absT, 0) // reset free list head to empty
+			// Fall through to rawlen path below
+		} else {
+			L.RawSetI(absT, 0)          // t[0] = popped value (next free ref)
+			L.RawSetI(absT, int64(key)) // t[key] = top value (pops it)
+			return key
+		}
 	}
 	// Free list empty: use next integer key = #t + 1
 	key := int(L.RawLen(absT)) + 1
@@ -372,6 +378,27 @@ func (L *State) Unref(t int, ref int) {
 		absT := t
 		if t != RegistryIndex && t < 0 {
 			absT = L.GetTop() + t + 1
+		}
+		// Double-free guard: walk the free list to check if ref is
+		// already present. This prevents cycles that corrupt the list.
+		// The walk is bounded to avoid O(n) in degenerate cases.
+		L.RawGetI(absT, 0) // push t[0] (current head)
+		head, ok := L.ToInteger(-1)
+		L.Pop(1)
+		if ok && head != 0 {
+			cur := int(head)
+			for i := 0; cur != 0 && i < 128; i++ {
+				if cur == ref {
+					return // ref already in free list — double-free, skip
+				}
+				L.RawGetI(absT, int64(cur))
+				next, ok2 := L.ToInteger(-1)
+				L.Pop(1)
+				if !ok2 {
+					break // end of chain
+				}
+				cur = int(next)
+			}
 		}
 		// t[ref] = t[0] (link into free list — store old head as value)
 		L.RawGetI(absT, 0)          // push current free list head (t[0])
