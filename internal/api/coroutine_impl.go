@@ -106,7 +106,16 @@ func (L *State) ToThread(idx int) *State {
 	if !ok {
 		return nil
 	}
-	return &State{Internal: ls}
+	// Return cached wrapper if available (avoids allocation per call)
+	if ls.APIState != nil {
+		if s, ok2 := ls.APIState.(*State); ok2 {
+			return s
+		}
+	}
+	// Create and cache
+	s := &State{Internal: ls}
+	ls.APIState = s
+	return s
 }
 
 // Status returns the status of the coroutine L.
