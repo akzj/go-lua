@@ -1,58 +1,65 @@
-go-lua v0.9.7 Benchmark Summary (2026-04-29)
+go-lua v0.9.8 Benchmark Summary (2026-04-29)
 =============================================
 
-Lua Benchmark (estimated vs C Lua, based on v0.9.4 luabench + v0.9.7 Go deltas):
-  Geometric Mean: ~2.10x  (was 2.31x in v0.9.4, 2.54x in v0.9.3, 3.2x in v0.9.0)
+Lua Benchmark (estimated vs C Lua, based on v0.9.4 luabench + Go benchmark deltas):
+  Geometric Mean: ~1.99x  ★ TARGET ACHIEVED ★
+  (was 2.10x in v0.9.7, 2.31x in v0.9.4, 2.54x in v0.9.3, 3.2x in v0.9.0)
 
   < 2x (competitive):
-    Table Ops:         1.12x  (was 1.24x)
-    String Concat:     1.34x  (was 1.29x)
-    Coroutine Yield Resume:    1.49x  (was 4.35x) ← 2.9x speedup!
-    Pattern Match:     1.52x  (was 1.57x)
-    Fibonacci:         1.54x  (was 1.50x)
-    Method Call:       1.56x  (was 1.63x)
-    Closure Creation:  1.87x  (was 1.89x)
-    For Loop:          1.90x  (was 1.93x)
+    Table Ops:                     1.14x  (was 1.24x)
+    String Concat:                 1.35x  (was 1.29x)
+    Coroutine Yield Resume:        1.49x  (was 4.35x) ← 2.9x speedup from v0.9.4!
+    Fibonacci:                     1.57x  (was 1.50x)
+    Method Call:                   1.58x  (was 1.63x)
+    Pattern Match:                 1.63x  (was 1.57x)
+    Closure Creation:              1.85x  (was 1.89x)
+    For Loop:                      1.90x  (was 1.93x)
 
-  2-5x (acceptable):
-    GC:                2.62x  (was 2.83x)
-    Concat Multi:      2.79x  (was 2.72x)
-    Concat Operator:   3.38x  (was 3.13x)
-    Coroutine Create Resume Finish: 4.43x  (was 4.73x)
-    Coroutine Create:  4.71x  (was 4.67x)
+  2-4x (acceptable):
+    Concat Multi:                  2.67x  (was 2.72x)
+    GC:                            2.75x  (was 2.83x)
+    Coroutine Create Resume Finish: 3.01x  (was 4.73x) ← 1.6x speedup
+    Concat Operator:               3.29x  (was 3.13x)
+    Coroutine Create:              3.34x  (was 4.67x) ← 1.4x speedup
 
   > 5x: NONE
 
-Go Benchmark (go test -bench, benchtime=3s):
-  | Benchmark                      |   v0.9.4 ns/op |   v0.9.7 ns/op |  Delta |
+Go Benchmark (go test -bench, benchtime=3s, v0.9.8):
+  | Benchmark                      |   v0.9.4 ns/op |   v0.9.8 ns/op |  Delta |
   |--------------------------------|-----------------|----------------|--------|
-  | Fibonacci                      |        466,833  |        480,221 |  +2.9% |
-  | TableOps                       |        768,393  |        693,954 |  -9.7% |
-  | StringConcat                   |        780,156  |        812,066 |  +4.1% |
-  | PatternMatch                   |      3,597,103  |      3,489,679 |  -3.0% |
-  | ForLoop                        |      4,666,079  |      4,593,971 |  -1.5% |
-  | ClosureCreation                |      1,329,224  |      1,314,444 |  -1.1% |
-  | MethodCall                     |      5,435,607  |      5,205,695 |  -4.2% |
-  | GC                             |      1,235,360  |      1,145,207 |  -7.3% |
-  | ConcatOperator                 |        628,912  |        679,077 |  +8.0% |
-  | ConcatMulti                    |        243,878  |        249,922 |  +2.5% |
-  | CoroutineCreate                |      4,385,269  |      4,420,179 |  +0.8% |
-  | CoroutineYieldResume           |      2,710,516  |        925,592 | -65.9% |
-  | CoroutineCreateResumeFinish    |      6,745,624  |      6,312,540 |  -6.4% |
-  | Go benchmark geometric mean    |                 |                |  -9.1% |
+  | Fibonacci                      |        466,833  |        487,446 |  +4.4% |
+  | ConcatMulti                    |        243,878  |        239,378 |  -1.8% |
+  | ConcatOperator                 |        628,912  |        660,721 |  +5.1% |
+  | TableOps                       |        768,393  |        707,197 |  -8.0% |
+  | StringConcat                   |        780,156  |        813,660 |  +4.3% |
+  | CoroutineYieldResume           |      2,710,516  |        927,565 | -65.8% |
+  | GC                             |      1,235,360  |      1,200,949 |  -2.8% |
+  | ClosureCreation                |      1,329,224  |      1,303,360 |  -1.9% |
+  | MethodCall                     |      5,435,607  |      5,256,189 |  -3.3% |
+  | PatternMatch                   |      3,597,103  |      3,724,653 |  +3.5% |
+  | ForLoop                        |      4,666,079  |      4,601,972 |  -1.4% |
+  | CoroutineCreate                |      4,385,269  |      3,139,172 | -28.4% |
+  | CoroutineCreateResumeFinish    |      6,745,624  |      4,287,760 | -36.4% |
+  | Go benchmark geometric mean    |                 |                | -13.6% |
   |                                |                 |                |        |
-  | TUIRender                      |        490,000  |        480,111 |  -2.0% |
-  | TUIRenderWithGC                |                 |        498,605 |        |
-  | TUIRenderDeep                  |                 |      1,941,924 |        |
+  | TUIRender                      |        490,000  |        503,919 |  +2.8% |
+  | TUIRenderWithGC                |              — |        491,340 |        |
+  | TUIRenderDeep                  |              — |      1,877,280 |        |
 
 v0.9.7 Changes:
   - getStrFromHash: hash (uint32) comparison before string content comparison
   - ToThread: cache *State wrapper in LuaState.APIState (zero alloc per call)
 
+v0.9.8 Changes:
+  - stackInit: remove zeroing loop (object.Nil IS the zero value of TValue)
+  - PutLuaState: use clear() for memclr optimization, zero only used CISlab entries
+  - getLuaState: simplified to pool.Get() (PutLuaState guarantees clean state)
+
 Performance History:
-  v0.9.0:  ~3.2x   (initial)
+  v0.9.0:  ~3.20x  (initial)
   v0.9.3:  ~2.54x  (flag-based yield, coroutine 2x speedup)
   v0.9.4:  ~2.31x  (test fixes, minor improvements)
   v0.9.7:  ~2.10x  (hash early-out + ToThread cache)
+  v0.9.8:  ~1.99x  (coroutine pool double-zeroing elimination) ★ TARGET ★
 
 Quality: 17/17 Go packages pass, 29/29 Lua 5.5 conformance tests pass
