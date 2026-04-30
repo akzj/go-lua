@@ -23,6 +23,9 @@ A complete, production-quality Lua 5.5.1 virtual machine written entirely in Go 
 - **Go-native API** — auto-bind Go functions with `PushGoFunc`, push any Go value with `PushAny`, type-safe generics with `Wrap2R`
 - **Built-in sandbox** — `NewSandboxState` with CPU limits, memory limits, and library restrictions
 - **Context integration** — `SetContext(ctx)` for deadline/cancellation via standard Go `context.Context`
+- **Resource safety** — `PushResource` auto-closes Go objects via `__gc`; `PushCloseableResource` adds Lua 5.5 `<close>` support
+- **Safe calls** — `SafeCall` provides PCall + automatic `debug.traceback`; `WrapSafe` converts Go panics to Lua errors
+- **Leak detection** — `RefTracker` finds orphaned registry references during development
 - **Virtual filesystem** — `SetFileSystem(fs.FS)` for `go:embed` and custom file sources
 - **Mark-and-sweep GC** with generational mode, integrated with Go's garbage collector
 - **String interning** via `weak.Pointer` for memory-efficient string handling
@@ -39,7 +42,7 @@ Most Lua-in-Go libraries expose a raw C-style stack API. go-lua gives you that *
 | Register a Go function | 8 lines of stack manipulation | `L.PushGoFunc(myFunc)` — 1 line |
 | Pass a struct to Lua | Manual Push+SetField per field | `L.PushAny(myStruct)` — 1 line |
 | Read a Lua table | GetField+ToString+Pop per field | `L.GetFieldString(idx, "key")` — 1 line |
-| Safe function call | PCall + manual error extraction | `L.CallSafe(nArgs, nResults)` → Go error |
+| Safe function call | PCall + manual error extraction | `L.SafeCall(nArgs, nResults)` → Go error with traceback |
 | Execute untrusted code | Build your own sandbox | `lua.NewSandboxState(config)` — built-in |
 | Timeout control | Not possible | `L.SetContext(ctx)` — standard Go context |
 | Load embedded files | Not possible | `L.SetFileSystem(embedFS)` — Go embed support |
@@ -136,6 +139,50 @@ err := L.DoString(untrustedCode) // safe!
 
 The sandbox disables `dofile`, `loadfile`, `load`, and `require` by default. Only safe libraries (base, string, table, math, utf8, coroutine) are loaded. Enable `AllowIO`, `AllowDebug`, or `AllowPackage` selectively as needed.
 
+## Resource Safety
+
+Prevent Go resource leaks when Lua code forgets to close handles:
+
+```go
+// Go resources auto-close when Lua GC collects them
+conn := db.Open(dsn)
+L.PushResource(conn)         // __gc calls conn.Close()
+L.SetGlobal("conn")
+
+// Or with Lua 5.5 <close> support (auto-close on scope exit)
+L.PushCloseableResource(conn)
+```
+
+```lua
+-- Lua side: <close> variable auto-closes on scope exit
+local conn <close> = db.open(dsn)
+-- conn:close() called automatically, even on error
+
+-- Or explicit close (idempotent)
+conn:close()
+```
+
+Safe function calls with automatic traceback:
+
+```go
+L.GetGlobal("handler")
+L.PushString(request)
+err := L.SafeCall(1, 1) // error includes full Lua stack trace
+
+// Wrap Go functions: panics become Lua errors (not crashes)
+L.PushFunction(lua.WrapSafe(riskyHandler))
+L.SetGlobal("handle")
+```
+
+Development-time leak detection:
+
+```go
+tracker := lua.NewRefTracker()
+ref := tracker.Ref(L, lua.RegistryIndex)
+// ... if you forget Unref ...
+fmt.Println(tracker.Leaks()) // shows file:line where ref was created
+```
+
 ## Performance
 
 Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (median of 5 runs, `os.clock()` CPU time):
@@ -187,6 +234,7 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 | [Capabilities](docs/CAPABILITIES.md) | Standard library completeness, language features |
 | [Cookbook](docs/COOKBOOK.md) | 25 task-driven recipes for common tasks |
 | [Embedding Guide](docs/embedding-guide.md) | Getting started with go-lua |
+| [go doc](https://pkg.go.dev/github.com/akzj/go-lua/pkg/lua) | AI-friendly API reference via `go doc ./pkg/lua/` |
 
 ## Standard Libraries
 
