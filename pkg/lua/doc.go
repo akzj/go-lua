@@ -66,6 +66,50 @@
 // Use [Scheduler] to manage async coroutines. Use [Future] for Go↔Lua
 // async communication. Futures support Cancel and context propagation.
 //
+// # Resource Safety
+//
+// Prevent Go resource leaks when embedding:
+//
+//	// Auto-cleanup: __gc calls Close() when Lua GC collects the userdata
+//	conn := db.Open(dsn)
+//	L.PushResource(conn)
+//
+//	// Lua 5.5 <close> support: closes on scope exit + __gc safety net
+//	L.PushCloseableResource(conn)
+//
+// In Lua:
+//
+//	local conn <close> = db.open(dsn)  -- auto-closed on scope exit
+//	conn:close()                        -- or explicit close (idempotent)
+//
+// # Safe Calls
+//
+// Protected function calls with automatic Lua traceback and Go panic recovery:
+//
+//	L.GetGlobal("handler")
+//	L.PushString(request)
+//	if err := L.SafeCall(1, 1); err != nil {
+//	    // err contains full Lua stack traceback
+//	    log.Printf("error:\n%s", err)
+//	}
+//
+// Wrap Go functions to convert panics into Lua errors:
+//
+//	L.PushFunction(lua.WrapSafe(func(L *lua.State) int {
+//	    data := mustParse(input)  // if this panics → Lua error, not crash
+//	    L.PushAny(data)
+//	    return 1
+//	}))
+//
+// # Leak Detection
+//
+// Track registry references during development to find leaks:
+//
+//	tracker := lua.NewRefTracker()
+//	ref := tracker.Ref(L, lua.RegistryIndex)
+//	// ... forget to Unref ...
+//	leaks := tracker.Leaks()  // ["  ref=3 created at handler.go:42"]
+//
 // # Hot-Reload
 //
 // Replace module functions at runtime while preserving state:
