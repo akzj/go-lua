@@ -280,7 +280,14 @@ func structFieldName(f reflect.StructField) string {
 // Table detection: if the table has exactly n entries and all keys are
 // integers 1..n, it is returned as []any. Otherwise it is returned as
 // map[string]any with non-string keys converted via strconv or fmt.
+// maxToAnyDepth prevents stack overflow from deeply nested or circular tables.
+const maxToAnyDepth = 64
+
 func (L *State) ToAny(idx int) any {
+	return L.toAnyImpl(idx, nil, 0)
+}
+
+func (L *State) toAnyImpl(idx int, visited map[string]bool, depth int) any {
 	switch L.Type(idx) {
 	case TypeNil, TypeNone:
 		return nil
@@ -297,7 +304,20 @@ func (L *State) ToAny(idx int) any {
 		v, _ := L.ToString(idx)
 		return v
 	case TypeTable:
-		return L.toTable(idx)
+		if depth >= maxToAnyDepth {
+			return nil
+		}
+		ptr := L.ToPointer(idx)
+		if visited == nil {
+			visited = make(map[string]bool)
+		}
+		if visited[ptr] {
+			return nil // circular reference — break the cycle
+		}
+		visited[ptr] = true
+		result := L.toTableImpl(idx, visited, depth+1)
+		delete(visited, ptr)
+		return result
 	case TypeUserdata, TypeLightUserdata:
 		return L.UserdataValue(idx)
 	default:
@@ -306,7 +326,7 @@ func (L *State) ToAny(idx int) any {
 	}
 }
 
-func (L *State) toTable(idx int) any {
+func (L *State) toTableImpl(idx int, visited map[string]bool, depth int) any {
 	idx = L.AbsIndex(idx)
 
 	// Count total entries and check if it's a pure array.
@@ -324,7 +344,7 @@ func (L *State) toTable(idx int) any {
 			arr := make([]any, length)
 			for i := int64(1); i <= length; i++ {
 				L.GetI(idx, i)
-				arr[i-1] = L.ToAny(-1)
+				arr[i-1] = L.toAnyImpl(-1, visited, depth)
 				L.Pop(1)
 			}
 			return arr
@@ -336,7 +356,7 @@ func (L *State) toTable(idx int) any {
 	L.PushNil()
 	for L.Next(idx) {
 		key := L.tableKeyToString(-2)
-		m[key] = L.ToAny(-1)
+		m[key] = L.toAnyImpl(-1, visited, depth)
 		L.Pop(1) // pop value, keep key
 	}
 	return m
