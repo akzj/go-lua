@@ -1112,3 +1112,130 @@ func TestSetFields_WithStackRef(t *testing.T) {
 
 	L.Pop(2) // cleanup
 }
+
+// ---------------------------------------------------------------------------
+// ToAny circular reference / depth tests
+// ---------------------------------------------------------------------------
+
+func TestToAny_CircularReference(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create circular reference: t.self = t
+	err := L.DoString(`
+		t = {}
+		t.name = "test"
+		t.self = t
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("t")
+	result := L.ToAny(-1)
+	L.Pop(1)
+
+	// Should not panic/stack overflow
+	// The circular ref should be nil
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+	if m["name"] != "test" {
+		t.Fatalf("expected name=test, got %v", m["name"])
+	}
+	if m["self"] != nil {
+		t.Fatalf("expected self=nil (circular), got %v", m["self"])
+	}
+}
+
+func TestToAny_DeepNesting(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// Create deeply nested table (100 levels — exceeds maxToAnyDepth)
+	err := L.DoString(`
+		t = {level = 0}
+		local current = t
+		for i = 1, 100 do
+			current.child = {level = i}
+			current = current.child
+		end
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("t")
+	result := L.ToAny(-1)
+	L.Pop(1)
+
+	// Should not panic — just truncates at depth limit
+	if result == nil {
+		t.Fatal("result should not be nil")
+	}
+}
+
+func TestToAny_NormalNesting_StillWorks(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	err := L.DoString(`
+		t = {
+			a = {
+				b = {
+					c = {value = 42}
+				}
+			}
+		}
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("t")
+	result := L.ToAny(-1)
+	L.Pop(1)
+
+	m := result.(map[string]any)
+	a := m["a"].(map[string]any)
+	b := a["b"].(map[string]any)
+	c := b["c"].(map[string]any)
+	if c["value"] != int64(42) {
+		t.Fatalf("expected 42, got %v", c["value"])
+	}
+}
+
+func TestToAny_MutualCircularReference(t *testing.T) {
+	L := lua.NewState()
+	defer L.Close()
+
+	// a.other = b, b.other = a
+	err := L.DoString(`
+		a = {name = "a"}
+		b = {name = "b"}
+		a.other = b
+		b.other = a
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	L.GetGlobal("a")
+	result := L.ToAny(-1)
+	L.Pop(1)
+
+	// Should not panic
+	m := result.(map[string]any)
+	if m["name"] != "a" {
+		t.Fatalf("expected a, got %v", m["name"])
+	}
+	other := m["other"].(map[string]any)
+	if other["name"] != "b" {
+		t.Fatalf("expected b, got %v", other["name"])
+	}
+	// b.other should be nil (circular back to a)
+	if other["other"] != nil {
+		t.Fatalf("expected nil for circular ref, got %v", other["other"])
+	}
+}
