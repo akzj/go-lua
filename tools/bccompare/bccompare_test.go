@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akzj/go-lua/internal/parse"
+	"github.com/akzj/go-lua/tools/testpaths"
 )
 
 // stringReader implements lex.LexReader for test strings.
@@ -27,16 +28,10 @@ func (r *stringReader) NextByte() int {
 	return int(b)
 }
 
-// cLuaPath is the path to the reference C Lua 5.5.1 binary.
-const cLuaPath = "/home/ubuntu/workspace/go-lua/lua-master/lua"
-
-// disasmScript is the path to our C Lua disassembler script.
-const disasmScript = "/home/ubuntu/workspace/go-lua/tools/disasm.lua"
-
 // getCLuaDisasm compiles source with C Lua and returns disassembly text.
-func getCLuaDisasm(t *testing.T, source string) string {
+func getCLuaDisasm(t *testing.T, luaExe, disasmScript, source string) string {
 	t.Helper()
-	cmd := exec.Command(cLuaPath, disasmScript, "-")
+	cmd := exec.Command(luaExe, disasmScript, "-")
 	cmd.Stdin = strings.NewReader(source)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -199,9 +194,25 @@ var testCases = []struct {
 }
 
 func TestBytecodeComparison(t *testing.T) {
+	luaExe, err := testpaths.ReferenceLuaExe()
+	if err != nil {
+		t.Fatalf("reference lua path: %v", err)
+	}
+	script, err := testpaths.DisasmLuaScript()
+	if err != nil {
+		t.Fatalf("disasm script path: %v", err)
+	}
+	if !testpaths.FileExists(luaExe) {
+		t.Skipf("C Lua reference binary not found at %q (set %s or build lua-master); skipping bytecode comparison",
+			luaExe, testpaths.EnvCLua)
+	}
+	if !testpaths.FileExists(script) {
+		t.Fatalf("disasm script not found at %q (set %s)", script, testpaths.EnvDisasm)
+	}
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cOut := getCLuaDisasm(t, tc.source)
+			cOut := getCLuaDisasm(t, luaExe, script, tc.source)
 			goOut := getGoLuaDisasm(t, tc.source)
 
 			cLines := normLines(cOut)
@@ -223,9 +234,23 @@ func TestBytecodeComparisonVerbose(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping verbose output in short mode")
 	}
+	luaExe, err := testpaths.ReferenceLuaExe()
+	if err != nil {
+		t.Fatalf("reference lua path: %v", err)
+	}
+	script, err := testpaths.DisasmLuaScript()
+	if err != nil {
+		t.Fatalf("disasm script path: %v", err)
+	}
+	if !testpaths.FileExists(luaExe) {
+		t.Skipf("C Lua reference binary not found at %q; skipping", luaExe)
+	}
+	if !testpaths.FileExists(script) {
+		t.Fatalf("disasm script not found at %q", script)
+	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cOut := getCLuaDisasm(t, tc.source)
+			cOut := getCLuaDisasm(t, luaExe, script, tc.source)
 			goOut := getGoLuaDisasm(t, tc.source)
 			t.Logf("=== C Lua ===\n%s", cOut)
 			t.Logf("=== Go Lua ===\n%s", goOut)

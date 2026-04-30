@@ -12,10 +12,8 @@ import (
 
 	luaapi "github.com/akzj/go-lua/internal/api"
 	"github.com/akzj/go-lua/internal/stdlib"
+	"github.com/akzj/go-lua/tools/testpaths"
 )
-
-// cLuaPath is the reference C Lua 5.5.1 binary.
-const cLuaPath = "/home/ubuntu/workspace/go-lua/lua-master/lua"
 
 // vmTest defines a single opcode verification test case.
 type vmTest struct {
@@ -27,11 +25,19 @@ type vmTest struct {
 // RunCLua executes Lua code with C Lua and returns stdout.
 func RunCLua(t *testing.T, code string) string {
 	t.Helper()
-	cmd := exec.Command(cLuaPath, "-e", code)
+	luaExe, err := testpaths.ReferenceLuaExe()
+	if err != nil {
+		t.Fatalf("reference lua path: %v", err)
+	}
+	if !testpaths.FileExists(luaExe) {
+		t.Skipf("C Lua reference binary not found at %q (set %s or build lua-master); skipping VM compare",
+			luaExe, testpaths.EnvCLua)
+	}
+	cmd := exec.Command(luaExe, "-e", code)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		t.Fatalf("C Lua failed: %v\nstderr: %s\ncode: %s", err, stderr.String(), code)
 	}
@@ -88,7 +94,7 @@ func Normalize(s string) string {
 		line = strings.ReplaceAll(line, "-nan", "nan")
 		line = strings.ReplaceAll(line, "NaN", "nan")
 		line = strings.ReplaceAll(line, "-nan(ind)", "nan")
-		// Normalize inf representations  
+		// Normalize inf representations
 		line = strings.ReplaceAll(line, "+Inf", "inf")
 		line = strings.ReplaceAll(line, "+inf", "inf")
 		line = strings.ReplaceAll(line, "Inf", "inf")

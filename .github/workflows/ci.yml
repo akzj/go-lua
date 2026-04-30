@@ -16,6 +16,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Build reference C Lua (bccompare / vmcompare)
+      working-directory: lua-master
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends build-essential
+        make -j"$(nproc)" clean
+        # Override CFLAGS so we do not use -march=native (runner-dependent).
+        make -j"$(nproc)" \
+          CFLAGS='-Wall -O2 -std=c99 -DLUA_USE_LINUX -O2 -fno-stack-protector -fno-common'
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
