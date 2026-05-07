@@ -331,6 +331,106 @@ func utfCodes(L *luaapi.State) int {
 	return 3
 }
 
+// runeDisplayWidth returns the terminal display width of a rune.
+// CJK/fullwidth characters are 2 columns; most others are 1.
+func runeDisplayWidth(r rune) int {
+	// East Asian Wide/Fullwidth ranges
+	if (r >= 0x1100 && r <= 0x115F) || // Hangul Jamo
+		r == 0x2329 || r == 0x232A ||
+		(r >= 0x2E80 && r <= 0x303E) || // CJK Radicals..CJK Symbols
+		(r >= 0x3040 && r <= 0x33BF) || // Hiragana..CJK Compatibility
+		(r >= 0x3400 && r <= 0x4DBF) || // CJK Unified Ext A
+		(r >= 0x4E00 && r <= 0xA4CF) || // CJK Unified..Yi Radicals
+		(r >= 0xA960 && r <= 0xA97C) || // Hangul Jamo Extended-A
+		(r >= 0xAC00 && r <= 0xD7A3) || // Hangul Syllables
+		(r >= 0xF900 && r <= 0xFAFF) || // CJK Compatibility Ideographs
+		(r >= 0xFE10 && r <= 0xFE19) || // Vertical forms
+		(r >= 0xFE30 && r <= 0xFE6F) || // CJK Compatibility Forms
+		(r >= 0xFF01 && r <= 0xFF60) || // Fullwidth Forms
+		(r >= 0xFFE0 && r <= 0xFFE6) || // Fullwidth Signs
+		(r >= 0x1F300 && r <= 0x1F9FF) || // Emoji
+		(r >= 0x20000 && r <= 0x2FFFD) || // CJK Unified Ext B..
+		(r >= 0x30000 && r <= 0x3FFFD) { // CJK Unified Ext G..
+		return 2
+	}
+	return 1
+}
+
+// utfWidth implements utf8.width(s [, i [, j]])
+// Returns the display width of string s (or substring s[i..j]) in terminal columns.
+// CJK/fullwidth characters count as 2, others as 1.
+// i and j are byte positions (1-based, like string.sub).
+func utfWidth(L *luaapi.State) int {
+	s := L.CheckString(1)
+	slen := int64(len(s))
+	posi := int(uPosRelat(L.OptInteger(2, 1), slen)) - 1 // 0-based
+	posj := int(uPosRelat(L.OptInteger(3, -1), slen)) - 1 // 0-based
+
+	if posi < 0 {
+		posi = 0
+	}
+	if posj >= len(s) {
+		posj = len(s) - 1
+	}
+
+	width := 0
+	for posi <= posj {
+		code, size, ok := utf8Decode(s, posi, false)
+		if !ok {
+			posi++
+			width++
+			continue
+		}
+		width += runeDisplayWidth(rune(code))
+		posi += size
+	}
+	L.PushInteger(int64(width))
+	return 1
+}
+
+// utfSub implements utf8.sub(s, i [, j])
+// Returns substring by codepoint indices (1-based, inclusive).
+// Negative indices count from the end (-1 = last codepoint).
+func utfSub(L *luaapi.State) int {
+	s := L.CheckString(1)
+	cpLen := int64(utf8.RuneCountInString(s))
+	i := uPosRelat(L.CheckInteger(2), cpLen)
+	j := uPosRelat(L.OptInteger(3, -1), cpLen)
+
+	if i < 1 {
+		i = 1
+	}
+	if j > cpLen {
+		j = cpLen
+	}
+	if i > j {
+		L.PushString("")
+		return 1
+	}
+
+	// Find byte position for codepoint index i (1-based)
+	byteStart := 0
+	count := int64(1)
+	pos := 0
+	for pos < len(s) && count < i {
+		_, size := utf8.DecodeRuneInString(s[pos:])
+		pos += size
+		count++
+	}
+	byteStart = pos
+
+	// Find byte position for end of codepoint index j
+	for pos < len(s) && count <= j {
+		_, size := utf8.DecodeRuneInString(s[pos:])
+		pos += size
+		count++
+	}
+	byteEnd := pos
+
+	L.PushString(s[byteStart:byteEnd])
+	return 1
+}
+
 // OpenUTF8 opens the utf8 library.
 func OpenUTF8(L *luaapi.State) int {
 	L.NewLib(map[string]luaapi.CFunction{
@@ -339,6 +439,8 @@ func OpenUTF8(L *luaapi.State) int {
 		"char":      utfChar,
 		"len":       utfLen,
 		"codes":     utfCodes,
+		"width":     utfWidth,
+		"sub":       utfSub,
 	})
 	// utf8.charpattern — pattern matching a single UTF-8 character
 	// Mirrors: UTF8PATT in lutf8lib.c: "[\0-\x7F\xC2-\xFD][\x80-\xBF]*"
