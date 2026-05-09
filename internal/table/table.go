@@ -131,11 +131,11 @@ func (t *Table) setIfExists(key, value object.TValue) bool {
 func (t *Table) set(key, value object.TValue) {
 	switch key.Tt {
 	case object.TagNil:
-		panic("table index is nil")
+		panic(object.TableRuntimeError{Msg: "table index is nil"})
 	case object.TagFloat:
 		f := key.Float()
 		if math.IsNaN(f) {
-			panic("table index is NaN")
+			panic(object.TableRuntimeError{Msg: "table index is NaN"})
 		}
 		if i, ok := floatToInteger(f); ok {
 			t.setInt(i, value)
@@ -221,7 +221,7 @@ func (t *Table) setHash(key, value object.TValue) {
 			}
 		}
 		if !insertKey(t, key, value) {
-			panic("table overflow: insert failed after rehash")
+			panic(object.TableRuntimeError{Msg: "table overflow"})
 		}
 	}
 	t.InvalidateFlags()

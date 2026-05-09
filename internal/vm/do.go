@@ -877,6 +877,12 @@ func runProtected(L *state.LuaState, f func()) (status int) {
 				state.PushValue(L, makeInternedString(L, errStr))
 				status = state.StatusErrSyntax
 				L.NCCalls = oldNCCalls
+			case object.TableRuntimeError:
+				// Lua runtime error from table ops (nil/NaN key, overflow).
+				// Mirrors: luaG_runerror path in C Lua's luaH_set.
+				state.PushValue(L, makeInternedString(L, e.Msg))
+				status = state.StatusErrRun
+				L.NCCalls = oldNCCalls
 			default:
 				panic(r) // re-panic non-Lua errors
 			}
