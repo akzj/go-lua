@@ -10,7 +10,7 @@
 | Language | Lua 5.5.1 |
 | Implementation | Pure Go — no CGo, no C dependencies |
 | Import path | `github.com/akzj/go-lua/pkg/lua` |
-| Test status | **28/29 official Lua 5.5.1 test suites PASS** (1 SKIP: `files.lua` — platform-dependent `/dev/full` device) |
+| Test status | **All 29 official Lua 5.5.1 test suites PASS** |
 | Entry points | `lua.NewState()` (with stdlib) / `lua.NewBareState()` (without stdlib) |
 | Integer type | `int64` |
 | Float type | `float64` (IEEE 754) |
@@ -280,7 +280,7 @@ C module searchers (searchers 3 and 4) are registered as stubs — they return n
 | `__gc` finalizers | ✅ | With object resurrection |
 | Dead key detection | ✅ | `TagDeadKey` sentinel |
 
-**Summary**: The GC is functionally complete and passes 28/29 official test suites (no GC-specific failures; `files.lua` SKIP is platform-dependent). Incremental and generational modes are accepted by the API but internally run full collection cycles. This is transparent to Lua code — the API contract is honored.
+**Summary**: The GC is functionally complete and passes all 29 official test suites. Incremental and generational modes are accepted by the API but internally run full collection cycles. This is transparent to Lua code — the API contract is honored.
 
 ---
 
