@@ -151,6 +151,24 @@ func TestTestesWide(t *testing.T) {
 					"checkerr(\"represented\", os.time,\n          {year=(1 << 31) + 1899, month=12, day=31, hour=23, min=59, sec=60})\n",
 					"if not _port then checkerr(\"represented\", os.time,\n          {year=(1 << 31) + 1899, month=12, day=31, hour=23, min=59, sec=60}) end\n",
 					1)
+				// Patch: Guard /dev/full section with _port (macOS lacks /dev/full).
+				// This test writes to a device that always fails — Linux-only.
+				src = strings.Replace(src,
+					"  local f = io.output(\"/dev/full\")\n"+
+						"  assert(f:write(\"abcd\"))   -- write to buffer\n"+
+						"  assert(not f:flush())     -- cannot write to device\n"+
+						"  assert(f:write(\"abcd\"))   -- write to buffer\n"+
+						"  assert(not io.flush())    -- cannot write to device\n"+
+						"  assert(f:close())\n",
+					"  if not _port then\n"+
+						"  local f = io.output(\"/dev/full\")\n"+
+						"  assert(f:write(\"abcd\"))   -- write to buffer\n"+
+						"  assert(not f:flush())     -- cannot write to device\n"+
+						"  assert(f:write(\"abcd\"))   -- write to buffer\n"+
+						"  assert(not io.flush())    -- cannot write to device\n"+
+						"  assert(f:close())\n"+
+						"  end  -- /dev/full (_port guard)\n",
+					1)
 				status := L.Load(src, "@"+f, "bt")
 				if status != 0 {
 					msg, _ := L.ToString(-1)
