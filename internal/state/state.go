@@ -21,7 +21,7 @@ import (
 // NewState creates a new Lua state with stack, base CI, registry, globals,
 // string table, and TM names. This is the Go equivalent of lua_newstate.
 func NewState() *LuaState {
-	L := &LuaState{}
+	L := getLuaState()
 	g := &GlobalState{}
 	L.Global = g
 

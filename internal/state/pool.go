@@ -1,31 +1,100 @@
 // LuaState object pool — reuses dead thread structs to reduce allocation pressure.
 //
 // Coroutines are the most expensive objects to create in go-lua because each
-// LuaState includes a large stack slice (~200 StackValues). Using sync.Pool
-// lets us reuse both the struct and the stack slice for short-lived coroutines.
+// LuaState includes a large stack slice (~200 StackValues). Using slab allocation
+// replaces individual heap allocations with pre-allocated slabs, eliminating
+// Go GC scan overhead for LuaState objects.
 package state
 
 import (
 	"sync"
+	"unsafe"
 
 	"github.com/akzj/go-lua/internal/object"
 )
 
-var luaStatePool = sync.Pool{
-	New: func() any {
-		return &LuaState{}
-	},
+// ---------------------------------------------------------------------------
+// Slab allocator for LuaState — pre-allocated slabs with O(1) get/put.
+// ---------------------------------------------------------------------------
+
+// luaStateSlabSize is the number of LuaState elements per slab.
+// LuaState is ~400 bytes → 256 elements per slab = ~100KB.
+const luaStateSlabSize = 256
+
+// luaStateFreeEntry identifies a freed LuaState within a slab.
+type luaStateFreeEntry struct {
+	slabIdx int32
+	elemIdx int32
 }
 
-// getLuaState gets a LuaState from the pool or allocates a new one.
-// PutLuaState guarantees all fields are zeroed before returning to the pool,
-// so no per-field clearing is needed here. Stack and CISlab retain capacity
+// Global LuaState slab state.
+var (
+	luaStateSlabMu         sync.Mutex     // guards all LuaState slab state
+	luaStateSlabs          [][]LuaState   // slab backing arrays
+	luaStateFreeList       []luaStateFreeEntry // LIFO free list
+	luaStateNextSlabIdx    int32          // current slab for sequential alloc
+	luaStateNextSequential int32          // next sequential index in current slab
+)
+
+// slabGetLuaState returns a *LuaState from the slab allocator.
+// Prefers free list (LIFO), then sequential bump, then allocates a new slab.
+func slabGetLuaState() *LuaState {
+	luaStateSlabMu.Lock()
+	// 1. Try free list first (LIFO for cache locality)
+	n := len(luaStateFreeList)
+	if n > 0 {
+		fe := luaStateFreeList[n-1]
+		luaStateFreeList = luaStateFreeList[:n-1]
+		luaStateSlabMu.Unlock()
+		return &luaStateSlabs[fe.slabIdx][fe.elemIdx]
+	}
+	// 2. Sequential alloc from current slab
+	if luaStateNextSlabIdx < int32(len(luaStateSlabs)) && luaStateNextSequential < luaStateSlabSize {
+		i := luaStateNextSequential
+		luaStateNextSequential++
+		luaStateSlabMu.Unlock()
+		// Zero the struct for safe reuse
+		luaStateSlabs[luaStateNextSlabIdx][i] = LuaState{}
+		return &luaStateSlabs[luaStateNextSlabIdx][i]
+	}
+	// 3. Allocate new slab
+	slab := make([]LuaState, luaStateSlabSize)
+	luaStateSlabs = append(luaStateSlabs, slab)
+	luaStateNextSlabIdx = int32(len(luaStateSlabs) - 1)
+	luaStateNextSequential = 1 // element 0 returned now
+	luaStateSlabMu.Unlock()
+	return &slab[0]
+}
+
+// slabPutLuaState returns a LuaState to the slab allocator free list.
+// Uses pointer range scanning (diff-based, checkptr-safe).
+func slabPutLuaState(L *LuaState) {
+	ptr := unsafe.Pointer(L)
+	sz := unsafe.Sizeof(LuaState{})
+	luaStateSlabMu.Lock()
+	for i, slab := range luaStateSlabs {
+		base := unsafe.SliceData(slab)
+		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
+		if diff >= 0 && diff < uintptr(len(slab))*sz {
+			elemIdx := int32(diff / sz)
+			luaStateFreeList = append(luaStateFreeList, luaStateFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			luaStateSlabMu.Unlock()
+			return
+		}
+	}
+	luaStateSlabMu.Unlock()
+	// Fallback: not from any slab (shouldn't happen in normal operation)
+}
+
+// getLuaState gets a LuaState from the slab allocator.
+// PutLuaState guarantees all fields are cleared before returning to the slab,
+// so the returned struct is ready for reuse. Stack and CISlab retain capacity
 // from a previous use (reused in stackInit and NewCallInfo).
 func getLuaState() *LuaState {
-	return luaStatePool.Get().(*LuaState)
+	return slabGetLuaState()
 }
 
-// PutLuaState returns a LuaState to the pool for reuse.
+// PutLuaState returns a LuaState to the slab allocator for reuse.
 // Called by the GC sweep phase when a dead thread is unlinked.
 // Zeroes ALL fields (scalar, pointer, embedded) so getLuaState can return
 // the struct directly without per-field clearing. Stack and CISlab backing
@@ -57,6 +126,7 @@ func PutLuaState(L *LuaState) {
 	L.HookLine = 0
 	L.HookSavedTop = 0
 	L.HookSavedCITop = 0
+	L.YieldFlag = false
 	// Clear only used CI slab entries (CISlabIdx tells us how many were used)
 	for i := 0; i < L.CISlabIdx; i++ {
 		L.CISlab[i] = CallInfo{}
@@ -69,5 +139,5 @@ func PutLuaState(L *LuaState) {
 	clear(L.Stack)
 	// Reslice to zero length but keep capacity
 	L.Stack = L.Stack[:0]
-	luaStatePool.Put(L)
+	slabPutLuaState(L)
 }
