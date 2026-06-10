@@ -2,8 +2,8 @@
 // to reduce allocation pressure.
 //
 // Tables are the most frequently allocated GC objects in Lua programs (~96% of
-// allocations in GC benchmarks). Using sync.Pool lets us reuse the struct
-// memory for short-lived tables instead of going through Go's mallocgc each time.
+// allocations in GC benchmarks). Using slice-based freelists is safe because
+// Lua is single-threaded — no locks or atomics needed.
 //
 // Slice pools index by log2(capacity) so that power-of-2 sized slices are
 // reused across tables of similar sizes.
@@ -11,7 +11,6 @@ package table
 
 import (
 	"math/bits"
-	"sync"
 
 	"github.com/akzj/go-lua/internal/object"
 )
@@ -20,25 +19,26 @@ import (
 // Table struct pool
 // ---------------------------------------------------------------------------
 
-var tablePool = sync.Pool{
-	New: func() any {
-		return &Table{}
-	},
-}
+var tableFreeList []*Table
 
-// getTable gets a Table from the pool or allocates a new one.
+// getTable gets a Table from the freelist or allocates a new one.
 // PutTable already clears reference fields (Array, Nodes, Metatable, GCHeader).
 // We only need to zero the scalar fields here.
 func getTable() *Table {
-	t := tablePool.Get().(*Table)
-	// Reference fields (Array, Nodes, Metatable, GCHeader) were cleared by PutTable.
-	// Zero the remaining scalar fields for safe reuse.
-	t.LsizeNode = 0
-	t.LastFree = 0
-	t.Flags = 0
-	t.WeakMode = 0
-	t.SizeDelta = 0
-	return t
+	n := len(tableFreeList)
+	if n > 0 {
+		t := tableFreeList[n-1]
+		tableFreeList = tableFreeList[:n-1]
+		// Reference fields (Array, Nodes, Metatable, GCHeader) were cleared by PutTable.
+		// Zero the remaining scalar fields for safe reuse.
+		t.LsizeNode = 0
+		t.LastFree = 0
+		t.Flags = 0
+		t.WeakMode = 0
+		t.SizeDelta = 0
+		return t
+	}
+	return &Table{}
 }
 
 // PutTable returns a Table to the pool for reuse.
@@ -57,18 +57,18 @@ func PutTable(t *Table) {
 	t.Nodes = nil
 	t.Metatable = nil
 	t.GCHeader = object.GCHeader{}
-	tablePool.Put(t)
+	tableFreeList = append(tableFreeList, t)
 }
 
 // ---------------------------------------------------------------------------
 // Slice pools — indexed by log2(capacity)
 // ---------------------------------------------------------------------------
 
-// arrayPools[i] pools []object.TValue slices with cap = 1<<i
-// nodePools[i] pools []node slices with cap = 1<<i
+// arrayFreeLists[i] pools []object.TValue slices with cap = 1<<i
+// nodeFreeLists[i] pools []node slices with cap = 1<<i
 var (
-	arrayPools [32]sync.Pool
-	nodePools  [32]sync.Pool
+	arrayFreeLists [32][][]object.TValue
+	nodeFreeLists  [32][][]node
 )
 
 // getArraySlice returns a zeroed []TValue slice of the given size.
@@ -78,8 +78,10 @@ func getArraySlice(size int) []object.TValue {
 		return nil
 	}
 	i := poolIndex(size)
-	if v := arrayPools[i].Get(); v != nil {
-		s := v.([]object.TValue)[:size]
+	n := len(arrayFreeLists[i])
+	if n > 0 {
+		s := arrayFreeLists[i][n-1][:size]
+		arrayFreeLists[i] = arrayFreeLists[i][:n-1]
 		// Clear to zero (Nil = zero value, TagNil=0x00)
 		for j := range s {
 			s[j] = object.TValue{}
@@ -101,7 +103,7 @@ func putArraySlice(s []object.TValue) {
 		s[i] = object.TValue{}
 	}
 	i := poolIndex(cap(s))
-	arrayPools[i].Put(s)
+	arrayFreeLists[i] = append(arrayFreeLists[i], s)
 }
 
 // getNodeSlice returns a zeroed []node slice of the given size.
@@ -111,8 +113,10 @@ func getNodeSlice(size int) []node {
 		return nil
 	}
 	i := poolIndex(size)
-	if v := nodePools[i].Get(); v != nil {
-		s := v.([]node)[:size]
+	n := len(nodeFreeLists[i])
+	if n > 0 {
+		s := nodeFreeLists[i][n-1][:size]
+		nodeFreeLists[i] = nodeFreeLists[i][:n-1]
 		// Clear to zero
 		for j := range s {
 			s[j] = node{}
@@ -134,7 +138,7 @@ func putNodeSlice(s []node) {
 		s[i] = node{}
 	}
 	i := poolIndex(cap(s))
-	nodePools[i].Put(s)
+	nodeFreeLists[i] = append(nodeFreeLists[i], s)
 }
 
 // poolIndex returns the pool bucket index for a given size.
