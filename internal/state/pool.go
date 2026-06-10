@@ -6,23 +6,23 @@
 package state
 
 import (
+	"sync"
+
 	"github.com/akzj/go-lua/internal/object"
 )
 
-var luaStateFreeList []*LuaState
+var luaStatePool = sync.Pool{
+	New: func() any {
+		return &LuaState{}
+	},
+}
 
 // getLuaState gets a LuaState from the pool or allocates a new one.
 // PutLuaState guarantees all fields are zeroed before returning to the pool,
 // so no per-field clearing is needed here. Stack and CISlab retain capacity
 // from a previous use (reused in stackInit and NewCallInfo).
 func getLuaState() *LuaState {
-	n := len(luaStateFreeList)
-	if n > 0 {
-		ls := luaStateFreeList[n-1]
-		luaStateFreeList = luaStateFreeList[:n-1]
-		return ls
-	}
-	return &LuaState{}
+	return luaStatePool.Get().(*LuaState)
 }
 
 // PutLuaState returns a LuaState to the pool for reuse.
@@ -69,5 +69,5 @@ func PutLuaState(L *LuaState) {
 	clear(L.Stack)
 	// Reslice to zero length but keep capacity
 	L.Stack = L.Stack[:0]
-	luaStateFreeList = append(luaStateFreeList, L)
+	luaStatePool.Put(L)
 }
