@@ -1,13 +1,11 @@
 // Closure and UpVal object pools — reuses dead structs to reduce allocation pressure.
 //
 // LClosures and UpVals are the second and third most frequently allocated GC
-// objects (after tables). Using sync.Pool lets us reuse the struct memory for
-// short-lived closures/upvals instead of going through Go's mallocgc each time.
+// objects (after tables). Using slice-based freelists is safe because Lua is
+// single-threaded — no locks or atomics needed.
 package closure
 
 import (
-	"sync"
-
 	"github.com/akzj/go-lua/internal/object"
 )
 
@@ -15,19 +13,22 @@ import (
 // LClosure pool
 // ---------------------------------------------------------------------------
 
-var lclosurePool = sync.Pool{
-	New: func() any {
-		return &LClosure{}
-	},
-}
+var lclosureFreeList []*LClosure
 
-// getLClosure gets an LClosure from the pool or allocates a new one.
+// getLClosure gets an LClosure from the freelist or allocates a new one.
 // The returned closure has zeroed GCHeader and nil Proto/UpVals.
 func getLClosure() *LClosure {
-	cl := lclosurePool.Get().(*LClosure)
+	n := len(lclosureFreeList)
+	if n > 0 {
+		cl := lclosureFreeList[n-1]
+		lclosureFreeList = lclosureFreeList[:n-1]
+		cl.GCHeader = object.GCHeader{}
+		cl.Proto = nil
+		cl.UpVals = nil
+		return cl
+	}
+	cl := &LClosure{}
 	cl.GCHeader = object.GCHeader{}
-	cl.Proto = nil
-	cl.UpVals = nil
 	return cl
 }
 
@@ -38,28 +39,31 @@ func PutLClosure(cl *LClosure) {
 	cl.Proto = nil
 	cl.UpVals = nil
 	cl.GCHeader = object.GCHeader{}
-	lclosurePool.Put(cl)
+	lclosureFreeList = append(lclosureFreeList, cl)
 }
 
 // ---------------------------------------------------------------------------
 // UpVal pool
 // ---------------------------------------------------------------------------
 
-var upvalPool = sync.Pool{
-	New: func() any {
-		return &UpVal{}
-	},
-}
+var upvalFreeList []*UpVal
 
-// getUpVal gets an UpVal from the pool or allocates a new one.
+// getUpVal gets an UpVal from the freelist or allocates a new one.
 // The returned upval is fully zeroed.
 func getUpVal() *UpVal {
-	uv := upvalPool.Get().(*UpVal)
+	n := len(upvalFreeList)
+	if n > 0 {
+		uv := upvalFreeList[n-1]
+		upvalFreeList = upvalFreeList[:n-1]
+		uv.GCHeader = object.GCHeader{}
+		uv.StackIdx = 0
+		uv.Own = object.Nil
+		uv.Next = nil
+		uv.Stack = nil
+		return uv
+	}
+	uv := &UpVal{}
 	uv.GCHeader = object.GCHeader{}
-	uv.StackIdx = 0
-	uv.Own = object.Nil
-	uv.Next = nil
-	uv.Stack = nil
 	return uv
 }
 
@@ -71,5 +75,5 @@ func PutUpVal(uv *UpVal) {
 	uv.Next = nil
 	uv.Stack = nil
 	uv.GCHeader = object.GCHeader{}
-	upvalPool.Put(uv)
+	upvalFreeList = append(upvalFreeList, uv)
 }
