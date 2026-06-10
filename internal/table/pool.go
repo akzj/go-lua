@@ -12,6 +12,7 @@ package table
 import (
 	"math/bits"
 	"sync"
+	"unsafe"
 
 	"github.com/akzj/go-lua/internal/object"
 )
@@ -20,19 +21,92 @@ import (
 // Table struct pool
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Slab allocator — pre-allocated []Table slabs with O(1) get/put.
+// Eliminates Go GC scanning of individual Table structs by allocating them
+// within large fixed backing arrays that act as a single GC root.
+// ---------------------------------------------------------------------------
+
+// slabSize is the number of Table elements per slab.
+const slabSize = 4096
+
+// freeEntry identifies a freed element within a slab.
+type freeEntry struct {
+	slabIdx int32
+	elemIdx int32
+}
+
+// Global slab state.
+var (
+	slabMu         sync.Mutex   // guards all slab state (concurrent-safe)
+	tableSlabs     [][]Table    // slab backing arrays
+	tableFreeList  []freeEntry  // LIFO free list of (slab, elem) pairs
+	nextSlabIdx    int32        // current slab index for sequential alloc
+	nextSequential int32        // next sequential index within current slab
+)
+
+// slabGetTable returns a *Table from the slab allocator.
+// Prefers the free list (LIFO), then sequential allocation within the current
+// slab, then allocates a new slab if exhausted.
+func slabGetTable() *Table {
+	slabMu.Lock()
+	// 1. Try free list first (LIFO for cache locality)
+	n := len(tableFreeList)
+	if n > 0 {
+		fe := tableFreeList[n-1]
+		tableFreeList = tableFreeList[:n-1]
+		slabMu.Unlock()
+		return &tableSlabs[fe.slabIdx][fe.elemIdx]
+	}
+	// 2. Sequential alloc from current slab
+	if nextSlabIdx < int32(len(tableSlabs)) && nextSequential < slabSize {
+		i := nextSequential
+		nextSequential++
+		slabMu.Unlock()
+		// Zero the struct for safe reuse
+		tableSlabs[nextSlabIdx][i] = Table{}
+		return &tableSlabs[nextSlabIdx][i]
+	}
+	// 3. Allocate new slab
+	slab := make([]Table, slabSize)
+	tableSlabs = append(tableSlabs, slab)
+	nextSlabIdx = int32(len(tableSlabs) - 1)
+	nextSequential = 1 // element 0 returned now
+	slabMu.Unlock()
+	return &slab[0]
+}
+
+// slabPutTable returns a Table to the slab allocator free list.
+// Uses pointer range scanning to determine which slab t belongs to.
+func slabPutTable(t *Table) {
+	ptr := unsafe.Pointer(t)
+	sz := unsafe.Sizeof(Table{})
+	slabMu.Lock()
+	for i, slab := range tableSlabs {
+		base := unsafe.SliceData(slab)
+		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
+		if diff >= 0 && diff < uintptr(len(slab))*sz {
+			elemIdx := int32(diff / sz)
+			tableFreeList = append(tableFreeList, freeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			slabMu.Unlock()
+			return
+		}
+	}
+	slabMu.Unlock()
+	// Fallback: t is not from any slab (shouldn't happen in normal operation)
+}
+
 var tablePool = sync.Pool{
 	New: func() any {
 		return &Table{}
 	},
 }
 
-// getTable gets a Table from the pool or allocates a new one.
-// PutTable already clears reference fields (Array, Nodes, Metatable, GCHeader).
-// We only need to zero the scalar fields here.
+// getTable gets a Table from the slab allocator.
+// The returned Table has zeroed scalar fields; callers must initialize as needed.
 func getTable() *Table {
-	t := tablePool.Get().(*Table)
-	// Reference fields (Array, Nodes, Metatable, GCHeader) were cleared by PutTable.
-	// Zero the remaining scalar fields for safe reuse.
+	t := slabGetTable()
+	// SlabGetTable zeros the struct, but re-zero scalar fields for safety.
 	t.LsizeNode = 0
 	t.LastFree = 0
 	t.Flags = 0
@@ -41,13 +115,15 @@ func getTable() *Table {
 	return t
 }
 
-// PutTable returns a Table to the pool for reuse.
+// PutTable returns a Table to the slab allocator for reuse.
 // Called by the GC sweep phase when a dead table is unlinked.
-// Pools backing slices before clearing references.
+// Pools backing slices (unless they're inline arrays) before clearing references.
 func PutTable(t *Table) {
-	// Pool the backing slices for reuse
+	// Pool backing slices only if NOT inline arrays
 	if t.Array != nil {
-		putArraySlice(t.Array)
+		if !isInlineSlice(t, t.Array) {
+			putArraySlice(t.Array)
+		}
 	}
 	if t.Nodes != nil {
 		putNodeSlice(t.Nodes)
@@ -57,7 +133,7 @@ func PutTable(t *Table) {
 	t.Nodes = nil
 	t.Metatable = nil
 	t.GCHeader = object.GCHeader{}
-	tablePool.Put(t)
+	slabPutTable(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -81,9 +157,7 @@ func getArraySlice(size int) []object.TValue {
 	if v := arrayPools[i].Get(); v != nil {
 		s := v.([]object.TValue)[:size]
 		// Clear to zero (Nil = zero value, TagNil=0x00)
-		for j := range s {
-			s[j] = object.TValue{}
-		}
+		clear(s)
 		return s
 	}
 	return make([]object.TValue, size, 1<<i)
@@ -97,9 +171,7 @@ func putArraySlice(s []object.TValue) {
 	}
 	// Clear all capacity to release GC references
 	s = s[:cap(s)]
-	for i := range s {
-		s[i] = object.TValue{}
-	}
+	clear(s)
 	i := poolIndex(cap(s))
 	arrayPools[i].Put(s)
 }
@@ -114,9 +186,7 @@ func getNodeSlice(size int) []node {
 	if v := nodePools[i].Get(); v != nil {
 		s := v.([]node)[:size]
 		// Clear to zero
-		for j := range s {
-			s[j] = node{}
-		}
+		clear(s)
 		return s
 	}
 	return make([]node, size, 1<<i)
@@ -130,9 +200,7 @@ func putNodeSlice(s []node) {
 	}
 	// Clear all capacity to release GC references
 	s = s[:cap(s)]
-	for i := range s {
-		s[i] = node{}
-	}
+	clear(s)
 	i := poolIndex(cap(s))
 	nodePools[i].Put(s)
 }

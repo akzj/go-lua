@@ -44,6 +44,11 @@ type Table struct {
 	// The VM/API layer checks this after table mutations and calls
 	// TrackAllocation to update GCDebt. Reset to 0 after consumption.
 	SizeDelta int64
+
+	// InlineArray provides inline storage for small arrays (size ≤ 4).
+	// When len(Array) ≤ 4 and Array points into InlineArray, no heap
+	// allocation is needed for the backing slice.
+	InlineArray [4]object.TValue
 }
 
 // GC returns the GC header for this table.
@@ -54,6 +59,12 @@ func (t *Table) HasWeakKeys() bool { return t.WeakMode&WeakKey != 0 }
 
 // HasWeakValues returns true if this table has weak values (__mode contains "v").
 func (t *Table) HasWeakValues() bool { return t.WeakMode&WeakValue != 0 }
+
+// isInlineSlice checks if slice s points into the InlineArray of Table t.
+// When true, s does NOT need to be pooled separately — it's part of the Table struct.
+func isInlineSlice(t *Table, s []object.TValue) bool {
+	return cap(s) <= 4 && len(s) > 0 && unsafe.SliceData(s) == &t.InlineArray[0]
+}
 
 // node is a hash table entry (key + value + chain offset).
 //

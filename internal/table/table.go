@@ -20,7 +20,12 @@ import (
 func newTable(arraySize, hashSize int) *Table {
 	t := getTable()
 	if arraySize > 0 {
-		t.Array = getArraySlice(arraySize)
+		if arraySize <= 4 {
+			// Use inline storage — no heap allocation for small arrays
+			t.Array = t.InlineArray[:arraySize]
+		} else {
+			t.Array = getArraySlice(arraySize)
+		}
 	}
 	initHashPart(t, hashSize)
 	t.Flags = 0x3F // all 6 fast TM bits set = all absent (empty table)

@@ -659,7 +659,9 @@ func resizeTable(t *Table, newASize, newHSize int) {
 
 	// Pool old slices for reuse (after all re-insertions are complete)
 	if oldArray != nil {
-		putArraySlice(oldArray)
+		if !isInlineSlice(t, oldArray) {
+			putArraySlice(oldArray)
+		}
 	}
 	if oldNodes != nil {
 		putNodeSlice(oldNodes)
