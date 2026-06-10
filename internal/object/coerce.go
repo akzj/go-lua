@@ -357,7 +357,9 @@ func IsLuaAlNum(r rune) bool {
 // or (0, false) if f is not an integer or overflows int64.
 // Mirrors: luaO_cast_number2int in lobject.c.
 func FloatToInteger(f float64) (int64, bool) {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
+	// Range check: -2^63 <= f < 2^63 (MinInt64 <= f < -MinInt64).
+	if math.IsNaN(f) || math.IsInf(f, 0) ||
+		f < float64(math.MinInt64) || !(f < -float64(math.MinInt64)) {
 		return 0, false
 	}
 	i := int64(f)

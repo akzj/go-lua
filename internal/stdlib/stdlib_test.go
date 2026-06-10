@@ -189,7 +189,6 @@ func TestGetSetMetatable(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	t.Skip("Known issue: loaded chunk return values through nested calls")
 	L := newState(t)
 	doString(t, L, `
 		local f = load("return 42")

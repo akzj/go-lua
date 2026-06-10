@@ -4,7 +4,10 @@
 // GC object types and raw equality comparison.
 package object
 
-import "unsafe"
+import (
+	"math"
+	"unsafe"
+)
 
 // ---------------------------------------------------------------------------
 // Light C function identity
@@ -264,9 +267,17 @@ func RawEqual(v1, v2 TValue) bool {
 // floatToIntegerEq converts a float to integer for equality comparison.
 // Returns the integer and true only if the float is an exact integer value.
 func floatToIntegerEq(f float64) (int64, bool) {
+	// Range check: -2^63 <= f < 2^63
+	if math.IsNaN(f) || math.IsInf(f, 0) ||
+		f < float64(math.MinInt64) || !(f < -float64(math.MinInt64)) {
+		return 0, false
+	}
 	i := int64(f)
-	if float64(i) == f {
+	if float64(i) == f && i != 0 {
 		return i, true
+	}
+	if f == 0 {
+		return 0, true
 	}
 	return 0, false
 }

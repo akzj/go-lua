@@ -921,12 +921,17 @@ func codeInt(fs *funcState, reg int, i int64) {
 
 // codeFloat emits a LOADF or LOADK instruction.
 func codeFloat(fs *funcState, reg int, f float64) {
-	fi := int64(f)
-	if float64(fi) == f && fitsBx(fi) {
-		codeAsBx(fs, opcode.OP_LOADF, reg, int(fi))
-	} else {
-		codek(fs, reg, numberK(fs, f))
+	// Range check before int64 conversion to catch values just outside
+	// int64 range that saturate but float64(int64(f)) rounds back.
+	if !math.IsNaN(f) && !math.IsInf(f, 0) &&
+		f >= float64(math.MinInt64) && f < -float64(math.MinInt64) {
+		fi := int64(f)
+		if float64(fi) == f && fitsBx(fi) {
+			codeAsBx(fs, opcode.OP_LOADF, reg, int(fi))
+			return
+		}
 	}
+	codek(fs, reg, numberK(fs, f))
 }
 
 // ---------------------------------------------------------------------------

@@ -60,11 +60,18 @@ func toInteger(v object.TValue) (int64, bool) {
 // floatToInteger converts a float64 to int64 if it has an exact integer value
 // and is within int64 range. Mirrors: luaO_cast_number2int in lobject.c.
 func floatToInteger(f float64) (int64, bool) {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
+	// Range check: MinInt64 <= f < -MinInt64 (-2^63 <= f < 2^63).
+	// Rejects values outside int64 range, including those like 2^63 that
+	// saturate or wrap in the int64(f) conversion but float64(int64(f))
+	// rounds back to the original value due to precision loss.
+	if math.IsNaN(f) || math.IsInf(f, 0) ||
+		f < float64(math.MinInt64) || !(f < -float64(math.MinInt64)) {
 		return 0, false
 	}
 	i := int64(f)
-	if float64(i) == f && i != 0 {
+	// Verify exact conversion: values near MaxInt64 may round in float64
+	// to a value just above MaxInt64, causing int64(f) to saturate.
+	if !math.IsInf(float64(i), 0) && float64(i) == f {
 		return i, true
 	}
 	if f == 0 {
@@ -86,9 +93,16 @@ func toFloat(v object.TValue) float64 {
 
 // floatToIntegerFloor converts float to integer rounding toward negative infinity.
 func floatToIntegerFloor(f float64) (int64, bool) {
+	// Range check: MinInt64 <= f < -MinInt64 (-2^63 <= f < 2^63).
+	// This mirrors C Lua's lua_numbertointeger and rejects values
+	// just above MaxInt64 that float64(int64(f)) would round back to.
+	if math.IsNaN(f) || math.IsInf(f, 0) ||
+		f < float64(math.MinInt64) || !(f < -float64(math.MinInt64)) {
+		return 0, false
+	}
 	fl := math.Floor(f)
 	i := int64(fl)
-	if float64(i) == fl && !math.IsInf(fl, 0) && !math.IsNaN(fl) {
+	if !math.IsInf(float64(i), 0) && float64(i) == fl {
 		return i, true
 	}
 	return 0, false
@@ -96,9 +110,14 @@ func floatToIntegerFloor(f float64) (int64, bool) {
 
 // floatToIntegerCeil converts float to integer rounding toward positive infinity.
 func floatToIntegerCeil(f float64) (int64, bool) {
+	// Same range check: MinInt64 <= f < -MinInt64
+	if math.IsNaN(f) || math.IsInf(f, 0) ||
+		f < float64(math.MinInt64) || !(f < -float64(math.MinInt64)) {
+		return 0, false
+	}
 	c := math.Ceil(f)
 	i := int64(c)
-	if float64(i) == c && !math.IsInf(c, 0) && !math.IsNaN(c) {
+	if !math.IsInf(float64(i), 0) && float64(i) == c {
 		return i, true
 	}
 	return 0, false

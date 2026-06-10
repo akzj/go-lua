@@ -128,15 +128,22 @@ func ToIntegerNS(v TValue) (int64, bool) {
 		return v.N, true
 	case TagFloat:
 		f := v.Float()
-		// Exact mode: only convert if float has exact integer representation
-		if math.IsNaN(f) || math.IsInf(f, 0) {
+		// Range check: -2^63 <= f < 2^63 (MinInt64 <= f < -MinInt64).
+		// Rejects values outside int64 range, catching the case where
+		// int64(f) saturates but float64(int64(f)) rounds back due to
+		// precision loss (e.g., f = 2^63 → int64(f)=MaxInt64 → float64=2^63).
+		if math.IsNaN(f) || math.IsInf(f, 0) ||
+			f < float64(math.MinInt64) || !(f < -float64(math.MinInt64)) {
 			return 0, false
 		}
 		i := int64(f)
-		if float64(i) != f {
-			return 0, false // not exactly representable as integer
+		if float64(i) == f && i != 0 {
+			return i, true
 		}
-		return i, true
+		if f == 0 {
+			return 0, true
+		}
+		return 0, false
 	default:
 		return 0, false
 	}
