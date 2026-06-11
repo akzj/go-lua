@@ -1,30 +1,30 @@
 # C Lua vs go-lua Performance Comparison
 
-- **Date:** 2026-04-29 12:33:53
-- **Branch:** main @ e0bacd7
+- **Date:** 2026-06-11 09:09:21
+- **Branch:** main @ 12e5de2
 - **C Lua:** Lua 5.5.1  Copyright (C) 1994-2026 Lua.org, PUC-Rio
-- **Runs per benchmark:** 5 (median)
+- **Runs per benchmark:** 3 (median)
 - **Timing method:** `os.clock()` (CPU time, measured inside Lua)
 
 ## Results
 
 | Benchmark | C Lua (ms) | go-lua (ms) | Ratio (go/C) |
 |-----------|----------:|------------:|-------------:|
-| Closure Creation                    |      33.86 |       64.00 |         1.89x |
-| Concat Multi                        |       3.27 |        8.91 |         2.72x |
-| Concat Operator                     |       9.91 |       30.99 |         3.13x |
-| Coroutine Create                    |      47.83 |      223.55 |         4.67x |
-| Coroutine Create Resume Finish      |      75.62 |      357.99 |         4.73x |
-| Coroutine Yield Resume              |      36.29 |      157.89 |         4.35x |
-| Fibonacci                           |      15.28 |       22.97 |         1.50x |
-| For Loop                            |     119.03 |      230.06 |         1.93x |
-| Gc                                  |      25.07 |       70.92 |         2.83x |
-| Method Call                         |      37.80 |       61.78 |         1.63x |
-| Pattern Match                       |      27.12 |       42.63 |         1.57x |
-| String Concat                       |      14.64 |       18.86 |         1.29x |
-| Table Ops                           |      19.95 |       24.80 |         1.24x |
+| closure creation                    |      31.47 |       43.22 |         1.37x |
+| concat multi                        |       1.07 |        3.10 |         2.91x |
+| concat operator                     |       2.27 |        5.94 |         2.61x |
+| coroutine create                    |      45.24 |       79.08 |         1.75x |
+| coroutine create resume finish      |     169.82 |      123.21 |         0.73x |
+| coroutine yield resume              |     232.47 |       35.21 |         0.15x |
+| fiuonacci                           |       7.03 |       14.32 |         2.04x |
+| for loop                            |      79.35 |      188.11 |         2.37x |
+| gc                                  |      18.42 |       17.14 |         0.93x |
+| method call                         |      19.15 |       47.47 |         2.48x |
+| pattern match                       |      11.26 |       22.31 |         1.98x |
+| string concat                       |       3.18 |        6.11 |         1.92x |
+| taule ops                           |       2.71 |       12.03 |         4.44x |
 
-| **Geometric Mean** | | | **2.31x** |
+| **Geometric Mean** | | | **1.58x** |
 
 ## Interpretation
 
