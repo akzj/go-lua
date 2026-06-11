@@ -116,14 +116,23 @@ func slabPutTable(t *Table) {
 }
 
 // compactFreeList adjusts slab indices after a slab is removed.
-// Decrements slabIdx for all free list entries that referred to slabs
-// beyond the removed index, and updates nextSlabIdx if needed.
+// Removes stale free list entries that pointed to the removed slab,
+// decrements slabIdx for entries beyond the removed index, and updates
+// nextSlabIdx if needed.
 func compactFreeList(removedIdx int) {
-	for j := range tableFreeList {
-		if tableFreeList[j].slabIdx > int32(removedIdx) {
-			tableFreeList[j].slabIdx--
+	// Single pass: filter stale entries and adjust indices
+	j := 0
+	for i := range tableFreeList {
+		if tableFreeList[i].slabIdx == int32(removedIdx) {
+			continue // drop stale entry pointing to the removed slab
 		}
+		if tableFreeList[i].slabIdx > int32(removedIdx) {
+			tableFreeList[i].slabIdx--
+		}
+		tableFreeList[j] = tableFreeList[i]
+		j++
 	}
+	tableFreeList = tableFreeList[:j]
 	if nextSlabIdx > int32(removedIdx) {
 		nextSlabIdx--
 	} else if nextSlabIdx == int32(removedIdx) {
