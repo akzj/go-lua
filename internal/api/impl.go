@@ -193,10 +193,12 @@ func NewState() *State {
 		pub.callAllPendingFinalizers()
 	}
 
-	// SweepStringFn: remove dead strings from the interning table during GC sweep.
+	// SweepStringFn: remove dead strings from the interning table during GC sweep,
+	// and return the LuaString struct to the slab allocator.
 	ls.Global.SweepStringFn = func(obj object.GCObject) {
 		if ts, ok := obj.(*object.LuaString); ok {
 			L.strtab().RemoveString(ts)
+			luastring.PutLuaString(ts)
 		}
 	}
 

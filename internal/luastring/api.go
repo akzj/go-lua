@@ -156,12 +156,12 @@ func (st *StringTable) internShort(s string, h uint32) *object.LuaString {
 		}
 	}
 
-	// Not found — create new
-	ts := &object.LuaString{
-		Data:    s,
-		Hash_:   h,
-		IsShort: true,
-	}
+	// Not found — create new from slab
+	ts := GetLuaString()
+	ts.Data = s
+	ts.Hash_ = h
+	ts.IsShort = true
+	ts.Extra = 0
 	if st.OnCreate != nil {
 		st.OnCreate(ts) // V5: register in allgc chain
 	}
@@ -238,14 +238,15 @@ func (st *StringTable) SweepStrings() {
 // LuaString construction helpers
 // ---------------------------------------------------------------------------
 
-// newLong creates a non-interned long string.
+// newLong creates a non-interned long string from the slab allocator.
 // Hash is left at 0 — computed lazily when used as a table key.
 func newLong(s string) *object.LuaString {
-	return &object.LuaString{
-		Data:    s,
-		Hash_:   0,
-		IsShort: false,
-	}
+	ls := GetLuaString()
+	ls.Data = s
+	ls.Hash_ = 0
+	ls.IsShort = false
+	ls.Extra = 0
+	return ls
 }
 
 // ---------------------------------------------------------------------------
