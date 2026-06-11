@@ -24,9 +24,15 @@ type lclosureFreeEntry struct {
 	elemIdx int32
 }
 
+// lclosureSlabMeta holds a slab backing array and tracks live element count.
+type lclosureSlabMeta struct {
+	data []LClosure
+	used int32
+}
+
 var (
 	lclosureSlabMu         sync.Mutex
-	lclosureSlabs          [][]LClosure
+	lclosureSlabs          []lclosureSlabMeta
 	lclosureFreeList       []lclosureFreeEntry
 	lclosureNextSlabIdx    int32
 	lclosureNextSequential int32
@@ -39,18 +45,20 @@ func slabGetLClosure() *LClosure {
 	if n > 0 {
 		fe := lclosureFreeList[n-1]
 		lclosureFreeList = lclosureFreeList[:n-1]
+		lclosureSlabs[fe.slabIdx].used++
 		lclosureSlabMu.Unlock()
-		return &lclosureSlabs[fe.slabIdx][fe.elemIdx]
+		return &lclosureSlabs[fe.slabIdx].data[fe.elemIdx]
 	}
 	if lclosureNextSlabIdx < int32(len(lclosureSlabs)) && lclosureNextSequential < lclosureSlabSize {
 		i := lclosureNextSequential
 		lclosureNextSequential++
+		lclosureSlabs[lclosureNextSlabIdx].used++
 		lclosureSlabMu.Unlock()
-		lclosureSlabs[lclosureNextSlabIdx][i] = LClosure{}
-		return &lclosureSlabs[lclosureNextSlabIdx][i]
+		lclosureSlabs[lclosureNextSlabIdx].data[i] = LClosure{}
+		return &lclosureSlabs[lclosureNextSlabIdx].data[i]
 	}
 	slab := make([]LClosure, lclosureSlabSize)
-	lclosureSlabs = append(lclosureSlabs, slab)
+	lclosureSlabs = append(lclosureSlabs, lclosureSlabMeta{data: slab, used: 1})
 	lclosureNextSlabIdx = int32(len(lclosureSlabs) - 1)
 	lclosureNextSequential = 1
 	lclosureSlabMu.Unlock()
@@ -58,22 +66,51 @@ func slabGetLClosure() *LClosure {
 }
 
 // slabPutLClosure returns an LClosure to the slab allocator free list.
+// If the slab becomes completely empty, it is reclaimed to prevent unbounded growth.
 func slabPutLClosure(cl *LClosure) {
 	ptr := unsafe.Pointer(cl)
 	sz := unsafe.Sizeof(LClosure{})
 	lclosureSlabMu.Lock()
-	for i, slab := range lclosureSlabs {
-		base := unsafe.SliceData(slab)
+	for i := range lclosureSlabs {
+		meta := &lclosureSlabs[i]
+		base := unsafe.SliceData(meta.data)
 		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
-		if diff >= 0 && diff < uintptr(len(slab))*sz {
+		if diff >= 0 && diff < uintptr(len(meta.data))*sz {
 			elemIdx := int32(diff / sz)
-			lclosureFreeList = append(lclosureFreeList, lclosureFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			meta.used--
+			if meta.used == 0 && len(lclosureSlabs) > 1 {
+				lclosureSlabs = append(lclosureSlabs[:i], lclosureSlabs[i+1:]...)
+				compactFreeListLClosure(i)
+			} else {
+				lclosureFreeList = append(lclosureFreeList, lclosureFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			}
 			lclosureSlabMu.Unlock()
 			return
 		}
 	}
 	lclosureSlabMu.Unlock()
 	// Fallback: not from any slab (shouldn't happen)
+}
+
+// compactFreeListLClosure adjusts LClosure slab indices after a slab is removed.
+func compactFreeListLClosure(removedIdx int) {
+	j := 0
+	for i := range lclosureFreeList {
+		if lclosureFreeList[i].slabIdx == int32(removedIdx) {
+			continue
+		}
+		if lclosureFreeList[i].slabIdx > int32(removedIdx) {
+			lclosureFreeList[i].slabIdx--
+		}
+		lclosureFreeList[j] = lclosureFreeList[i]
+		j++
+	}
+	lclosureFreeList = lclosureFreeList[:j]
+	if lclosureNextSlabIdx > int32(removedIdx) {
+		lclosureNextSlabIdx--
+	} else if lclosureNextSlabIdx == int32(removedIdx) {
+		lclosureNextSequential = lclosureSlabSize
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -88,9 +125,15 @@ type upvalFreeEntry struct {
 	elemIdx int32
 }
 
+// upvalSlabMeta holds a slab backing array and tracks live element count.
+type upvalSlabMeta struct {
+	data []UpVal
+	used int32
+}
+
 var (
 	upvalSlabMu         sync.Mutex
-	upvalSlabs          [][]UpVal
+	upvalSlabs          []upvalSlabMeta
 	upvalFreeList       []upvalFreeEntry
 	upvalNextSlabIdx    int32
 	upvalNextSequential int32
@@ -103,18 +146,20 @@ func slabGetUpVal() *UpVal {
 	if n > 0 {
 		fe := upvalFreeList[n-1]
 		upvalFreeList = upvalFreeList[:n-1]
+		upvalSlabs[fe.slabIdx].used++
 		upvalSlabMu.Unlock()
-		return &upvalSlabs[fe.slabIdx][fe.elemIdx]
+		return &upvalSlabs[fe.slabIdx].data[fe.elemIdx]
 	}
 	if upvalNextSlabIdx < int32(len(upvalSlabs)) && upvalNextSequential < upvalSlabSize {
 		i := upvalNextSequential
 		upvalNextSequential++
+		upvalSlabs[upvalNextSlabIdx].used++
 		upvalSlabMu.Unlock()
-		upvalSlabs[upvalNextSlabIdx][i] = UpVal{}
-		return &upvalSlabs[upvalNextSlabIdx][i]
+		upvalSlabs[upvalNextSlabIdx].data[i] = UpVal{}
+		return &upvalSlabs[upvalNextSlabIdx].data[i]
 	}
 	slab := make([]UpVal, upvalSlabSize)
-	upvalSlabs = append(upvalSlabs, slab)
+	upvalSlabs = append(upvalSlabs, upvalSlabMeta{data: slab, used: 1})
 	upvalNextSlabIdx = int32(len(upvalSlabs) - 1)
 	upvalNextSequential = 1
 	upvalSlabMu.Unlock()
@@ -122,22 +167,51 @@ func slabGetUpVal() *UpVal {
 }
 
 // slabPutUpVal returns an UpVal to the slab allocator free list.
+// If the slab becomes completely empty, it is reclaimed to prevent unbounded growth.
 func slabPutUpVal(uv *UpVal) {
 	ptr := unsafe.Pointer(uv)
 	sz := unsafe.Sizeof(UpVal{})
 	upvalSlabMu.Lock()
-	for i, slab := range upvalSlabs {
-		base := unsafe.SliceData(slab)
+	for i := range upvalSlabs {
+		meta := &upvalSlabs[i]
+		base := unsafe.SliceData(meta.data)
 		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
-		if diff >= 0 && diff < uintptr(len(slab))*sz {
+		if diff >= 0 && diff < uintptr(len(meta.data))*sz {
 			elemIdx := int32(diff / sz)
-			upvalFreeList = append(upvalFreeList, upvalFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			meta.used--
+			if meta.used == 0 && len(upvalSlabs) > 1 {
+				upvalSlabs = append(upvalSlabs[:i], upvalSlabs[i+1:]...)
+				compactFreeListUpVal(i)
+			} else {
+				upvalFreeList = append(upvalFreeList, upvalFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			}
 			upvalSlabMu.Unlock()
 			return
 		}
 	}
 	upvalSlabMu.Unlock()
 	// Fallback: not from any slab (shouldn't happen)
+}
+
+// compactFreeListUpVal adjusts UpVal slab indices after a slab is removed.
+func compactFreeListUpVal(removedIdx int) {
+	j := 0
+	for i := range upvalFreeList {
+		if upvalFreeList[i].slabIdx == int32(removedIdx) {
+			continue
+		}
+		if upvalFreeList[i].slabIdx > int32(removedIdx) {
+			upvalFreeList[i].slabIdx--
+		}
+		upvalFreeList[j] = upvalFreeList[i]
+		j++
+	}
+	upvalFreeList = upvalFreeList[:j]
+	if upvalNextSlabIdx > int32(removedIdx) {
+		upvalNextSlabIdx--
+	} else if upvalNextSlabIdx == int32(removedIdx) {
+		upvalNextSequential = upvalSlabSize
+	}
 }
 
 // ---------------------------------------------------------------------------

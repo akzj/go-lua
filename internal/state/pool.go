@@ -27,13 +27,20 @@ type luaStateFreeEntry struct {
 	elemIdx int32
 }
 
+// luaStateSlabMeta holds a slab backing array and tracks how many of its
+// elements are currently live. Used for empty slab reclamation.
+type luaStateSlabMeta struct {
+	data []LuaState
+	used int32
+}
+
 // Global LuaState slab state.
 var (
-	luaStateSlabMu         sync.Mutex     // guards all LuaState slab state
-	luaStateSlabs          [][]LuaState   // slab backing arrays
+	luaStateSlabMu         sync.Mutex          // guards all LuaState slab state
+	luaStateSlabs          []luaStateSlabMeta  // slab backing arrays with usage tracking
 	luaStateFreeList       []luaStateFreeEntry // LIFO free list
-	luaStateNextSlabIdx    int32          // current slab for sequential alloc
-	luaStateNextSequential int32          // next sequential index in current slab
+	luaStateNextSlabIdx    int32               // current slab for sequential alloc
+	luaStateNextSequential int32               // next sequential index in current slab
 )
 
 // slabGetLuaState returns a *LuaState from the slab allocator.
@@ -45,21 +52,23 @@ func slabGetLuaState() *LuaState {
 	if n > 0 {
 		fe := luaStateFreeList[n-1]
 		luaStateFreeList = luaStateFreeList[:n-1]
+		luaStateSlabs[fe.slabIdx].used++
 		luaStateSlabMu.Unlock()
-		return &luaStateSlabs[fe.slabIdx][fe.elemIdx]
+		return &luaStateSlabs[fe.slabIdx].data[fe.elemIdx]
 	}
 	// 2. Sequential alloc from current slab
 	if luaStateNextSlabIdx < int32(len(luaStateSlabs)) && luaStateNextSequential < luaStateSlabSize {
 		i := luaStateNextSequential
 		luaStateNextSequential++
+		luaStateSlabs[luaStateNextSlabIdx].used++
 		luaStateSlabMu.Unlock()
 		// Zero the struct for safe reuse
-		luaStateSlabs[luaStateNextSlabIdx][i] = LuaState{}
-		return &luaStateSlabs[luaStateNextSlabIdx][i]
+		luaStateSlabs[luaStateNextSlabIdx].data[i] = LuaState{}
+		return &luaStateSlabs[luaStateNextSlabIdx].data[i]
 	}
 	// 3. Allocate new slab
 	slab := make([]LuaState, luaStateSlabSize)
-	luaStateSlabs = append(luaStateSlabs, slab)
+	luaStateSlabs = append(luaStateSlabs, luaStateSlabMeta{data: slab, used: 1})
 	luaStateNextSlabIdx = int32(len(luaStateSlabs) - 1)
 	luaStateNextSequential = 1 // element 0 returned now
 	luaStateSlabMu.Unlock()
@@ -68,22 +77,53 @@ func slabGetLuaState() *LuaState {
 
 // slabPutLuaState returns a LuaState to the slab allocator free list.
 // Uses pointer range scanning (diff-based, checkptr-safe).
+// If the slab becomes completely empty, it is reclaimed to prevent unbounded growth.
 func slabPutLuaState(L *LuaState) {
 	ptr := unsafe.Pointer(L)
 	sz := unsafe.Sizeof(LuaState{})
 	luaStateSlabMu.Lock()
-	for i, slab := range luaStateSlabs {
-		base := unsafe.SliceData(slab)
+	for i := range luaStateSlabs {
+		meta := &luaStateSlabs[i]
+		base := unsafe.SliceData(meta.data)
 		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
-		if diff >= 0 && diff < uintptr(len(slab))*sz {
+		if diff >= 0 && diff < uintptr(len(meta.data))*sz {
 			elemIdx := int32(diff / sz)
-			luaStateFreeList = append(luaStateFreeList, luaStateFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			meta.used--
+			if meta.used == 0 && len(luaStateSlabs) > 1 {
+				// Reclaim this empty slab
+				luaStateSlabs = append(luaStateSlabs[:i], luaStateSlabs[i+1:]...)
+				compactFreeListLuaState(i)
+			} else {
+				luaStateFreeList = append(luaStateFreeList, luaStateFreeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			}
 			luaStateSlabMu.Unlock()
 			return
 		}
 	}
 	luaStateSlabMu.Unlock()
 	// Fallback: not from any slab (shouldn't happen in normal operation)
+}
+
+// compactFreeListLuaState adjusts LuaState slab indices after a slab is removed.
+// Removes stale free list entries and decrements indices of entries beyond the removed slab.
+func compactFreeListLuaState(removedIdx int) {
+	j := 0
+	for i := range luaStateFreeList {
+		if luaStateFreeList[i].slabIdx == int32(removedIdx) {
+			continue // drop stale entry
+		}
+		if luaStateFreeList[i].slabIdx > int32(removedIdx) {
+			luaStateFreeList[i].slabIdx--
+		}
+		luaStateFreeList[j] = luaStateFreeList[i]
+		j++
+	}
+	luaStateFreeList = luaStateFreeList[:j]
+	if luaStateNextSlabIdx > int32(removedIdx) {
+		luaStateNextSlabIdx--
+	} else if luaStateNextSlabIdx == int32(removedIdx) {
+		luaStateNextSequential = luaStateSlabSize
+	}
 }
 
 // getLuaState gets a LuaState from the slab allocator.
