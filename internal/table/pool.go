@@ -36,13 +36,20 @@ type freeEntry struct {
 	elemIdx int32
 }
 
+// tableSlabMeta holds a slab backing array and tracks how many of its
+// elements are currently live. Used for empty slab reclamation.
+type tableSlabMeta struct {
+	data []Table
+	used int32
+}
+
 // Global slab state.
 var (
-	slabMu         sync.Mutex   // guards all slab state (concurrent-safe)
-	tableSlabs     [][]Table    // slab backing arrays
-	tableFreeList  []freeEntry  // LIFO free list of (slab, elem) pairs
-	nextSlabIdx    int32        // current slab index for sequential alloc
-	nextSequential int32        // next sequential index within current slab
+	slabMu         sync.Mutex      // guards all slab state (concurrent-safe)
+	tableSlabs     []tableSlabMeta // slab backing arrays with usage tracking
+	tableFreeList  []freeEntry     // LIFO free list of (slab, elem) pairs
+	nextSlabIdx    int32           // current slab index for sequential alloc
+	nextSequential int32           // next sequential index within current slab
 )
 
 // slabGetTable returns a *Table from the slab allocator.
@@ -55,21 +62,23 @@ func slabGetTable() *Table {
 	if n > 0 {
 		fe := tableFreeList[n-1]
 		tableFreeList = tableFreeList[:n-1]
+		tableSlabs[fe.slabIdx].used++
 		slabMu.Unlock()
-		return &tableSlabs[fe.slabIdx][fe.elemIdx]
+		return &tableSlabs[fe.slabIdx].data[fe.elemIdx]
 	}
 	// 2. Sequential alloc from current slab
 	if nextSlabIdx < int32(len(tableSlabs)) && nextSequential < slabSize {
 		i := nextSequential
 		nextSequential++
+		tableSlabs[nextSlabIdx].used++
 		slabMu.Unlock()
 		// Zero the struct for safe reuse
-		tableSlabs[nextSlabIdx][i] = Table{}
-		return &tableSlabs[nextSlabIdx][i]
+		tableSlabs[nextSlabIdx].data[i] = Table{}
+		return &tableSlabs[nextSlabIdx].data[i]
 	}
 	// 3. Allocate new slab
 	slab := make([]Table, slabSize)
-	tableSlabs = append(tableSlabs, slab)
+	tableSlabs = append(tableSlabs, tableSlabMeta{data: slab, used: 1})
 	nextSlabIdx = int32(len(tableSlabs) - 1)
 	nextSequential = 1 // element 0 returned now
 	slabMu.Unlock()
@@ -78,22 +87,49 @@ func slabGetTable() *Table {
 
 // slabPutTable returns a Table to the slab allocator free list.
 // Uses pointer range scanning to determine which slab t belongs to.
+// If the slab becomes completely empty (all elements freed), the slab
+// is removed and its backing array freed to prevent unbounded growth.
 func slabPutTable(t *Table) {
 	ptr := unsafe.Pointer(t)
 	sz := unsafe.Sizeof(Table{})
 	slabMu.Lock()
-	for i, slab := range tableSlabs {
-		base := unsafe.SliceData(slab)
+	for i := range tableSlabs {
+		meta := &tableSlabs[i]
+		base := unsafe.SliceData(meta.data)
 		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
-		if diff >= 0 && diff < uintptr(len(slab))*sz {
+		if diff >= 0 && diff < uintptr(len(meta.data))*sz {
 			elemIdx := int32(diff / sz)
-			tableFreeList = append(tableFreeList, freeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			meta.used--
+			if meta.used == 0 && len(tableSlabs) > 1 {
+				// Reclaim this empty slab
+				tableSlabs = append(tableSlabs[:i], tableSlabs[i+1:]...)
+				compactFreeList(i)
+			} else {
+				tableFreeList = append(tableFreeList, freeEntry{slabIdx: int32(i), elemIdx: elemIdx})
+			}
 			slabMu.Unlock()
 			return
 		}
 	}
 	slabMu.Unlock()
 	// Fallback: t is not from any slab (shouldn't happen in normal operation)
+}
+
+// compactFreeList adjusts slab indices after a slab is removed.
+// Decrements slabIdx for all free list entries that referred to slabs
+// beyond the removed index, and updates nextSlabIdx if needed.
+func compactFreeList(removedIdx int) {
+	for j := range tableFreeList {
+		if tableFreeList[j].slabIdx > int32(removedIdx) {
+			tableFreeList[j].slabIdx--
+		}
+	}
+	if nextSlabIdx > int32(removedIdx) {
+		nextSlabIdx--
+	} else if nextSlabIdx == int32(removedIdx) {
+		// Lost sequential position context; force new slab allocation on next alloc
+		nextSequential = slabSize
+	}
 }
 
 var tablePool = sync.Pool{
