@@ -72,8 +72,8 @@ func slabGetTable() *Table {
 		nextSequential++
 		tableSlabs[nextSlabIdx].used++
 		slabMu.Unlock()
-		// Zero the struct for safe reuse
-		tableSlabs[nextSlabIdx].data[i] = Table{}
+		// Return directly — getTable() zeroes scalar fields. Reference fields
+		// (Array, Nodes, Metatable, GCHeader) are cleared by PutTable.
 		return &tableSlabs[nextSlabIdx].data[i]
 	}
 	// 3. Allocate new slab
