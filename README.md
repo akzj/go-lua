@@ -204,6 +204,12 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 | Coroutine Create | 45.35 | 234.21 | **5.16×** |
 | **Geometric Mean** | | | **1.78×** |
 
+> **Ratio interpretation**: The ratio column shows go-lua's time divided by C Lua's time.
+> - **0.85×** = go-lua takes 85% of C Lua's time (**15% faster**)
+> - **1.00×** = equal performance
+> - **1.78×** = go-lua takes 178% of C Lua's time (**78% slower**)
+> - **4.55×** = go-lua takes 455% of C Lua's time (**355% slower**)
+>
 > Benchmarked on Apple M5 Pro with C Lua 5.5.1 (`-O2`). go-lua is competitive with C Lua across
 > most benchmarks, with GC and coroutine benchmarks now approaching or exceeding C Lua performance
 > thanks to slab-based memory allocation (inline arrays + pre-allocated struct pools).

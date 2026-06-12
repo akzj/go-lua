@@ -3,9 +3,31 @@ go-lua Benchmark Summary (all optimizations applied)
 
 Platform: Apple M5 Pro, Go 1.26.3
 C Lua: 5.5.1 (compiled with -O2)
-Geometric Mean: 1.78x
+Geometric Mean: 1.78x (go-lua takes 178% of C Lua's time = 78% slower overall)
 
-Optimizations applied:
+Ratio = go-lua time / C Lua time (< 1.0 = faster, > 1.0 = slower)
+
+Benchmark results (2026-06-12):
+  Faster than C Lua (ratio < 1.0):
+    GC:                             0.85x  (15% faster)
+    Coroutine Yield/Resume:         0.15x  (85% faster)
+
+  Slower by < 100% (ratio 1.0 - 2.0):
+    Coroutine Create/Resume/Finish: 1.37x  (37% slower)
+    Closure Creation:               1.58x  (58% slower)
+    String Concat:                  1.71x  (71% slower)
+    Pattern Match:                  1.99x  (99% slower)
+
+  Slower by 100%+ (ratio > 2.0):
+    Fibonacci:                      2.07x  (107% slower)
+    For Loop:                       2.34x  (134% slower)
+    Method Call:                    2.47x  (147% slower)
+    Concat Multi:                   2.55x  (155% slower)
+    Concat Operator:                2.70x  (170% slower)
+    Table Ops:                      4.55x  (355% slower)
+    Coroutine Create:               5.16x  (416% slower)
+
+Optimizations applied (see git log for details):
 - Slab allocators: Table, LuaState, LClosure/UpVal, LuaString
 - Empty slab reclamation for all allocators
 - Inline [4]TValue on Table struct (zero-heap for small tables)
@@ -13,23 +35,3 @@ Optimizations applied:
 - Flag-based coroutine yield optimization
 - Float-to-integer range check fix (math.lua)
 - files.lua /dev/full _port guard (macOS fix)
-
-Benchmark results (2026-06-12):
-  < 2x (competitive):
-    GC:                             0.85x
-    Coroutine Yield/Resume:         0.15x
-    Coroutine Create/Resume/Finish: 1.37x
-    Closure Creation:               1.58x
-    String Concat:                  1.71x
-    Pattern Match:                  1.99x
-
-  2-5x (acceptable):
-    Fibonacci:                      2.07x
-    For Loop:                       2.34x
-    Method Call:                    2.47x
-    Concat Multi:                   2.55x
-    Concat Operator:                2.70x
-    Table Ops:                      4.55x
-    Coroutine Create:               5.16x
-
-  > 5x: 1 (Coroutine Create — VM overhead, flag-based yield doesn't help creation)
