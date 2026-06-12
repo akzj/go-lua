@@ -264,3 +264,23 @@ func BenchmarkCoroutineCreateResumeFinish(b *testing.B) {
 		L.Close()
 	}
 }
+
+// BenchmarkGCGen — allocation + GC pressure with generational GC mode
+func BenchmarkGCGen(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		L := luaapi.NewState()
+		OpenAll(L)
+		// Switch to generational mode before starting
+		L.SetGCMode("generational")
+		err := L.DoString(`
+            for i = 1, 10000 do
+                local t = {i, i*2, i*3}
+            end
+            collectgarbage("collect")
+        `)
+		if err != nil {
+			b.Fatal(err)
+		}
+		L.Close()
+	}
+}
