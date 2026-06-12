@@ -278,11 +278,6 @@ func YoungCollection(g *state.GlobalState, L *state.LuaState) {
 	var addedold1 int64
 	var dummy object.GCObject // dummy for finobj (no firstold1 optimization)
 
-	// Flip white for this collection cycle. Objects created between cycles
-	// have the OLD white. After flip, they become "other" white. Unreachable
-	// ones stay white → dead. Reachable ones get marked black → alive.
-	g.CurrentWhite ^= object.WhiteBits
-
 	// 1. Mark OLD1 objects (they need re-traversal)
 	if g.FirstOld1 != nil {
 		markold(g, g.FirstOld1, g.ReallyOld)
