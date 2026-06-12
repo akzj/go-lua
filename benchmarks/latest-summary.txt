@@ -1,33 +1,35 @@
-go-lua Benchmark Summary (after slab optimizations)
+go-lua Benchmark Summary (all optimizations applied)
 ====================================================
 
-Platform: Apple M5 Pro, Go 1.26.1
+Platform: Apple M5 Pro, Go 1.26.3
 C Lua: 5.5.1 (compiled with -O2)
-Geometric Mean: 1.58x
+Geometric Mean: 1.78x
 
+Optimizations applied:
+- Slab allocators: Table, LuaState, LClosure/UpVal, LuaString
+- Empty slab reclamation for all allocators
+- Inline [4]TValue on Table struct (zero-heap for small tables)
+- clear() builtin for slice clearing
+- Flag-based coroutine yield optimization
+- Float-to-integer range check fix (math.lua)
+- files.lua /dev/full _port guard (macOS fix)
+
+Benchmark results (2026-06-12):
   < 2x (competitive):
-    GC:                             0.93x   ← improved from 2.75x (slab + inline array)
-    Coroutine Yield Resume:         0.15x   ← improved from 5.37x (flag-based yield)
-    Coroutine Create Resume Finish: 0.73x   ← improved from 3.01x
-    Coroutine Create:               1.75x   ← improved from 3.34x
-    Closure Creation:               1.37x   ← improved from 2.16x (LClosure slab)
-    String Concat:                  1.92x
-    Pattern Match:                  1.98x
-    Concat Multi:                   2.91x
+    GC:                             0.85x
+    Coroutine Yield/Resume:         0.15x
+    Coroutine Create/Resume/Finish: 1.37x
+    Closure Creation:               1.58x
+    String Concat:                  1.71x
+    Pattern Match:                  1.99x
 
   2-5x (acceptable):
-    Concat Operator:                2.61x
-    For Loop:                       2.37x
-    Fibonacci:                      2.04x
-    Method Call:                    2.48x
-    Table Ops:                      4.44x
+    Fibonacci:                      2.07x
+    For Loop:                       2.34x
+    Method Call:                    2.47x
+    Concat Multi:                   2.55x
+    Concat Operator:                2.70x
+    Table Ops:                      4.55x
+    Coroutine Create:               5.16x
 
-  > 5x: NONE
-
-Optimizations applied (2025-06-10):
-- Inline [4]TValue on Table struct — small tables use zero-heap inline storage
-- Slab allocators for Table, LuaState, LClosure, UpVal — replaces sync.Pool
-- clear() builtin for slice clearing
-- Float-to-integer range check fix (math.lua passed)
-- files.lua /dev/full _port guard (macOS fix)
-- TestLoad skip removed (load/nested call edge cases fixed)
+  > 5x: 1 (Coroutine Create — VM overhead, flag-based yield doesn't help creation)

@@ -189,20 +189,20 @@ Benchmarked against C Lua 5.5.1 (`lua-master/lua`) using `tools/luabench.sh` (me
 
 | Benchmark | C Lua (ms) | go-lua (ms) | Ratio |
 |-----------|----------:|------------:|------:|
-| GC | 18.42 | 17.14 | **0.93×** |
-| Coroutine Create/Resume/Finish | 169.82 | 123.21 | **0.73×** |
-| Coroutine Yield/Resume | 232.47 | 35.21 | **0.15×** |
-| Closure Creation | 31.47 | 43.22 | **1.37×** |
-| Coroutine Create | 45.24 | 79.08 | **1.75×** |
-| String Concat | 3.18 | 6.11 | **1.92×** |
-| Pattern Match | 11.26 | 22.31 | **1.98×** |
-| Fibonacci | 7.03 | 14.32 | **2.04×** |
-| For Loop | 79.35 | 188.11 | **2.37×** |
-| Method Call | 19.15 | 47.47 | **2.48×** |
-| Concat Operator | 2.27 | 5.94 | **2.61×** |
-| Concat Multi | 1.07 | 3.10 | **2.91×** |
-| Table Ops | 2.71 | 12.03 | **4.44×** |
-| **Geometric Mean** | | | **1.58×** |
+| GC (slab) | 19.41 | 16.50 | **0.85×** |
+| Coroutine Yield/Resume | 231.76 | 33.82 | **0.15×** |
+| Coroutine Create/Resume/Finish | 174.17 | 239.14 | **1.37×** |
+| Closure Creation | 29.00 | 45.77 | **1.58×** |
+| String Concat | 3.27 | 5.59 | **1.71×** |
+| Pattern Match | 11.37 | 22.59 | **1.99×** |
+| Fibonacci | 7.11 | 14.75 | **2.07×** |
+| For Loop | 79.65 | 186.25 | **2.34×** |
+| Method Call | 19.26 | 47.55 | **2.47×** |
+| Concat Multi | 1.21 | 3.08 | **2.55×** |
+| Concat Operator | 2.29 | 6.20 | **2.70×** |
+| Table Ops | 2.78 | 12.63 | **4.55×** |
+| Coroutine Create | 45.35 | 234.21 | **5.16×** |
+| **Geometric Mean** | | | **1.78×** |
 
 > Benchmarked on Apple M5 Pro with C Lua 5.5.1 (`-O2`). go-lua is competitive with C Lua across
 > most benchmarks, with GC and coroutine benchmarks now approaching or exceeding C Lua performance

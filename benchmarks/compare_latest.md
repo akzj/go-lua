@@ -1,7 +1,7 @@
 # C Lua vs go-lua Performance Comparison
 
-- **Date:** 2026-06-11 09:09:21
-- **Branch:** main @ 12e5de2
+- **Date:** 2026-06-12 11:12:08
+- **Branch:** main @ 81ae969
 - **C Lua:** Lua 5.5.1  Copyright (C) 1994-2026 Lua.org, PUC-Rio
 - **Runs per benchmark:** 3 (median)
 - **Timing method:** `os.clock()` (CPU time, measured inside Lua)
@@ -10,21 +10,21 @@
 
 | Benchmark | C Lua (ms) | go-lua (ms) | Ratio (go/C) |
 |-----------|----------:|------------:|-------------:|
-| closure creation                    |      31.47 |       43.22 |         1.37x |
-| concat multi                        |       1.07 |        3.10 |         2.91x |
-| concat operator                     |       2.27 |        5.94 |         2.61x |
-| coroutine create                    |      45.24 |       79.08 |         1.75x |
-| coroutine create resume finish      |     169.82 |      123.21 |         0.73x |
-| coroutine yield resume              |     232.47 |       35.21 |         0.15x |
-| fiuonacci                           |       7.03 |       14.32 |         2.04x |
-| for loop                            |      79.35 |      188.11 |         2.37x |
-| gc                                  |      18.42 |       17.14 |         0.93x |
-| method call                         |      19.15 |       47.47 |         2.48x |
-| pattern match                       |      11.26 |       22.31 |         1.98x |
-| string concat                       |       3.18 |        6.11 |         1.92x |
-| taule ops                           |       2.71 |       12.03 |         4.44x |
+| closure creation                    |      29.00 |       45.77 |         1.58x |
+| concat multi                        |       1.21 |        3.08 |         2.55x |
+| concat operator                     |       2.29 |        6.20 |         2.70x |
+| coroutine create                    |      45.35 |      234.21 |         5.16x |
+| coroutine create resume finish      |     174.17 |      239.14 |         1.37x |
+| coroutine yield resume              |     231.76 |       33.82 |         0.15x |
+| fiuonacci                           |       7.11 |       14.75 |         2.07x |
+| for loop                            |      79.65 |      186.25 |         2.34x |
+| gc                                  |      19.41 |       16.50 |         0.85x |
+| method call                         |      19.26 |       47.55 |         2.47x |
+| pattern match                       |      11.37 |       22.59 |         1.99x |
+| string concat                       |       3.27 |        5.59 |         1.71x |
+| taule ops                           |       2.78 |       12.63 |         4.55x |
 
-| **Geometric Mean** | | | **1.58x** |
+| **Geometric Mean** | | | **1.78x** |
 
 ## Interpretation
 
