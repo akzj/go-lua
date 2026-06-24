@@ -49,6 +49,12 @@ type Table struct {
 	// When len(Array) ≤ 4 and Array points into InlineArray, no heap
 	// allocation is needed for the backing slice.
 	InlineArray [4]object.TValue
+
+	// slabSlot packs slab index (upper 16 bits) and element index (lower 16 bits)
+	// for O(1) slab lookups in slabPutTable. Populated by slabGetTable.
+	// Upper 16 bits = slab index in tableSlabs; lower 16 bits = element index within slab.
+	// This eliminates the O(n) linear scan previously needed to find which slab owns a pointer.
+	slabSlot uint32
 }
 
 // GC returns the GC header for this table.

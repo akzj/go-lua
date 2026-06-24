@@ -12,7 +12,6 @@ package table
 import (
 	"math/bits"
 	"sync"
-	"unsafe"
 
 	"github.com/akzj/go-lua/internal/object"
 )
@@ -22,13 +21,26 @@ import (
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Slab allocator — pre-allocated []Table slabs with O(1) get/put.
-// Eliminates Go GC scanning of individual Table structs by allocating them
+// Slab allocator — pre-allocated []Table slabs with per-P free batches.
+//
+// Slabs eliminate Go GC scanning of individual Table structs by allocating them
 // within large fixed backing arrays that act as a single GC root.
+//
+// To eliminate the global mutex contention that cost ~30% CPU in GC-heavy
+// workloads, we use a two-tier approach:
+//   1. Per-P free batches (via sync.Pool) — lock-free hot path
+//   2. Global free list + sequential alloc — locked fallback
+//
+// Each Table carries a slabSlot (packed slab index + element index) so
+// slabPutTable is O(1) instead of O(n), eliminating the pointer-range scan.
 // ---------------------------------------------------------------------------
 
 // slabSize is the number of Table elements per slab.
 const slabSize = 4096
+
+// batchSize is the number of free entries cached per P in a perPFreeBatch.
+// Kept small (64) to bound per-P memory overhead to ~2KB per P.
+const batchSize = 64
 
 // freeEntry identifies a freed element within a slab.
 type freeEntry struct {
@@ -36,109 +48,128 @@ type freeEntry struct {
 	elemIdx int32
 }
 
-// tableSlabMeta holds a slab backing array and tracks how many of its
-// elements are currently live. Used for empty slab reclamation.
+// perPFreeBatch caches a small LIFO stack of free table slots per P.
+// Using sync.Pool, each P gets its own batch, eliminating lock contention
+// on the hot alloc/free path.
+type perPFreeBatch struct {
+	entries [batchSize]freeEntry
+	count   int
+}
+
+// tableSlabMeta holds a slab backing array.
+// Slabs are never reclaimed (bounded by peak usage), so no used-tracking needed.
 type tableSlabMeta struct {
 	data []Table
-	used int32
 }
 
 // Global slab state.
 var (
 	slabMu         sync.Mutex      // guards all slab state (concurrent-safe)
-	tableSlabs     []tableSlabMeta // slab backing arrays with usage tracking
+	tableSlabs     []tableSlabMeta // slab backing arrays (never shrinks)
 	tableFreeList  []freeEntry     // LIFO free list of (slab, elem) pairs
 	nextSlabIdx    int32           // current slab index for sequential alloc
 	nextSequential int32           // next sequential index within current slab
 )
 
+// freeBatchPool caches per-P free batches. Each Get returns a batch
+// from the current P's cache (lock-free), or a new one is created.
+var freeBatchPool = sync.Pool{
+	New: func() any { return &perPFreeBatch{} },
+}
+
+// packSlot encodes slab index (upper 16 bits) and element index (lower 16 bits)
+// into a uint32 for O(1) slab lookups.
+func packSlot(slabIdx, elemIdx int32) uint32 {
+	return uint32(slabIdx)<<16 | uint32(elemIdx)&0xFFFF
+}
+
+// unpackSlot decodes a uint32 slab slot into slab index and element index.
+func unpackSlot(slot uint32) (int32, int32) {
+	return int32(slot >> 16), int32(slot & 0xFFFF)
+}
+
 // slabGetTable returns a *Table from the slab allocator.
-// Prefers the free list (LIFO), then sequential allocation within the current
-// slab, then allocates a new slab if exhausted.
+//
+// Fast path (lock-free): pops from the per-P free batch.
+// Slow path (locked): falls through to global free list → sequential alloc → new slab.
+//
+// The returned Table has slabSlot set for O(1) future slabPutTable calls.
 func slabGetTable() *Table {
+	// Fast path: try per-P batch (lock-free)
+	batch := freeBatchPool.Get().(*perPFreeBatch)
+	if batch.count > 0 {
+		batch.count--
+		fe := batch.entries[batch.count]
+		t := &tableSlabs[fe.slabIdx].data[fe.elemIdx]
+		t.slabSlot = packSlot(fe.slabIdx, fe.elemIdx)
+		freeBatchPool.Put(batch)
+		return t
+	}
+	freeBatchPool.Put(batch)
+
+	// Slow path: locked
 	slabMu.Lock()
-	// 1. Try free list first (LIFO for cache locality)
+
+	// 1. Try global free list first
 	n := len(tableFreeList)
 	if n > 0 {
 		fe := tableFreeList[n-1]
 		tableFreeList = tableFreeList[:n-1]
-		tableSlabs[fe.slabIdx].used++
+		t := &tableSlabs[fe.slabIdx].data[fe.elemIdx]
+		t.slabSlot = packSlot(fe.slabIdx, fe.elemIdx)
 		slabMu.Unlock()
-		return &tableSlabs[fe.slabIdx].data[fe.elemIdx]
+		return t
 	}
+
 	// 2. Sequential alloc from current slab
 	if nextSlabIdx < int32(len(tableSlabs)) && nextSequential < slabSize {
 		i := nextSequential
 		nextSequential++
-		tableSlabs[nextSlabIdx].used++
+		t := &tableSlabs[nextSlabIdx].data[i]
+		t.slabSlot = packSlot(nextSlabIdx, i)
 		slabMu.Unlock()
-		// Return directly — getTable() zeroes scalar fields. Reference fields
-		// (Array, Nodes, Metatable, GCHeader) are cleared by PutTable.
-		return &tableSlabs[nextSlabIdx].data[i]
+		return t
 	}
+
 	// 3. Allocate new slab
 	slab := make([]Table, slabSize)
-	tableSlabs = append(tableSlabs, tableSlabMeta{data: slab, used: 1})
+	tableSlabs = append(tableSlabs, tableSlabMeta{data: slab})
 	nextSlabIdx = int32(len(tableSlabs) - 1)
 	nextSequential = 1 // element 0 returned now
+	t := &slab[0]
+	t.slabSlot = packSlot(nextSlabIdx, 0)
 	slabMu.Unlock()
-	return &slab[0]
+	return t
 }
 
 // slabPutTable returns a Table to the slab allocator free list.
-// Uses pointer range scanning to determine which slab t belongs to.
-// If the slab becomes completely empty (all elements freed), the slab
-// is removed and its backing array freed to prevent unbounded growth.
+// O(1): uses the Table's slabSlot field to determine slab/element identity
+// without scanning all slabs.
+//
+// Fast path (lock-free): pushes to the per-P batch.
+// If the batch is full, all entries are flushed to the global free list (locked).
 func slabPutTable(t *Table) {
-	ptr := unsafe.Pointer(t)
-	sz := unsafe.Sizeof(Table{})
-	slabMu.Lock()
-	for i := range tableSlabs {
-		meta := &tableSlabs[i]
-		base := unsafe.SliceData(meta.data)
-		diff := uintptr(ptr) - uintptr(unsafe.Pointer(base))
-		if diff >= 0 && diff < uintptr(len(meta.data))*sz {
-			elemIdx := int32(diff / sz)
-			meta.used--
-			if meta.used == 0 && len(tableSlabs) > 1 {
-				// Reclaim this empty slab
-				tableSlabs = append(tableSlabs[:i], tableSlabs[i+1:]...)
-				compactFreeList(i)
-			} else {
-				tableFreeList = append(tableFreeList, freeEntry{slabIdx: int32(i), elemIdx: elemIdx})
-			}
-			slabMu.Unlock()
-			return
-		}
-	}
-	slabMu.Unlock()
-	// Fallback: t is not from any slab (shouldn't happen in normal operation)
-}
+	si, ei := unpackSlot(t.slabSlot)
 
-// compactFreeList adjusts slab indices after a slab is removed.
-// Removes stale free list entries that pointed to the removed slab,
-// decrements slabIdx for entries beyond the removed index, and updates
-// nextSlabIdx if needed.
-func compactFreeList(removedIdx int) {
-	// Single pass: filter stale entries and adjust indices
-	j := 0
-	for i := range tableFreeList {
-		if tableFreeList[i].slabIdx == int32(removedIdx) {
-			continue // drop stale entry pointing to the removed slab
-		}
-		if tableFreeList[i].slabIdx > int32(removedIdx) {
-			tableFreeList[i].slabIdx--
-		}
-		tableFreeList[j] = tableFreeList[i]
-		j++
+	batch := freeBatchPool.Get().(*perPFreeBatch)
+	if batch.count < batchSize {
+		// Fast path: push to per-P batch (lock-free)
+		batch.entries[batch.count] = freeEntry{slabIdx: si, elemIdx: ei}
+		batch.count++
+		freeBatchPool.Put(batch)
+		return
 	}
-	tableFreeList = tableFreeList[:j]
-	if nextSlabIdx > int32(removedIdx) {
-		nextSlabIdx--
-	} else if nextSlabIdx == int32(removedIdx) {
-		// Lost sequential position context; force new slab allocation on next alloc
-		nextSequential = slabSize
+
+	// Batch full: flush all entries to global free list (locked)
+	slabMu.Lock()
+	for i := 0; i < batch.count; i++ {
+		tableFreeList = append(tableFreeList, batch.entries[i])
 	}
+	tableFreeList = append(tableFreeList, freeEntry{slabIdx: si, elemIdx: ei})
+	slabMu.Unlock()
+
+	batch.count = 0
+	freeBatchPool.Put(batch)
 }
 
 var tablePool = sync.Pool{
@@ -151,7 +182,9 @@ var tablePool = sync.Pool{
 // The returned Table has zeroed scalar fields; callers must initialize as needed.
 func getTable() *Table {
 	t := slabGetTable()
-	// SlabGetTable zeros the struct, but re-zero scalar fields for safety.
+	// slabGetTable sets slabSlot and returns a zero-initialized Table element
+	// (slab backing arrays are created by make(), which zeroes all fields).
+	// Re-zero scalar fields for safety on recycled entries.
 	t.LsizeNode = 0
 	t.LastFree = 0
 	t.Flags = 0
@@ -173,7 +206,8 @@ func PutTable(t *Table) {
 	if t.Nodes != nil {
 		putNodeSlice(t.Nodes)
 	}
-	// Clear all reference-bearing fields to avoid retaining garbage
+	// Clear all reference-bearing fields to avoid retaining garbage.
+	// slabSlot is intentionally preserved — slabPutTable needs it for O(1) lookup.
 	t.Array = nil
 	t.Nodes = nil
 	t.Metatable = nil
