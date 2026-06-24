@@ -80,12 +80,12 @@ var freeBatchPool = sync.Pool{
 // packSlot encodes slab index (upper 16 bits) and element index (lower 16 bits)
 // into a uint32 for O(1) slab lookups.
 func packSlot(slabIdx, elemIdx int32) uint32 {
-	return uint32(slabIdx)<<16 | uint32(elemIdx)&0xFFFF
+	return uint32(slabIdx+1)<<16 | uint32(elemIdx+1)&0xFFFF
 }
 
 // unpackSlot decodes a uint32 slab slot into slab index and element index.
 func unpackSlot(slot uint32) (int32, int32) {
-	return int32(slot >> 16), int32(slot & 0xFFFF)
+	return int32(slot >> 16) - 1, int32(slot & 0xFFFF) - 1
 }
 
 // slabGetTable returns a *Table from the slab allocator.

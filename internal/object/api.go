@@ -432,6 +432,7 @@ type LuaString struct {
 	Hash_   uint32
 	IsShort bool
 	Extra   byte // reserved word flag for short strings
+	SlabSlot uint32
 }
 
 // GC returns the GC header for this string.
