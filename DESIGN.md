@@ -444,3 +444,51 @@ Mock dependencies where needed (e.g., table tests don't need a full LuaState).
 | Coroutine yield/resume | Follow .analysis/04 §8 exactly, test C→Lua→C chains |
 | setmetatable type checking | Previous bug — test explicitly with all type combinations |
 | Call/return result count | Previous bug — test MULTRET, vararg, tail calls |
+
+---
+
+## §9 Performance Optimization History
+
+### v0.9.8 Baseline: ~1.99x geometric mean vs C Lua
+
+### Optimization 1: Per-P Slab Free Batches (2026-06)
+
+**Problem**: The slab allocator (`internal/table/pool.go`, `internal/luastring/pool.go`) used a single global `sync.Mutex` for all Table/LuaString allocations and frees. CPU profiling showed **30% of CPU time** spent on `slabMu.Lock() + Unlock()` in GC-heavy workloads.
+
+**Root cause**: Two issues compounded:
+1. **Global lock contention**: every goroutine competed for the same mutex on every table allocation
+2. **O(n) slabPutTable scan**: finding which slab a freed pointer belonged to required a linear scan of all slabs, holding the lock during the entire scan
+
+**Fix**:
+1. Per-P free batches via `sync.Pool` (lock-free hot path): each goroutine caches up to 64 free entries locally before touching the global list
+2. Added `slabSlot uint32` field to both `Table` and `LuaString` structs, encoding (slabIdx, elemIdx) for O(1) identity lookup — eliminated the O(n) pointer-range scan
+3. Removed empty-slab reclamation (which required another O(n) scan and caused slab churn)
+
+**Result**: GC bench -53%, TableOps -53%, Fibonacci -11%
+
+### Optimization 2: Self-Managed Memory (mmap) — Abandoned
+
+**Attempt**: Move slab backing arrays from `make([]Table, n)` (Go heap) to `mmap(ANONYMOUS)` to eliminate Go GC scanning of Lua objects entirely.
+
+**Outcome**: **Failed — fundamental Go limitation discovered.**
+
+**Root cause**: Go's GC is precise — it only scans memory registered in `mheap_.arenas`. Objects allocated via `mmap` are NOT in this registry, so `spanOfHeap(mmap_addr)` returns nil and the GC **never scans the mmap region**. This means:
+
+- Go pointers stored inside mmap'd objects (e.g., `Table.Array []TValue`, `Table.Nodes []node`, `LuaString.Data string`) are invisible to Go GC
+- The Go heap objects they reference (TValue backing slices, string data) appear unreachable → Go GC collects them
+- Lua code using the mmap'd object accesses freed Go heap memory → SIGSEGV
+
+**Key insight**: Go's pointer model prevents mixing Go-pointer-bearing objects with non-Go-heap memory without explicit pinning (`runtime.Pinner`) or converting to handle-based references (integer IDs). This is by design — Go trades flexibility for GC correctness and simplicity. It's the same reason CGo can't return Go pointers to C code without explicit lifecycle management.
+
+**Implication for Go-Lua**: True self-managed memory would require replacing ALL Go pointer references inside Lua objects (Table, LuaString, Closure) with integer handles into a separate handle table. This is architecturally possible but requires a major refactor.
+
+### Performance Ceiling
+
+| Level | Expected perf | Effort | Viability |
+|-------|-------------|--------|-----------|
+| Current (per-P batches) | ~1.9x C Lua | Done | ✅ Shipped |
+| Handle-based self-managed memory | ~1.5x C Lua | 1-2 months | ✅ Possible |
+| Template JIT | ~1.0x C Lua | 6-12 months | ⚠️ Possible but complex |
+| Trace JIT | <1.0x C Lua | 12+ months | ❌ Impractical in Go |
+
+The practical ceiling for a pure-Go Lua implementation without handle-system refactoring is approximately **1.9x C Lua**. The slab-optimizer changes (per-P batches, O(1) put) have already captured most of the easily accessible gains within the Go memory model.
